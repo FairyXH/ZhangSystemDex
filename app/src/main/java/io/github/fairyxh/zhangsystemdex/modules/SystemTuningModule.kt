@@ -38,7 +38,11 @@ class SystemTuningModule(
         get() = if (ctx.config.switch("server_mode_enable")) 24 else 6
 
     override fun onStart() {
-        Logger.i(name, "module started, heavy task interval=${taskInterval}")
+        Logger.i(
+            name,
+            "module started, regular=${ctx.config.switch("system_tuning_enable")}, heavy=${ctx.config.switch("heavy_task_enable")}"
+        )
+        if (!ctx.config.switch("system_tuning_enable")) return
         if (ctx.config.switch("dexopt_everything_enable")) {
             Logger.i(name, "dex2oat everything compile started")
             ShellExecutor.runBackground("cmd package compile -m everything -a")
@@ -55,14 +59,20 @@ class SystemTuningModule(
 
     override fun tick() {
         cycle++
-        regularTick()
-        if (cycle >= taskInterval) {
-            cycle = 0
-            if (ProcessUtils.isScreenOn()) {
-                Logger.i(name, "screen on, heavy task skipped")
-            } else {
-                heavyTick()
+        if (ctx.config.switch("system_tuning_enable")) {
+            regularTick()
+        }
+        if (ctx.config.switch("heavy_task_enable")) {
+            if (cycle >= taskInterval) {
+                cycle = 0
+                if (ProcessUtils.isScreenOn()) {
+                    Logger.i(name, "screen on, heavy task skipped")
+                } else {
+                    heavyTick()
+                }
             }
+        } else {
+            cycle = 0
         }
     }
 

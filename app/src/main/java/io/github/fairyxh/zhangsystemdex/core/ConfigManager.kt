@@ -191,17 +191,18 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable",
             "locked_apps_enable",
             "prop_tuning_enable",
+            "heavy_task_enable"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
         val SWITCH_DESCRIPTIONS: Map<String, String> = linkedMapOf(
             "doze_enable" to "Doze 处理：电池优化白名单维护与夜间强制 Doze",
-            "hma_config_enable" to "HideMyAppList 模板列表自动写入（包含 Xposed 模块扫描）",
             "game_pause_enable" to "游戏在前台时暂停其他功能",
             "accessibility_guard_enable" to "无障碍服务守护",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
-            "system_tuning_enable" to "主调优循环（热控/调度/防错误弹窗/周期高占用任务）",
+            "heavy_task_enable" to "周期高占用任务（Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，熄屏时每 6 周期执行一次）",
+            "system_tuning_enable" to "主调优循环（热控/调度/防错误弹窗/进程提升等每周期常规任务）",
             "service_guard_enable" to "服务守护（Shizuku/Brevent/蓝牙/健康应用）",
             "extra_features_enable" to "附加功能（NFC 守护/通知监听守护/开机自启动）",
             "memory_clean_enable" to "内存清理与低内存后台杀进程",

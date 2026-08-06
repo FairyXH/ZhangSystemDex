@@ -89,7 +89,7 @@ object Main {
 
         val entries = listOf(
             ModuleEntry("prop_tuning", { enabled("prop_tuning_enable") }) { AntiDetectionModule(ctx) },
-            ModuleEntry("system_tuning", { enabled("system_tuning_enable") }) {
+            ModuleEntry("system_tuning", { enabled("system_tuning_enable") || enabled("heavy_task_enable") }) {
                 SystemTuningModule(ctx, performance, power, configGen, appManager, serviceGuard, storage, thermal, miui)
             },
             ModuleEntry("game_pause", { enabled("game_pause_enable") }) { GamePauseModule(ctx) },

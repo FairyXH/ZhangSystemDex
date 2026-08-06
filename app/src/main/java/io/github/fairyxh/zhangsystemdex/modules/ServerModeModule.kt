@@ -26,6 +26,11 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
     }
 
     override fun tick() {
+        runOnce()
+    }
+
+    /** Run the server-mode actions once (for the debug menu). */
+    fun runOnce() {
         round++
         FileUtilsChmodRc()
         ShellExecutor.run("svc wifi enable")

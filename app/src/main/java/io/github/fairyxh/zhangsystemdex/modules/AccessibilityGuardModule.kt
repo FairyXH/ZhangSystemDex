@@ -21,6 +21,10 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
     }
 
     override fun tick() {
+        runOnce()
+    }
+
+    fun runOnce() {
         val packages = readConfig()
         if (packages.isEmpty()) return
         val services = SettingsUtils.getSecure("enabled_accessibility_services") ?: ""

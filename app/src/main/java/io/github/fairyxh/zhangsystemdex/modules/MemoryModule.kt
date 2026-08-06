@@ -41,6 +41,11 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
         }
     }
 
+    fun runOnce() {
+        dropCaches()
+        Logger.i(name, "memory free: ${ProcessUtils.memFreePercent()}%")
+    }
+
     private fun dropCaches() {
         Logger.i(name, "dropping page caches")
         ShellExecutor.run("sync")

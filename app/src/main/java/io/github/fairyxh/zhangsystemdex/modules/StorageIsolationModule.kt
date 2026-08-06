@@ -86,6 +86,13 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
         }
     }
 
+    /** Run trace cleanup and rubbish quarantine once (for the debug menu). */
+    fun runOnce() {
+        Logger.i(name, "storage isolation runOnce")
+        removeRedirectStorageTrace()
+        quarantineRubbish()
+    }
+
     fun generateConfig(allApps: Boolean) {
         try {
             val targetDir = File("/data/adb/storage-isolation")

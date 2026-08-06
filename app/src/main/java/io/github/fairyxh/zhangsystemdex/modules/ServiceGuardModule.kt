@@ -46,6 +46,21 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
         startBrevent()
     }
 
+    /** Run the guardian actions once (for the debug menu). */
+    fun runOnce() {
+        Logger.i(name, "service guard runOnce")
+        if (serviceGuardOn) {
+            startShizuku()
+            startBrevent()
+            healthLoop()
+            keepBluetooth()
+        }
+        if (addOpen) {
+            nfcGuard()
+            notificationGuard()
+        }
+    }
+
     fun startShizuku() {
         try {
             val source = File("/storage/emulated/0/Android/data/moe.shizuku.privileged.api/starter")

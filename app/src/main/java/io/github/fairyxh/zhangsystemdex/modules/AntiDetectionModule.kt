@@ -46,6 +46,10 @@ class AntiDetectionModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L) {
     )
 
     override fun onStart() {
+        runOnce()
+    }
+
+    fun runOnce() {
         Logger.i(name, "applying anti-detection property rules")
         applyRules()
         PropUtils.delete("persist.sys.vold_app_data_isolation_enabled")

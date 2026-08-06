@@ -58,6 +58,16 @@ object Main {
         val sysCtx = SystemContext.get()
         Logger.i("Main", if (sysCtx != null) "system context available, framework APIs preferred" else "system context unavailable, shell fallback active")
 
+        // Debug menu mode: run a single feature once by number, then exit.
+        if (args.contains("menu")) {
+            Logger.i("Main", "debug menu mode")
+            if (!DebugMenu.run(ctx)) {
+                Logger.i("Main", "debug action finished, exiting")
+                return
+            }
+            Logger.i("Main", "normal start after debug menu")
+        }
+
         val sw = ctx.config
         fun enabled(key: String): Boolean {
             if (sw.switch("powersave_enable")) return false

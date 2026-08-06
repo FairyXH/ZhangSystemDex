@@ -4,7 +4,6 @@ import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
-import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -46,21 +45,8 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 return modules
             }
             Logger.i("LSPosedScanner", "full scan started (signature ${signature.take(12)}...)")
-            val fromLsposed = readLsposedConfig()
-            val result = LinkedHashMap<String, ModuleInfo>()
-            val metaModules = scanByMetadata()
-            for (m in metaModules) {
-                result[m.packageName] = m
-            }
-            for (m in fromLsposed) {
-                val prev = result[m.packageName]
-                result[m.packageName] = if (prev != null) {
-                    prev.copy(enabled = true, scopes = if (m.scopes.isNotEmpty()) m.scopes else prev.scopes)
-                } else {
-                    m
-                }
-            }
-            modules = result.values.toList()
+            val modulesResult = readLsposedConfig().distinctBy { it.packageName }
+            modules = modulesResult
             writeCache(signature, modules)
             Logger.i("LSPosedScanner", "scan finished: ${modules.size} modules")
             return modules
@@ -70,38 +56,6 @@ class LSPosedScannerModule(private val ctx: DexContext) {
     fun modules(): List<ModuleInfo> {
         if (modules.isEmpty()) scan(force = false)
         return modules
-    }
-
-    private fun scanByMetadata(): List<ModuleInfo> {
-        val result = ArrayList<ModuleInfo>()
-        val ctxRef = SystemContext.get()
-        if (ctxRef == null) {
-            Logger.w("LSPosedScanner", "no system context, metadata scan skipped")
-            return result
-        }
-        try {
-            val pm = ctxRef.packageManager
-            val apps = pm.getInstalledApplications(0)
-            for (app in apps) {
-                try {
-                    val meta = app.metaData ?: continue
-                    if (!meta.containsKey("xposedmodule")) continue
-                    val name = meta.getString("xposeddescription") ?: pm.getApplicationLabel(app).toString()
-                    val version = try {
-                        pm.getPackageInfo(app.packageName, 0).versionName ?: ""
-                    } catch (_: Throwable) {
-                        ""
-                    }
-                    val scopesRaw = meta.getString("xposedscope") ?: ""
-                    val scopes = scopesRaw.split('|', ',').filter { it.isNotBlank() }
-                    result.add(ModuleInfo(app.packageName, name, version, true, scopes))
-                } catch (_: Throwable) {
-                }
-            }
-        } catch (t: Throwable) {
-            Logger.w("LSPosedScanner", "metadata scan failed: ${t.message}")
-        }
-        return result
     }
 
     private fun readLsposedConfig(): List<ModuleInfo> {

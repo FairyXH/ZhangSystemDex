@@ -71,9 +71,21 @@ object DebugMenu {
                 6 -> AccessibilityGuardModule(ctx).runOnce()
                 7 -> ServiceGuardModule(ctx).runOnce()
                 8 -> MemoryModule(ctx).runOnce()
-                9 -> StorageIsolationModule(ctx)
-                    .generateConfig(allApps = ctx.config.switch("storage_isolate_all_enable"))
-                10 -> StorageIsolationModule(ctx).runOnce()
+                9 -> {
+                    if (!ctx.config.switch("storage_isolation_enable")) {
+                        Logger.w("DebugMenu", "storage_isolation_enable=false, blocked")
+                    } else {
+                        StorageIsolationModule(ctx)
+                            .generateConfig(allApps = ctx.config.switch("storage_isolate_all_enable"))
+                    }
+                }
+                10 -> {
+                    if (!ctx.config.switch("storage_isolation_enable")) {
+                        Logger.w("DebugMenu", "storage_isolation_enable=false, blocked")
+                    } else {
+                        StorageIsolationModule(ctx).runOnce()
+                    }
+                }
                 11 -> ThermalModule(ctx).applyMask()
                 12 -> MiuiTuningModule(ctx).applyAll()
                 13 -> {

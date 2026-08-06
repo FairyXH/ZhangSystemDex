@@ -15,8 +15,16 @@ import java.io.File
  * configuration.json generation. Replaces RedirectstorageDataRM.sh,
  * CleanRubbishFile.sh and storage-isolation_config.sh. Configuration JSON is
  * built with org.json, never string concatenation.
+ *
+ * SAFETY: every entry point is gated by `storage_isolation_enable`. When the
+ * switch is false nothing may run, including the debug menu paths and the
+ * `/data/media` quarantine logic that moves user directories. Callers (Main,
+ * SystemTuningModule, DebugMenu) must also gate their own calls.
  */
 class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = false) {
+    private val isolationEnabled: Boolean
+        get() = ctx.config.switch("storage_isolation_enable")
+
     private val templateId = "0a40d890-54d2-11ec-52e3-1f3b7540673f"
     private val customDirs = listOf(
         "Android/data", "Android/obb", "Android/media", "Download",
@@ -25,11 +33,20 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
     private var configTick = 0
 
     override fun onStart() {
-        Logger.i(name, "module started")
+        if (!isolationEnabled) {
+            Logger.w(name, "storage_isolation_enable=false, module must not run")
+            stop()
+            return
+        }
+        Logger.i(name, "module started (storage_isolation_enable=true)")
         removeRedirectStorageTrace()
     }
 
     override fun tick() {
+        if (!isolationEnabled) {
+            Logger.w(name, "storage_isolation_enable=false, tick blocked")
+            return
+        }
         removeRedirectStorageTrace()
         quarantineRubbish()
         configTick++
@@ -40,13 +57,22 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
     }
 
     private fun removeRedirectStorageTrace() {
+        if (!isolationEnabled) {
+            Logger.w(name, "removeRedirectStorageTrace blocked (switch off)")
+            return
+        }
         FileUtils.deleteRecursive(File("/data/media/0/Android/data/moe.shizuku.redirectstorage"))
     }
 
     private fun quarantineRubbish() {
+        if (!isolationEnabled) {
+            Logger.w(name, "quarantineRubbish blocked (switch off)")
+            return
+        }
         try {
             val cleanedDir = File(ctx.config.rootDir, "CleanedRubbish")
             cleanedDir.mkdirs()
+            // Safe part: quarantine module-directory leftovers only.
             val modDir = File(ctx.modDir)
             for (suffix in listOf("bak", "out")) {
                 modDir.listFiles { f -> f.name.endsWith(".$suffix") }?.forEach { f ->
@@ -59,14 +85,17 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
                     FileUtils.mvQuoted(f.path, File(cleanedDir, f.name).path)
                 }
             }
+            // HIGH RISK: moves non-standard user directories under /data/media/*.
+            // Gated by isolationEnabled; keep the log line for every move.
             val mediaDirs = File("/data/media").listFiles { f -> f.isDirectory } ?: return
             val standard = setOf("Android", "Download", "Documents", "DCIM", "Pictures", "Movies", "Music")
             for (userDir in mediaDirs) {
                 for (f in userDir.listFiles() ?: continue) {
                     if (f.name in standard) continue
                     FileUtils.chattr(f.path, "-AacDdijsStu")
-                    FileUtils.mvQuoted(f.path, File(cleanedDir, f.name).path)
-                    Logger.i(name, "quarantined ${f.path}")
+                    val dest = File(cleanedDir, f.name)
+                    FileUtils.mvQuoted(f.path, dest.path)
+                    Logger.w(name, "QUARANTINED ${f.path} -> ${dest.path}")
                 }
             }
         } catch (t: Throwable) {
@@ -75,11 +104,18 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
     }
 
     fun cleanCleanedRubbish() {
+        if (!isolationEnabled) {
+            Logger.w(name, "cleanCleanedRubbish blocked (switch off)")
+            return
+        }
         try {
             val cleanedDir = File(ctx.config.rootDir, "CleanedRubbish")
             val keep = setOf("Android", "DCIM", "Download")
             for (f in cleanedDir.listFiles() ?: return) {
-                if (f.name !in keep) FileUtils.deleteRecursive(f)
+                if (f.name !in keep) {
+                    Logger.w(name, "DELETING ${f.path}")
+                    FileUtils.deleteRecursive(f)
+                }
             }
         } catch (t: Throwable) {
             Logger.w(name, "clean rubbish failed: ${t.message}")
@@ -88,12 +124,20 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
 
     /** Run trace cleanup and rubbish quarantine once (for the debug menu). */
     fun runOnce() {
-        Logger.i(name, "storage isolation runOnce")
+        if (!isolationEnabled) {
+            Logger.w(name, "runOnce blocked (storage_isolation_enable=false)")
+            return
+        }
+        Logger.i(name, "storage isolation runOnce (storage_isolation_enable=true)")
         removeRedirectStorageTrace()
         quarantineRubbish()
     }
 
     fun generateConfig(allApps: Boolean) {
+        if (!isolationEnabled) {
+            Logger.w(name, "generateConfig blocked (switch off)")
+            return
+        }
         try {
             val targetDir = File("/data/adb/storage-isolation")
             if (!targetDir.exists()) {

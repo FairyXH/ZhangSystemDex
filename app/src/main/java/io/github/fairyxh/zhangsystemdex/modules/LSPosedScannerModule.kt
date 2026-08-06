@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -128,6 +129,33 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 }
             } catch (t: Throwable) {
                 Logger.w("LSPosedScanner", "read ${f.path} failed: ${t.message}")
+            }
+        }
+        // Fallback: newer LSPosed keeps module scope data in the manager database.
+        val dbs = listOf(
+            "/data/user_de/0/org.lsposed.manager/databases/lspd.db",
+            "/data/user/0/org.lsposed.manager/databases/lspd.db",
+            "/data/adb/lspd/db/lspd.db",
+        )
+        val queries = listOf(
+            "SELECT module_pkg_name FROM scope WHERE user_id = 0",
+            "SELECT module_pkg_name FROM scope",
+            "SELECT module_pkg_name FROM modules",
+            "SELECT package_name FROM modules",
+        )
+        for (db in dbs) {
+            if (!File(db).exists()) continue
+            for (q in queries) {
+                try {
+                    val rows = SqliteUtils.queryFirst(db, q)
+                    if (rows.isNotEmpty()) {
+                        val result = rows.distinct().map { ModuleInfo(it, it, "", true, emptyList()) }
+                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $db")
+                        return result
+                    }
+                } catch (t: Throwable) {
+                    Logger.w("LSPosedScanner", "lsposed db query $db failed: ${t.message}")
+                }
             }
         }
         return emptyList()

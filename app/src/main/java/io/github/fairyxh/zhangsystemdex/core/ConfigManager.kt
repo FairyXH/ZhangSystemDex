@@ -65,13 +65,13 @@ class ConfigManager(private val modDir: String) {
         loadSwitches()
     }
 
-    /** Feature switch; missing values default to false unless the feature is special-default-true. */
+    /** Feature switch; missing/empty values default to false unless the feature is special-default-true. */
     fun switch(key: String): Boolean {
         val raw = switches[key]
-        if (raw != null) {
-            return raw.equals("true", ignoreCase = true) || raw == "1"
+        if (raw.isNullOrEmpty()) {
+            return SWITCH_DEFAULTS[key] ?: false
         }
-        return SWITCH_DEFAULTS[key] ?: false
+        return raw.equals("true", ignoreCase = true) || raw == "1"
     }
 
     /** Non-boolean string setting read from switches.conf (e.g. external commands). */
@@ -102,7 +102,10 @@ class ConfigManager(private val modDir: String) {
                 if (t.isNotEmpty() && !t.startsWith("#")) {
                     val idx = t.indexOf('=')
                     if (idx > 0) {
-                        switches[t.substring(0, idx).trim()] = t.substring(idx + 1).trim()
+                        val k = t.substring(0, idx).trim()
+                        // Value may carry a trailing " # 中文注释"; strip it before storing.
+                        val v = t.substring(idx + 1).substringBefore('#').trim()
+                        if (k.isNotEmpty()) switches[k] = v
                     }
                 }
             }

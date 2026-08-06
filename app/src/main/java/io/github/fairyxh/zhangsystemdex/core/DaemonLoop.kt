@@ -24,7 +24,7 @@ abstract class DaemonLoop(
     }
 
     final override fun run() {
-        Logger.i(name, "module started (interval=${intervalMs}ms, pauseAware=$pauseAware)")
+        Logger.i(name, "feature enabled, module loop started (interval=${intervalMs}ms, pauseAware=$pauseAware)")
         try {
             onStart()
         } catch (t: Throwable) {

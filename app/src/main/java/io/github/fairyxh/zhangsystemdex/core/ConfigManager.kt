@@ -28,6 +28,9 @@ class ConfigManager(private val modDir: String) {
     private val switchesFile: File get() = File(rootDir, "switches.conf")
     private val switches = HashMap<String, String>()
 
+    @Volatile
+    private var switchesLastModified = 0L
+
     fun load() {
         var parsedRoot: String? = null
         var parsedLog: Boolean? = null
@@ -74,6 +77,19 @@ class ConfigManager(private val modDir: String) {
     /** Non-boolean string setting read from switches.conf (e.g. external commands). */
     fun getString(key: String, default: String): String =
         switches[key]?.trim()?.takeIf { it.isNotEmpty() } ?: default
+
+    /** Re-read switches.conf when its file changed; returns true when reloaded. */
+    fun reloadSwitchesIfChanged(): Boolean {
+        val f = switchesFile
+        val lm = if (f.exists()) f.lastModified() else 0L
+        if (switchesLastModified != 0L && lm != switchesLastModified) {
+            switchesLastModified = lm
+            loadSwitches()
+            return true
+        }
+        if (switchesLastModified == 0L) switchesLastModified = lm
+        return false
+    }
 
     private fun loadSwitches() {
         if (!switchesFile.exists()) {

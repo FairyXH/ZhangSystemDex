@@ -134,15 +134,53 @@ class LSPosedScannerModule(private val ctx: DexContext) {
         // Fallback: newer LSPosed keeps module scope data in the manager database.
         // Enumerate likely directories so version-specific paths are covered.
         val dbDirs = listOf(
+            File("/data/adb/lspd"),
             File("/data/user_de/0/org.lsposed.manager/databases"),
             File("/data/user/0/org.lsposed.manager/databases"),
-            File("/data/adb/lspd"),
             File("/data/adb/modules/lsposed"),
         )
         val targets = LinkedHashSet<String>()
         for (dir in dbDirs) {
             if (!dir.exists()) continue
             collectLsposedTargets(dir, targets, depth = 0)
+        }
+        // Prefer the LSPosed 2.x modules_config.db schema:
+        //   modules(module_pkg_name, apk_path)
+        //   modules_state(module_pkg_name, user_id, enabled, scope_request_blocked)
+        //   scope(module_pkg_name, app_pkg_name, user_id)
+        val lsposedDb = File("/data/adb/lspd/config/modules_config.db")
+        if (lsposedDb.exists()) {
+            try {
+                // Only keep modules that are actually installed: this drops
+                // uninstalled zombies and component-only entries such as
+                // lyricon's *.cmprovider/*.kgprovider records.
+                val installed = AppListProvider.allPackages().toSet()
+                val allPkgs = SqliteUtils.queryFirst(lsposedDb.path, "SELECT module_pkg_name FROM modules")
+                    .distinct()
+                    .filter { installed.isEmpty() || it in installed }
+                if (allPkgs.isNotEmpty()) {
+                    val enabledSet = SqliteUtils.queryFirst(
+                        lsposedDb.path,
+                        "SELECT module_pkg_name FROM modules_state WHERE enabled = 1"
+                    ).toSet()
+                    val scopePairs = SqliteUtils.queryPairs(
+                        lsposedDb.path,
+                        "SELECT module_pkg_name, app_pkg_name FROM scope WHERE user_id = 0"
+                    )
+                    val scopeMap = scopePairs.groupBy({ it.first }, { it.second })
+                    val result = allPkgs.map { pkg ->
+                        ModuleInfo(pkg, pkg, "", pkg in enabledSet, scopeMap[pkg] ?: emptyList())
+                    }
+                    val enabledCount = result.count { it.enabled }
+                    Logger.i(
+                        "LSPosedScanner",
+                        "lsposed modules_config.db: ${result.size} total, $enabledCount enabled"
+                    )
+                    return result
+                }
+            } catch (t: Throwable) {
+                Logger.w("LSPosedScanner", "lsposed modules_config.db parse failed: ${t.message}")
+            }
         }
         val queries = listOf(
             "SELECT module_pkg_name FROM scope WHERE user_id = 0",
@@ -177,7 +215,7 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                     val rows = SqliteUtils.queryFirst(target, q)
                     if (rows.isNotEmpty()) {
                         val result = rows.distinct().map { ModuleInfo(it, it, "", true, emptyList()) }
-                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $target")
+                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $target (query: $q)")
                         return result
                     }
                 } catch (t: Throwable) {

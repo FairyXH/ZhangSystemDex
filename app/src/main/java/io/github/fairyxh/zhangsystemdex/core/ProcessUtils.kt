@@ -9,22 +9,26 @@ import java.io.File
  */
 object ProcessUtils {
     fun writeFile(path: String, value: String): Boolean {
-        return try {
+        try {
             File(path).writeText(value)
-            true
-        } catch (t: Throwable) {
-            Logger.w("ProcessUtils", "write $path failed: ${t.message}")
-            false
+            return true
+        } catch (_: Throwable) {
+            // app_process runs in the zygote SELinux domain after exec, which is
+            // denied for some sysfs paths; retry through su (shell/su domain).
         }
+        val rc = ShellExecutor.runExit("su -c 'echo $value > $path'")
+        if (rc == 0) return true
+        Logger.w("ProcessUtils", "write failed (file+su rc=$rc): $path")
+        return false
     }
 
     fun appendCgroup(pid: Int, path: String): Boolean {
-        return try {
+        try {
             File(path).appendText("$pid\n")
-            true
+            return true
         } catch (_: Throwable) {
-            false
         }
+        return ShellExecutor.runExit("su -c 'echo $pid > $path'") == 0
     }
 
     fun readFile(path: String): String? {

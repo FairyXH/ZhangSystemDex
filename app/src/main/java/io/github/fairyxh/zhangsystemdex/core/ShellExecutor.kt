@@ -27,6 +27,24 @@ object ShellExecutor {
         }
     }
 
+    /** Run and return the exit code; -1 when the process could not run/timed out. */
+    fun runExit(cmd: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Int {
+        return try {
+            val pb = ProcessBuilder("/system/bin/sh", "-c", cmd)
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            val finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                p.destroy()
+                return -1
+            }
+            p.inputStream.bufferedReader().use { it.readText() }
+            p.exitValue()
+        } catch (t: Throwable) {
+            -1
+        }
+    }
+
     fun runBackground(cmd: String) {
         try {
             ProcessBuilder("/system/bin/sh", "-c", cmd).start()

@@ -42,6 +42,27 @@ object SqliteUtils {
         }
     }
 
+    /** Query the first two columns as (a, b) pairs. */
+    fun queryPairs(path: String, sql: String): List<Pair<String, String>> {
+        return try {
+            val db = SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY)
+            try {
+                val result = ArrayList<Pair<String, String>>()
+                db.rawQuery(sql, null).use { c ->
+                    while (c.moveToNext()) {
+                        result.add((c.getString(0) ?: "") to (c.getString(1) ?: ""))
+                    }
+                }
+                result
+            } finally {
+                db.close()
+            }
+        } catch (t: Throwable) {
+            Logger.w("SqliteUtils", "sqlite pairs query failed on $path: ${t.message}")
+            emptyList()
+        }
+    }
+
     private fun fallbackCli(path: String, sql: String): Boolean {
         val cli = if (java.io.File("/data/adb/Zhang/cache/sqlite3").exists()) {
             "/data/adb/Zhang/cache/sqlite3"

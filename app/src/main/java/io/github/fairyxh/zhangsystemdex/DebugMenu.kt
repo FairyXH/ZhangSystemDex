@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
@@ -45,6 +46,7 @@ object DebugMenu {
         println("14. DoNotTryAccessibility 生成")
         println("15. 服务器模式动作")
         println("16. 游戏列表刷新")
+        println("18. LSPosed 数据库诊断")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -85,6 +87,7 @@ object DebugMenu {
                     val games = GameListProvider.refresh(ctx.config.switch("read_game_list_enable"))
                     Logger.i("DebugMenu", "游戏列表 ${games.size} 个: $games")
                 }
+                18 -> diagnoseLsposedDb()
                 else -> Logger.w("DebugMenu", "未识别输入: $line")
             }
         } catch (t: Throwable) {
@@ -92,5 +95,34 @@ object DebugMenu {
         }
         println("===== 调试动作执行完毕 =====")
         return false
+    }
+
+    /** Print LSPosed database tables/columns so schema mismatches can be fixed. */
+    private fun diagnoseLsposedDb() {
+        try {
+            val dirs = listOf(
+                java.io.File("/data/adb/lspd"),
+                java.io.File("/data/user_de/0/org.lsposed.manager/databases"),
+                java.io.File("/data/user/0/org.lsposed.manager/databases"),
+            )
+            val dbs = LinkedHashSet<String>()
+            for (dir in dirs) {
+                if (!dir.exists()) continue
+                dir.walkTopDown().forEach { f ->
+                    if (f.isFile && f.name.endsWith(".db")) dbs.add(f.path)
+                }
+            }
+            for (db in dbs) {
+                Logger.i("DebugMenu", "=== DB: $db ===")
+                val tables = SqliteUtils.queryFirst(db, "SELECT name FROM sqlite_master WHERE type='table'")
+                Logger.i("DebugMenu", "tables: $tables")
+                for (t in tables) {
+                    val cols = SqliteUtils.queryFirst(db, "SELECT name FROM pragma_table_info('$t')")
+                    Logger.i("DebugMenu", "  table [$t] columns: $cols")
+                }
+            }
+        } catch (t: Throwable) {
+            Logger.e("DebugMenu", "lsposed db diagnose failed", t)
+        }
     }
 }

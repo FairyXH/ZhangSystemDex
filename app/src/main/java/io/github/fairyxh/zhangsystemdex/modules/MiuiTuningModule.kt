@@ -16,8 +16,8 @@ import java.io.File
 class MiuiTuningModule(private val ctx: DexContext) {
 
     fun applyAll() {
-        if (!ctx.config.getBool("change_joyose", false)) {
-            Logger.i("MiuiTuning", "disabled by config, skip")
+        if (!ctx.config.switch("miui_tuning_enable")) {
+            Logger.i("MiuiTuning", "disabled by switch, skip")
             return
         }
         try {

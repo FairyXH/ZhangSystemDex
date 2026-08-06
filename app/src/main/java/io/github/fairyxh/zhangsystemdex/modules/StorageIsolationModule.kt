@@ -35,7 +35,7 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
         configTick++
         if (configTick >= 20) {
             configTick = 0
-            if (ctx.config.getBool("redictallapps", false)) generateConfig(allApps = true)
+            if (ctx.config.switch("storage_isolate_all_enable")) generateConfig(allApps = true)
         }
     }
 
@@ -119,7 +119,7 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
             obj.put("new_app_notification", false)
 
             val packageArr = JSONArray()
-            if (ctx.config.getBool("redire_providers_media_module", false)) {
+            if (ctx.config.switch("storage_isolate_media_enable")) {
                 for (u in users) {
                     for (pkg in listOf("shared-android.media", "com.android.providers.media.module")) {
                         packageArr.put(mountEntry(u, pkg, flags = 3))

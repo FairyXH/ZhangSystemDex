@@ -17,18 +17,23 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
 
     private fun recentFile(): File = File(ctx.config.rootDir, "ZhangServiceRecent.txt")
 
-    private val addOpen: Boolean get() = ctx.config.getBool("addopen", false)
+    private val addOpen: Boolean get() = ctx.config.switch("extra_features_enable")
+    private val serviceGuardOn: Boolean get() = ctx.config.switch("service_guard_enable")
 
     override fun onStart() {
-        Logger.i(name, "module started")
-        startShizuku()
-        startBrevent()
+        Logger.i(name, "module started (serviceGuard=$serviceGuardOn, extra=$addOpen)")
+        if (serviceGuardOn) {
+            startShizuku()
+            startBrevent()
+        }
         if (addOpen) runAutostart()
     }
 
     override fun tick() {
-        healthLoop()
-        keepBluetooth()
+        if (serviceGuardOn) {
+            healthLoop()
+            keepBluetooth()
+        }
         if (addOpen) {
             nfcGuard()
             notificationGuard()

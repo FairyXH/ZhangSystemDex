@@ -24,16 +24,18 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     override fun onStart() {
         Logger.i(name, "module started")
-        applyDozeList()
-        applyLockedApps()
-        if (!ctx.config.getBool("addopen", false)) {
-            Logger.i(name, "nightly doze loop disabled by addopen=false")
-            stop()
+        if (ctx.config.switch("doze_enable")) {
+            applyDozeList()
+        }
+        if (ctx.config.switch("locked_apps_enable")) {
+            applyLockedApps()
         }
     }
 
     override fun tick() {
-        nightlyDoze()
+        if (ctx.config.switch("doze_enable")) {
+            nightlyDoze()
+        }
     }
 
     /** White-list maintenance, replacing DozeListChange.sh. */
@@ -66,7 +68,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     private fun buildWhiteList(xposedModules: List<String>): List<String> {
         val result = LinkedHashSet<String>()
-        if (ctx.config.getBool("only_base", true)) {
+        if (ctx.config.switch("only_base_enable")) {
             result.addAll(parseWhiteList(ConfigManager.DEFAULT_DOZE_CONF))
         } else {
             val f = File(ctx.config.rootDir, "doze.conf")
@@ -76,7 +78,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
                 result.addAll(parseWhiteList(ConfigManager.DEFAULT_DOZE_CONF))
             }
         }
-        if (ctx.config.getBool("read_game_list", true)) {
+        if (ctx.config.switch("read_game_list_enable")) {
             result.addAll(GameListProvider.refresh(true))
         }
         result.addAll(xposedModules)

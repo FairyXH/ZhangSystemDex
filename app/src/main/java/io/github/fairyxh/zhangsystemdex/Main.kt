@@ -27,6 +27,9 @@ import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
 /**
  * app_process entry: io.github.fairyxh.zhangsystemdex.Main
  * args[0] = Magisk module directory (e.g. /data/adb/modules/Zhang)
+ *
+ * Only features whose switch is enabled are loaded; disabled features never
+ * create a thread. powersave_enable overrides every non-special switch to off.
  */
 object Main {
     @JvmStatic
@@ -47,6 +50,12 @@ object Main {
         val sysCtx = SystemContext.get()
         Logger.i("Main", if (sysCtx != null) "system context available, framework APIs preferred" else "system context unavailable, shell fallback active")
 
+        val sw = ctx.config
+        fun enabled(key: String): Boolean {
+            if (sw.switch("powersave_enable")) return false
+            return sw.switch(key)
+        }
+
         val scanner = LSPosedScannerModule(ctx)
         val appManager = AppManagerModule(ctx)
         val power = PowerManagerModule(ctx)
@@ -60,19 +69,20 @@ object Main {
             ctx, performance, power, configGen, appManager, serviceGuard, storage, thermal, miui,
         )
 
-        val loops: List<DaemonLoop> = listOf(
-            AntiDetectionModule(ctx),
-            systemTuning,
-            GamePauseModule(ctx),
-            AccessibilityGuardModule(ctx),
-            serviceGuard,
-            ServerModeModule(ctx),
-            power,
-            MemoryModule(ctx),
-            storage,
-            NetworkModule(ctx),
-        )
-        Logger.i("Main", "starting ${loops.size} module loops")
+        val loops = mutableListOf<DaemonLoop>()
+        if (enabled("prop_tuning_enable")) loops.add(AntiDetectionModule(ctx))
+        if (enabled("system_tuning_enable")) loops.add(systemTuning)
+        if (enabled("game_pause_enable")) loops.add(GamePauseModule(ctx))
+        if (enabled("accessibility_guard_enable")) loops.add(AccessibilityGuardModule(ctx))
+        if (enabled("service_guard_enable") || enabled("extra_features_enable")) loops.add(serviceGuard)
+        if (enabled("server_mode_enable")) loops.add(ServerModeModule(ctx))
+        if (enabled("doze_enable") || enabled("locked_apps_enable")) loops.add(power)
+        if (enabled("memory_clean_enable")) loops.add(MemoryModule(ctx))
+        if (enabled("storage_isolation_enable")) loops.add(storage)
+        if (enabled("hma_config_enable")) loops.add(configGen)
+        if (enabled("network_ipv6_disable_enable")) loops.add(NetworkModule(ctx))
+
+        Logger.i("Main", "starting ${loops.size} module loops: ${loops.joinToString { it.javaClass.simpleName }}")
         loops.forEach { it.start() }
 
         Runtime.getRuntime().addShutdownHook(Thread {

@@ -15,7 +15,7 @@ class ThermalModule(private val ctx: DexContext) {
     fun applyMask() {
         try {
             val overlayRoot = File(ctx.modDir)
-            val stdltm = ctx.config.getBool("stdltm", false)
+            val stdltm = ctx.config.switch("thermal_mask_enable")
             var count = 0
             for (rootName in listOf("/system", "/vendor")) {
                 val root = File(rootName)

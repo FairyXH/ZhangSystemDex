@@ -12,8 +12,8 @@ import java.io.File
  */
 class NetworkModule(ctx: DexContext) : DaemonLoop(ctx, 600_000L, pauseAware = false) {
     override fun onStart() {
-        if (!ctx.config.getBool("network_ipv6_disable", false)) {
-            Logger.i(name, "disabled by config, exiting")
+        if (!ctx.config.switch("network_ipv6_disable_enable")) {
+            Logger.i(name, "disabled by switch, exiting")
             stop()
             return
         }

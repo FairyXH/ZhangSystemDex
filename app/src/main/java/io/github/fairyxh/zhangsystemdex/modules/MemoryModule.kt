@@ -16,8 +16,8 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
     private var lastDropLog = 0L
 
     override fun onStart() {
-        if (!ctx.config.getBool("addopen", false)) {
-            Logger.i(name, "memory module disabled by addopen=false")
+        if (!ctx.config.switch("memory_clean_enable")) {
+            Logger.i(name, "memory module disabled by switch")
             stop()
             return
         }

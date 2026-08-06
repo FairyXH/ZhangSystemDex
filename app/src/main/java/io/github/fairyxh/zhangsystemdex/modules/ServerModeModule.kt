@@ -17,8 +17,8 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
     private var round = 0
 
     override fun onStart() {
-        if (!ctx.config.getBool("isserver", false)) {
-            Logger.i(name, "server mode disabled, exiting")
+        if (!ctx.config.switch("server_mode_enable")) {
+            Logger.i(name, "server mode disabled by switch, exiting")
             stop()
             return
         }

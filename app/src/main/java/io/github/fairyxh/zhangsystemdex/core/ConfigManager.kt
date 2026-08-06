@@ -1,15 +1,15 @@
 package io.github.fairyxh.zhangsystemdex.core
 
-import org.json.JSONObject
 import java.io.File
 
 /**
  * Configuration manager.
  *
- * The Magisk module directory keeps only config.conf. config.conf points at the
- * configuration root (default /data/adb/Zhang) and carries the master logging
- * switch `log_enabled`. All feature configuration lives under the configuration
- * root and is initialized on first run.
+ * The Magisk module directory keeps only config.conf (configuration root and
+ * master logging switch). The configuration root holds switches.conf: every
+ * independent feature has its own switch with a Chinese description, checked on
+ * every startup. Missing switches default to false, except the six special
+ * features that default to true. Disabled features are never loaded/started.
  */
 class ConfigManager(private val modDir: String) {
     @Volatile
@@ -25,8 +25,8 @@ class ConfigManager(private val modDir: String) {
     val cacheDir: File get() = File(rootDir, "cache")
 
     private val configFile: File = File(modDir, "config.conf")
-    private val mainConfigFile: File get() = File(rootDir, "config.json")
-    private val mainConfig: JSONObject = JSONObject()
+    private val switchesFile: File get() = File(rootDir, "switches.conf")
+    private val switches = HashMap<String, String>()
 
     fun load() {
         var parsedRoot: String? = null
@@ -58,32 +58,68 @@ class ConfigManager(private val modDir: String) {
         rootFile.mkdirs()
         logDir.mkdirs()
         cacheDir.mkdirs()
-        loadMainConfig()
         initUserConfigs()
+        loadSwitches()
     }
 
-    fun getBool(key: String, default: Boolean): Boolean =
-        mainConfig.optBoolean(key, default)
+    /** Feature switch; missing values default to false unless the feature is special-default-true. */
+    fun switch(key: String): Boolean {
+        val raw = switches[key]
+        if (raw != null) {
+            return raw.equals("true", ignoreCase = true) || raw == "1"
+        }
+        return SWITCH_DEFAULTS[key] ?: false
+    }
 
+    /** Non-boolean string setting read from switches.conf (e.g. external commands). */
     fun getString(key: String, default: String): String =
-        mainConfig.optString(key, default)
+        switches[key]?.trim()?.takeIf { it.isNotEmpty() } ?: default
 
-    fun getStringList(key: String, default: List<String>): List<String> {
-        val arr = mainConfig.optJSONArray(key) ?: return default
-        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
-    }
-
-    fun setBool(key: String, value: Boolean) {
-        mainConfig.put(key, value)
-        saveMainConfig()
-    }
-
-    fun saveMainConfig() {
+    private fun loadSwitches() {
+        if (!switchesFile.exists()) {
+            writeSwitches()
+        }
+        switches.clear()
         try {
-            mainConfigFile.parentFile?.mkdirs()
-            mainConfigFile.writeText(mainConfig.toString(2))
+            switchesFile.forEachLine { line ->
+                val t = line.trim()
+                if (t.isNotEmpty() && !t.startsWith("#")) {
+                    val idx = t.indexOf('=')
+                    if (idx > 0) {
+                        switches[t.substring(0, idx).trim()] = t.substring(idx + 1).trim()
+                    }
+                }
+            }
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "failed to save config.json: ${t.message}")
+            Logger.w("ConfigManager", "switches.conf parse error: ${t.message}")
+        }
+        Logger.i("ConfigManager", "switches loaded (${switches.size} entries)")
+    }
+
+    private fun writeSwitches() {
+        try {
+            switchesFile.parentFile?.mkdirs()
+            val sb = StringBuilder()
+            sb.append("# ZhangSystemDex 功能开关配置\n")
+            sb.append("# 每次启动都会检查；配置缺失时按默认值处理（特殊项默认开启，其余一律默认关闭）\n")
+            sb.append("# 关闭的功能不会创建线程，也不会执行任何逻辑\n\n")
+            sb.append("# ===== 特殊默认开启 =====\n")
+            for (key in SPECIAL_DEFAULT_TRUE) {
+                val desc = SWITCH_DESCRIPTIONS[key] ?: continue
+                sb.append("$key=true\t# ${desc}\n")
+            }
+            sb.append("\n# ===== 其余功能（一律默认关闭） =====\n")
+            for ((key, desc) in SWITCH_DESCRIPTIONS) {
+                if (key in SPECIAL_DEFAULT_TRUE) continue
+                sb.append("$key=false\t# ${desc}\n")
+            }
+            sb.append("\n# ===== 服务器模式外部命令（可选项，留空跳过） =====\n")
+            sb.append("frpc_command=\t# 服务器模式下启动 frpc 的完整命令\n")
+            sb.append("automusic_command=\t# 服务器模式下启动音乐播放的完整命令\n")
+            switchesFile.writeText(sb.toString())
+            Logger.i("ConfigManager", "switches.conf initialized")
+        } catch (t: Throwable) {
+            Logger.w("ConfigManager", "failed to write switches.conf: ${t.message}")
         }
     }
 
@@ -99,39 +135,6 @@ class ConfigManager(private val modDir: String) {
             )
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "failed to write default config.conf: ${t.message}")
-        }
-    }
-
-    private fun loadMainConfig() {
-        try {
-            if (mainConfigFile.exists()) {
-                mainConfigFile.readText().let { raw ->
-                    val parsed = JSONObject(raw)
-                    mainConfig.keys().forEach { mainConfig.remove(it) }
-                    parsed.keys().forEach { mainConfig.put(it, parsed.get(it)) }
-                }
-            } else {
-                mainConfig.put("isserver", false)
-                mainConfig.put("stdltm", false)
-                mainConfig.put("appops", false)
-                mainConfig.put("eve", false)
-                mainConfig.put("closeselinux", false)
-                mainConfig.put("addopen", false)
-                mainConfig.put("powersave", false)
-                mainConfig.put("redictallapps", false)
-                mainConfig.put("boost_flag", false)
-                mainConfig.put("run_once", false)
-                mainConfig.put("max_cpu_flag", false)
-                mainConfig.put("change_joyose", false)
-                mainConfig.put("only_base", true)
-                mainConfig.put("read_game_list", true)
-                mainConfig.put("boost_game_flag", false)
-                mainConfig.put("redire_providers_media_module", false)
-                mainConfig.put("network_ipv6_disable", false)
-                saveMainConfig()
-            }
-        } catch (t: Throwable) {
-            Logger.w("ConfigManager", "config.json corrupted, using defaults: ${t.message}")
         }
     }
 
@@ -161,6 +164,53 @@ class ConfigManager(private val modDir: String) {
     }
 
     companion object {
+        /** Features that default to ON. */
+        val SPECIAL_DEFAULT_TRUE: Set<String> = setOf(
+            "doze_enable",
+            "hma_config_enable",
+            "game_pause_enable",
+            "accessibility_guard_enable",
+            "locked_apps_enable",
+            "prop_tuning_enable",
+        )
+
+        /** Ordered switch descriptions (key -> Chinese description). */
+        val SWITCH_DESCRIPTIONS: Map<String, String> = linkedMapOf(
+            "doze_enable" to "Doze 处理：电池优化白名单维护与夜间强制 Doze",
+            "hma_config_enable" to "HideMyAppList 模板列表自动写入（包含 Xposed 模块扫描）",
+            "game_pause_enable" to "游戏在前台时暂停其他功能",
+            "accessibility_guard_enable" to "无障碍服务守护",
+            "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
+            "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
+            "system_tuning_enable" to "主调优循环（热控/调度/防错误弹窗/周期高占用任务）",
+            "service_guard_enable" to "服务守护（Shizuku/Brevent/蓝牙/健康应用）",
+            "extra_features_enable" to "附加功能（NFC 守护/通知监听守护/开机自启动）",
+            "memory_clean_enable" to "内存清理与低内存后台杀进程",
+            "server_mode_enable" to "服务器模式（保持 WiFi/蓝牙/常亮/性能调度）",
+            "thermal_mask_enable" to "温控配置文件遮蔽",
+            "appops_allow_enable" to "白名单应用 AppOps 全允许与权限组授权",
+            "dexopt_everything_enable" to "开机执行 everything 编译",
+            "selinux_disable_enable" to "关闭 SELinux",
+            "powersave_enable" to "省电模式（开启后其余调优类功能全部无效）",
+            "storage_isolation_enable" to "存储空间隔离配套（痕迹清理/垃圾隔离/配置生成）",
+            "storage_isolate_all_enable" to "存储空间隔离作用于所有应用（false=仅第三方）",
+            "storage_isolate_media_enable" to "允许隔离媒体选择器",
+            "disable_apps_enable" to "反诈/快应用等应用停用与遮蔽挂载",
+            "boost_process_enable" to "进程调度提升（renice/chrt/cpuset）",
+            "boost_game_enable" to "游戏进程自动加速",
+            "run_once_enable" to "高占用任务仅执行一次后退出",
+            "max_cpu_enable" to "CPU/GPU 满频率与核心分配",
+            "miui_tuning_enable" to "MIUI joyose/powerkeeper 数据库与属性调优",
+            "target_list_enable" to "tricky_store/hmspush 目标列表增量更新",
+            "dnt_accessibility_enable" to "DoNotTryAccessibility 规则 XML 生成",
+            "network_ipv6_disable_enable" to "禁用 IPv6",
+            "only_base_enable" to "Doze 白名单使用内置规则（false=读取 doze.conf）",
+            "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
+        )
+
+        /** Defaults: false for everything except the six special features. */
+        val SWITCH_DEFAULTS: Map<String, Boolean> = SWITCH_DESCRIPTIONS.keys.associateWith { it in SPECIAL_DEFAULT_TRUE }
+
         /** Original module doze.conf shipped with the module, used as the default white list. */
         const val DEFAULT_DOZE_CONF =
             "+bin.mt.plus\n" +

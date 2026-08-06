@@ -19,12 +19,12 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
     private var activeGame: String? = null
 
     override fun onStart() {
-        games = GameListProvider.refresh(ctx.config.getBool("read_game_list", true)).toSet()
+        games = GameListProvider.refresh(ctx.config.switch("read_game_list_enable")).toSet()
         Logger.i(name, "loaded ${games.size} game packages")
     }
 
     override fun tick() {
-        games = GameListProvider.refresh(ctx.config.getBool("read_game_list", true)).toSet()
+        games = GameListProvider.refresh(ctx.config.switch("read_game_list_enable")).toSet()
         val focus = ProcessUtils.focusedPackage() ?: return
         val screenOn = ProcessUtils.isScreenOn()
 
@@ -35,6 +35,9 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
             activeGame = focus
             timeoutCount = 0
             ctx.gamePause.setPaused(true)
+            if (ctx.config.switch("boost_game_enable")) {
+                boostGame(focus)
+            }
             // Prevent Shizuku residue while the game is running.
             ShellExecutor.run("rm -rf /data/local/tmp/shizuku")
             ShellExecutor.run("rm -f /data/local/tmp/shizuku_starter")
@@ -60,5 +63,15 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
         if (activeGame == null) {
             ctx.gamePause.setPaused(false)
         }
+    }
+
+    private fun boostGame(pkg: String) {
+        for (pid in ProcessUtils.pidsOf(pkg)) {
+            ProcessUtils.renice(pid, -20)
+            ShellExecutor.run("chrt -f -p 30 $pid")
+            ProcessUtils.appendCgroup(pid, "/dev/cpuset/top-app/cgroup.procs")
+            ProcessUtils.appendCgroup(pid, "/dev/stune/top-app/cgroup.procs")
+        }
+        Logger.i(name, "game process boosted: $pkg")
     }
 }

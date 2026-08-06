@@ -12,8 +12,10 @@ import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import java.io.File
 
 /**
- * The main tuning loop, replacing systemchange.sh. Runs the regular per-cycle
- * work and every Nth cycle (screen-off only) the heavy maintenance tasks.
+ * The main tuning loop, replacing systemchange.sh. Loaded only when
+ * `system_tuning_enable` is on. Runs the regular per-cycle work and every Nth
+ * cycle (screen-off only) the heavy maintenance tasks. Every sub-feature is
+ * gated by its own switch; disabled sub-features are skipped.
  */
 class SystemTuningModule(
     ctx: DexContext,
@@ -25,24 +27,26 @@ class SystemTuningModule(
     private val storage: StorageIsolationModule,
     private val thermal: ThermalModule,
     private val miui: MiuiTuningModule,
-) : DaemonLoop(ctx, if (ctx.config.getBool("isserver", false)) 300_000L else 600_000L) {
-
+) : DaemonLoop(
+    ctx,
+    if (ctx.config.switch("server_mode_enable")) 300_000L else 600_000L,
+) {
     private var cycle = 0
     private var runOnceDone = false
 
     private val taskInterval: Int
-        get() = if (ctx.config.getBool("isserver", false)) 24 else 6
+        get() = if (ctx.config.switch("server_mode_enable")) 24 else 6
 
     override fun onStart() {
         Logger.i(name, "module started, heavy task interval=${taskInterval}")
-        if (ctx.config.getBool("eve", false)) {
+        if (ctx.config.switch("dexopt_everything_enable")) {
             Logger.i(name, "dex2oat everything compile started")
             ShellExecutor.runBackground("cmd package compile -m everything -a")
         }
-        if (ctx.config.getBool("appops", false)) {
+        if (ctx.config.switch("appops_allow_enable")) {
             appManager.applyAppOps()
         }
-        if (ctx.config.getBool("closeselinux", false)) {
+        if (ctx.config.switch("selinux_disable_enable")) {
             ShellExecutor.run("setenforce 0")
             ProcessUtils.writeFile("/sys/fs/selinux/enforce", "0")
             Logger.i(name, "selinux disabled")
@@ -81,10 +85,15 @@ class SystemTuningModule(
         ProcessUtils.writeFile("/dev/stune/schedtune.prefer_idle", "1")
         ProcessUtils.writeFile("/dev/stune/top-app/schedtune.prefer_idle", "1")
 
-        lowProc("logd")
+        if (ctx.config.switch("boost_process_enable")) {
+            lowProc("logd")
+            boostServices()
+        }
+        if (ctx.config.switch("max_cpu_enable")) {
+            performance.applyMaxCpu()
+        }
         PropUtils.deleteMatching("pihook|pixelprops")
         deleteBaseOdex()
-        boostServices()
         FileUtils.deleteRecursive(File("/data/media/0/Download/com.sy.fuck_miui_thermal"))
 
         SettingsUtils.putGlobal("phone_name_verify_switch", "false")
@@ -107,37 +116,51 @@ class SystemTuningModule(
         FileUtils.rmQuoted("/data/local/tmp/shizuku_starter")
         cleanTencentTmfs()
 
-        power.applyLockedApps()
+        if (ctx.config.switch("locked_apps_enable")) {
+            power.applyLockedApps()
+        }
         FileUtils.mkdirs("/data/media/0/Download/Files")
         FileUtils.mkdirs("/data/media/0/Download/Important")
         FileUtils.mkdirs("/data/media/0/Download/Music")
-        configGen.generateHma(forceScan = false)
         Logger.i(name, "regular tick finished")
     }
 
     private fun heavyTick() {
         Logger.i(name, "heavy maintenance started")
         try {
+            if (ctx.config.switch("boost_process_enable")) {
+                lowProc("logd")
+            }
             fakeBattery()
-            lowProc("logd")
-            if (!ctx.config.getBool("isserver", false)) {
+            if (ctx.config.switch("doze_enable") && !ctx.config.switch("server_mode_enable")) {
                 power.applyDozeList()
             }
-            if (ctx.config.getBool("change_joyose", false)) {
+            if (ctx.config.switch("miui_tuning_enable")) {
                 miui.applyAll()
             }
             restartSoter()
-            thermal.applyMask()
-            configGen.generateHma(forceScan = true)
-            configGen.generateDoNotTryAccessibility()
+            if (ctx.config.switch("thermal_mask_enable")) {
+                thermal.applyMask()
+            }
+            if (ctx.config.switch("dnt_accessibility_enable")) {
+                configGen.generateDoNotTryAccessibility()
+            }
             FileUtils.deleteRecursive(File("/data/adb/modules/hidemyapplist"))
-            configGen.updateTargetList("tricky")
-            configGen.updateTargetList("hmspush")
-            appManager.applyDisableApps()
-            serviceGuard.restartShizukuBrevent()
-            storage.cleanCleanedRubbish()
+            if (ctx.config.switch("target_list_enable")) {
+                configGen.updateTargetList("tricky")
+                configGen.updateTargetList("hmspush")
+            }
+            if (ctx.config.switch("disable_apps_enable")) {
+                appManager.applyDisableApps()
+            }
+            if (ctx.config.switch("service_guard_enable")) {
+                serviceGuard.restartShizukuBrevent()
+            }
+            if (ctx.config.switch("storage_isolation_enable")) {
+                storage.cleanCleanedRubbish()
+            }
             syncZhangSetting()
-            if (ctx.config.getBool("run_once", false) && !runOnceDone) {
+            if (ctx.config.switch("run_once_enable") && !runOnceDone) {
                 runOnceDone = true
                 Logger.i(name, "run_once=true, stopping after first heavy tick")
                 stop()
@@ -166,7 +189,6 @@ class SystemTuningModule(
     }
 
     private fun lowProc(pattern: String) {
-        if (!ctx.config.getBool("boost_flag", false)) return
         for (pid in ProcessUtils.pidsOf(pattern)) {
             ShellExecutor.run("chrt -i -p $pid 1")
             ProcessUtils.renice(pid, 19)
@@ -174,7 +196,6 @@ class SystemTuningModule(
     }
 
     private fun boostServices() {
-        if (!ctx.config.getBool("boost_flag", false)) return
         boostHome("com.miui.home")
         val homePackages = ShellExecutor.run(
             "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | grep /"
@@ -182,10 +203,8 @@ class SystemTuningModule(
         for (line in homePackages) {
             boostHome(line.trim().substringBefore('/'))
         }
-        for (ime in listOf("input-app")) {
-            val imes = ShellExecutor.run("ime list -s")?.lineSequence()?.toList() ?: emptyList()
-            for (l in imes) boostHome(l.trim().substringBefore('/'))
-        }
+        val imes = ShellExecutor.run("ime list -s")?.lineSequence()?.toList() ?: emptyList()
+        for (l in imes) boostHome(l.trim().substringBefore('/'))
         boostUi("com.android.systemui")
         boostUi("surfaceflinger")
         boostUi("netd")

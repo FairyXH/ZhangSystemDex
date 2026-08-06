@@ -1,6 +1,7 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
+import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
@@ -17,10 +18,10 @@ import java.io.File
  * hmspush_target_set.sh.
  */
 class ConfigGenModule(
-    private val ctx: DexContext,
+    ctx: DexContext,
     private val scanner: LSPosedScannerModule,
-) {
-    private val name = "ConfigGen"
+) : DaemonLoop(ctx, 600_000L, pauseAware = false) {
+    override val name: String get() = "ConfigGen"
 
     private val extBlacklistPattern = listOf(
         "com.miui", "com.xiaomi", "com.lbe.security.miui", "com.coolapk.market",
@@ -41,12 +42,21 @@ class ConfigGenModule(
         "com.oplus.pay", "com.oplus.appplatform",
     )
 
+    override fun onStart() {
+        Logger.i(name, "module started, initial full generation with Xposed scan")
+        generateHma(forceScan = true)
+    }
+
+    override fun tick() {
+        generateHma(forceScan = false)
+    }
+
     fun generateHma(forceScan: Boolean) {
         try {
             val xposedPackages = scanner.scan(forceScan).map { it.packageName }.toSet()
             val thirdParty = AppListProvider.thirdPartyPackages().toSet()
             val ime = AppListProvider.inputMethods()
-            val games = GameListProvider.refresh(ctx.config.getBool("read_game_list", true)).toSet()
+            val games = GameListProvider.refresh(ctx.config.switch("read_game_list_enable")).toSet()
             val userBlack = readUserBlacklist()
 
             val whiteSys = mutableSetOf<String>()

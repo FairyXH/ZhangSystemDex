@@ -10,7 +10,7 @@ abstract class DaemonLoop(
     protected val intervalMs: Long,
     private val pauseAware: Boolean = true,
 ) : Runnable {
-    protected val name: String get() = this::class.java.simpleName
+    protected open val name: String get() = this::class.java.simpleName
 
     private val running = java.util.concurrent.atomic.AtomicBoolean(true)
     private var thread: Thread? = null

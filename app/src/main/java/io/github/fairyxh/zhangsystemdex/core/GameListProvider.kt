@@ -44,5 +44,6 @@ object GameListProvider {
         return list
     }
 
-    fun games(): List<String> = cached ?: refresh(DexContext.current?.config?.getBool("read_game_list", true) ?: true)
+    fun games(): List<String> =
+        cached ?: refresh(DexContext.current?.config?.switch("read_game_list_enable") ?: false)
 }

@@ -114,6 +114,8 @@ object Main {
                     running.remove(entry.name)
                 }
             }
+            val enabledNames = entries.filter { it.enabled() }.map { it.name }
+            Logger.i("Main", "已启用功能 (${enabledNames.size} 个): ${enabledNames.joinToString(", ")}")
         }
 
         syncModules()

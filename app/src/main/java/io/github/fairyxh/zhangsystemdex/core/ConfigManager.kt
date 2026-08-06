@@ -191,7 +191,12 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable",
             "locked_apps_enable",
             "prop_tuning_enable",
-            "heavy_task_enable"
+            "heavy_task_enable",
+            "target_list_enable",
+            "disable_apps_enable",
+            "service_guard_enable",
+            "read_game_list_enable",
+            "miui_tuning_enable"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */

@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex
 import android.os.Process
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.HiddenApiBypass
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.RootUtils
@@ -54,6 +55,7 @@ object Main {
             Logger.e("Main", "not running as root, exiting")
             return
         }
+        HiddenApiBypass.enable()
         PropUtils.detect()
         val sysCtx = SystemContext.get()
         Logger.i("Main", if (sysCtx != null) "system context available, framework APIs preferred" else "system context unavailable, shell fallback active")

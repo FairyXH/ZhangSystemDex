@@ -132,33 +132,72 @@ class LSPosedScannerModule(private val ctx: DexContext) {
             }
         }
         // Fallback: newer LSPosed keeps module scope data in the manager database.
-        val dbs = listOf(
-            "/data/user_de/0/org.lsposed.manager/databases/lspd.db",
-            "/data/user/0/org.lsposed.manager/databases/lspd.db",
-            "/data/adb/lspd/db/lspd.db",
+        // Enumerate likely directories so version-specific paths are covered.
+        val dbDirs = listOf(
+            File("/data/user_de/0/org.lsposed.manager/databases"),
+            File("/data/user/0/org.lsposed.manager/databases"),
+            File("/data/adb/lspd"),
+            File("/data/adb/modules/lsposed"),
         )
+        val targets = LinkedHashSet<String>()
+        for (dir in dbDirs) {
+            if (!dir.exists()) continue
+            collectLsposedTargets(dir, targets, depth = 0)
+        }
         val queries = listOf(
             "SELECT module_pkg_name FROM scope WHERE user_id = 0",
             "SELECT module_pkg_name FROM scope",
             "SELECT module_pkg_name FROM modules",
             "SELECT package_name FROM modules",
         )
-        for (db in dbs) {
-            if (!File(db).exists()) continue
-            for (q in queries) {
+        for (target in targets) {
+            if (target.endsWith("modules.list")) {
                 try {
-                    val rows = SqliteUtils.queryFirst(db, q)
-                    if (rows.isNotEmpty()) {
-                        val result = rows.distinct().map { ModuleInfo(it, it, "", true, emptyList()) }
-                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $db")
+                    val result = ArrayList<ModuleInfo>()
+                    File(target).readLines().forEach { raw ->
+                        val line = raw.trim()
+                        if (line.isEmpty() || line.startsWith("#")) return@forEach
+                        val parts = line.split('|')
+                        val pkg = parts[0].trim()
+                        if (pkg.isEmpty()) return@forEach
+                        val scopes = parts.drop(1).map { it.trim() }.filter { it.isNotEmpty() }
+                        result.add(ModuleInfo(pkg, pkg, "", true, scopes))
+                    }
+                    if (result.isNotEmpty()) {
+                        Logger.i("LSPosedScanner", "lsposed modules.list: ${result.size} modules from $target")
                         return result
                     }
                 } catch (t: Throwable) {
-                    Logger.w("LSPosedScanner", "lsposed db query $db failed: ${t.message}")
+                    Logger.w("LSPosedScanner", "read $target failed: ${t.message}")
+                }
+                continue
+            }
+            for (q in queries) {
+                try {
+                    val rows = SqliteUtils.queryFirst(target, q)
+                    if (rows.isNotEmpty()) {
+                        val result = rows.distinct().map { ModuleInfo(it, it, "", true, emptyList()) }
+                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $target")
+                        return result
+                    }
+                } catch (t: Throwable) {
+                    Logger.w("LSPosedScanner", "lsposed db query $target failed: ${t.message}")
                 }
             }
         }
         return emptyList()
+    }
+
+    private fun collectLsposedTargets(dir: File, out: MutableSet<String>, depth: Int) {
+        if (depth > 4) return
+        val children = dir.listFiles() ?: return
+        for (f in children) {
+            if (f.isFile && (f.name.endsWith(".db") || f.name == "modules.list")) {
+                out.add(f.path)
+            } else if (f.isDirectory) {
+                collectLsposedTargets(f, out, depth + 1)
+            }
+        }
     }
 
     private fun packageSignature(): String {

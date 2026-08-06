@@ -1,0 +1,96 @@
+package io.github.fairyxh.zhangsystemdex.core
+
+import java.io.File
+
+/**
+ * Process, sysfs and cgroup helpers. Prefers /proc and sysfs File access;
+ * renice/chrt/pgrep are shell-only operations (setpriority/sched syscalls have
+ * no Java API) but are wrapped semantically.
+ */
+object ProcessUtils {
+    fun writeFile(path: String, value: String): Boolean {
+        return try {
+            File(path).writeText(value)
+            true
+        } catch (t: Throwable) {
+            Logger.w("ProcessUtils", "write $path failed: ${t.message}")
+            false
+        }
+    }
+
+    fun appendCgroup(pid: Int, path: String): Boolean {
+        return try {
+            File(path).appendText("$pid\n")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun readFile(path: String): String? {
+        return try {
+            File(path).readText().trim()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun pidsOf(pattern: String): List<Int> {
+        val result = ArrayList<Int>()
+        val proc = File("/proc")
+        val dirs = proc.listFiles { f -> f.isDirectory && f.name.all { it.isDigit() } } ?: return result
+        for (dir in dirs) {
+            try {
+                val pid = dir.name.toInt()
+                val cmdline = File(dir, "cmdline").readBytes()
+                    .toString(Charsets.UTF_8)
+                    .replace('\u0000', ' ')
+                    .trim()
+                if (cmdline.contains(pattern)) result.add(pid)
+            } catch (_: Throwable) {
+            }
+        }
+        return result
+    }
+
+    fun renice(pid: Int, niceness: Int) {
+        ShellExecutor.run("renice -n $niceness -p $pid")
+    }
+
+    fun chrt(pid: Int, policy: String, priority: Int) {
+        ShellExecutor.run("chrt -$policy -p $priority $pid")
+    }
+
+    /** Parse the focused application package from dumpsys window displays. */
+    fun focusedPackage(): String? {
+        val out = ShellExecutor.run("dumpsys window displays | grep mFocusedApp | grep -v 'mFocusedApp=null'") ?: return null
+        val line = out.lineSequence().firstOrNull() ?: return null
+        val idx = line.indexOf('=')
+        if (idx < 0) return null
+        val rest = line.substring(idx + 1).trim()
+        val parts = rest.split('/')
+        return parts.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() && it != "null" }
+    }
+
+    /** Mirror dumpsys deviceidle get screen: "true" when screen is on. */
+    fun isScreenOn(): Boolean =
+        ShellExecutor.run("dumpsys deviceidle get screen")?.trim() == "true"
+
+    fun memFreePercent(): Int {
+        val meminfo = readFile("/proc/meminfo") ?: return 100
+        var total = 0L
+        var free = 0L
+        var lineIdx = 0
+        for (line in meminfo.lineSequence()) {
+            val num = line.substringAfter(':').trim().removeSuffix(" kB").trim().toLongOrNull() ?: 0L
+            when (lineIdx) {
+                0 -> total = num
+                2 -> free = num
+            }
+            lineIdx++
+            if (lineIdx > 2) break
+        }
+        if (total <= 0) return 100
+        return ((free * 100) / total).toInt()
+    }
+}

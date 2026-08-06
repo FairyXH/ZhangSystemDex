@@ -1,6 +1,7 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
+import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
@@ -18,19 +19,6 @@ import java.io.File
  * exposed to SystemTuningModule; a nightly Doze loop runs here.
  */
 class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
-
-    private val baseWhiteList = listOf(
-        "li.songe.gkd", "com.box.app", "com.mi.home", "com.mi.health", "com.tencent.mm",
-        "com.gotokeep.keep", "com.kugou.android", "com.tencent.mobileqq", "com.tencent.qqmusic",
-        "com.heytap.health", "com.omarea.vtools", "com.zidongdianji", "com.baidu.netdisk",
-        "me.piebridge.brevent", "moe.fuqiuluo.portal", "tornaco.apps.shortx",
-        "top.bogey.touch_tool", "com.kugou.android.lite", "com.miui.home",
-        "com.zmzx.college.search", "moe.fuqiuluo.portaldev", "moe.shizuku.privileged.api",
-        "org.autojs.autojspro", "com.vphonegaga.titan", "com.lerist.fakelocation",
-        "com.eg.android.AlipayGphone", "com.drdisagree.colorblendr",
-        "com.wstxda.viper4android", "com.suda.yzune.wakeupschedule",
-        "com.fvcorp.android.aijiasuclientw",
-    )
 
     private var awake = false
 
@@ -79,16 +67,13 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
     private fun buildWhiteList(xposedModules: List<String>): List<String> {
         val result = LinkedHashSet<String>()
         if (ctx.config.getBool("only_base", true)) {
-            result.addAll(baseWhiteList)
+            result.addAll(parseWhiteList(ConfigManager.DEFAULT_DOZE_CONF))
         } else {
             val f = File(ctx.config.rootDir, "doze.conf")
             if (f.exists()) {
-                f.readLines().forEach { line ->
-                    val pkg = line.trim().removePrefix("+")
-                    if (pkg.isNotEmpty() && !pkg.startsWith("#")) result.add(pkg)
-                }
+                result.addAll(parseWhiteList(f.readText()))
             } else {
-                result.addAll(baseWhiteList)
+                result.addAll(parseWhiteList(ConfigManager.DEFAULT_DOZE_CONF))
             }
         }
         if (ctx.config.getBool("read_game_list", true)) {
@@ -97,6 +82,12 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         result.addAll(xposedModules)
         return result.toList()
     }
+
+    private fun parseWhiteList(text: String): List<String> =
+        text.lineSequence()
+            .map { it.trim().removePrefix("+") }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .toList()
 
     /** Locked-app writing for MIUI/ColorOS, replacing LockedAppsAdd.sh. */
     fun applyLockedApps() {

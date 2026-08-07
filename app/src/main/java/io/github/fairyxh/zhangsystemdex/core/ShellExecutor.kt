@@ -45,6 +45,24 @@ object ShellExecutor {
         }
     }
 
+    /** Run and return both the exit code and stdout+stderr (merged). */
+    fun runWithCode(cmd: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Pair<Int, String?> {
+        return try {
+            val pb = ProcessBuilder("/system/bin/sh", "-c", cmd)
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            val finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                p.destroy()
+                return -1 to null
+            }
+            val out = p.inputStream.bufferedReader().use { it.readText() }
+            p.exitValue() to out
+        } catch (t: Throwable) {
+            -1 to null
+        }
+    }
+
     fun runBackground(cmd: String) {
         try {
             ProcessBuilder("/system/bin/sh", "-c", cmd).start()

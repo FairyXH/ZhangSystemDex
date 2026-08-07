@@ -109,9 +109,9 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 // uninstalled zombies and component-only entries such as
                 // lyricon's *.cmprovider/*.kgprovider records.
                 val installed = AppListProvider.allPackages().toSet()
-                val allPkgs = SqliteUtils.queryFirst(lsposedDb.path, "SELECT module_pkg_name FROM modules")
+                val rawPkgs = SqliteUtils.queryFirst(lsposedDb.path, "SELECT module_pkg_name FROM modules")
                     .distinct()
-                    .filter { installed.isEmpty() || it in installed }
+                val allPkgs = rawPkgs.filter { it in installed }
                 if (allPkgs.isNotEmpty()) {
                     val enabledSet = SqliteUtils.queryFirst(
                         lsposedDb.path,
@@ -128,17 +128,22 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                     val enabledCount = result.count { it.enabled }
                     Logger.i(
                         "LSPosedScanner",
-                        "lsposed modules_config.db: ${result.size} total, $enabledCount enabled"
+                        "lsposed modules_config.db: ${result.size} total, $enabledCount enabled (raw ${rawPkgs.size}, installed ${installed.size})"
                     )
                     return result
                 }
+                // NOTE: the scope table is NOT a module source (it lists
+                // per-module scope apps and includes disabled/historical rows).
+                Logger.w(
+                    "LSPosedScanner",
+                    "modules_config.db: no installed modules from modules table (raw=${rawPkgs.size}, installed=${installed.size}), refusing scope-table fallback"
+                )
+                return emptyList()
             } catch (t: Throwable) {
                 Logger.w("LSPosedScanner", "lsposed modules_config.db parse failed: ${t.message}")
             }
         }
         val queries = listOf(
-            "SELECT module_pkg_name FROM scope WHERE user_id = 0",
-            "SELECT module_pkg_name FROM scope",
             "SELECT module_pkg_name FROM modules",
             "SELECT package_name FROM modules",
         )

@@ -135,7 +135,8 @@ class ConfigGenModule(
             val downloadDir = File("/data/media/0/Download/ZhangSetting")
             downloadDir.mkdirs()
             FileUtils.copyFile(moduleCopy, File(downloadDir, moduleCopy.name))
-            Logger.i(name, "HMA config generated (white=${whiteMode.size}, black=${blackMode.size})")
+            FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
+            Logger.i(name, "HMA config generated (white=${whiteMode.size}, black=${blackMode.size}, blackPool=${blackPool.size})")
         } catch (t: Throwable) {
             Logger.e(name, "generateHma failed", t)
         }
@@ -159,6 +160,7 @@ class ConfigGenModule(
             val downloadDir = File("/data/media/0/Download/ZhangSetting")
             downloadDir.mkdirs()
             FileUtils.copyFile(xmlFile, File(downloadDir, xmlFile.name))
+            FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
             Logger.i(name, "DoNotTryAccessibility XML generated (${packages.size} apps)")
         } catch (t: Throwable) {
             Logger.w(name, "DoNotTryAccessibility failed: ${t.message}")

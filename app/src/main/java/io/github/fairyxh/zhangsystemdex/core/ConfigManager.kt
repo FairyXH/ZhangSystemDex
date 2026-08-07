@@ -221,16 +221,24 @@ class ConfigManager(private val modDir: String) {
         val src = File(modDir, "sqlite_lib")
         if (!src.exists()) return
         val dst = File(cacheDir, "sqlite_lib")
-        if (dst.exists()) return
-        try {
-            dst.mkdirs()
-            src.listFiles()?.forEach { f ->
-                if (f.isFile) FileUtils.copyFile(f, File(dst, f.name))
+        if (!dst.exists()) {
+            try {
+                dst.mkdirs()
+                src.listFiles()?.forEach { f ->
+                    if (f.isFile) FileUtils.copyFile(f, File(dst, f.name))
+                }
+            } catch (t: Throwable) {
+                Logger.w("ConfigManager", "sqlite_lib sync failed: ${t.message}")
             }
-            Logger.i("ConfigManager", "sqlite_lib synced to ${dst.path}")
-        } catch (t: Throwable) {
-            Logger.w("ConfigManager", "sqlite_lib sync failed: ${t.message}")
         }
+        // Fix permissions every start: a module update or manual copy can
+        // leave sqlite3 without the exec bit (observed as 666).
+        val bin = File(dst, "sqlite3")
+        if (bin.exists()) FileUtils.chmod(bin.path, "0755")
+        dst.listFiles()?.forEach { f ->
+            if (f.name.startsWith("lib")) FileUtils.chmod(f.path, "0644")
+        }
+        Logger.i("ConfigManager", "sqlite_lib ready at ${dst.path}")
     }
 
     companion object {

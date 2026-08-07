@@ -59,8 +59,15 @@ object SelfTest {
             println()
             println("===== ZhangSystemDex SelfTest 汇总 =====")
             println("PASS: $pass   FAIL: $fail   WARN: $warn   SKIP: $skip   (total ${checks.size})")
+            Logger.i("SelfTest", "汇总: PASS=$pass FAIL=$fail WARN=$warn SKIP=$skip (total ${checks.size})")
             for (c in checks) {
-                println("[${c.status.name}] ${c.name}: ${c.detail}")
+                val line = "[${c.status.name}] ${c.name}: ${c.detail}"
+                println(line)
+                when (c.status) {
+                    Status.FAIL -> Logger.e("SelfTest", line, null)
+                    Status.WARN -> Logger.w("SelfTest", line)
+                    Status.PASS, Status.SKIP -> Logger.i("SelfTest", line)
+                }
             }
             println("========================================")
         }

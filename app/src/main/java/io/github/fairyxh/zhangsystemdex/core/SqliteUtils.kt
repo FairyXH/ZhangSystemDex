@@ -147,7 +147,8 @@ object SqliteUtils {
             }
         }
         if (!cliAvailable()) return emptyList()
-        val out = ShellExecutor.run(cliCmd(path, sql)) ?: return emptyList()
+        val (rc, out) = ShellExecutor.runWithCode(cliCmd(path, sql))
+        if (rc != 0 || out == null) return emptyList()
         val result = ArrayList<Pair<String, String>>()
         for (line in out.lineSequence()) {
             val parts = line.split('|')
@@ -158,13 +159,13 @@ object SqliteUtils {
 
     private fun fallbackCli(path: String, sql: String): Boolean {
         if (!cliAvailable()) return false
-        val out = ShellExecutor.run(cliCmd(path, sql))
-        return out != null
+        return ShellExecutor.runWithCode(cliCmd(path, sql)).first == 0
     }
 
     private fun fallbackCliQuery(path: String, sql: String): List<String> {
         if (!cliAvailable()) return emptyList()
-        val out = ShellExecutor.run(cliCmd(path, sql)) ?: return emptyList()
+        val (rc, out) = ShellExecutor.runWithCode(cliCmd(path, sql))
+        if (rc != 0 || out == null) return emptyList()
         return out.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
     }
 }

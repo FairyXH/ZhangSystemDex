@@ -100,4 +100,17 @@ object FileUtils {
         } catch (_: Throwable) {
         }
     }
+
+    /** Copy every regular file from src into dst (files only, non-destructive). */
+    fun syncDir(src: File, dst: File) {
+        if (!src.exists()) return
+        try {
+            dst.mkdirs()
+            src.listFiles()?.forEach { f ->
+                if (f.isFile) copyFile(f, File(dst, f.name))
+            }
+        } catch (t: Throwable) {
+            warnOnce("sync_${src.path}", "syncDir ${src.path} failed: ${t.message}")
+        }
+    }
 }

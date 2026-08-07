@@ -141,6 +141,12 @@ object Main {
 
         syncModules()
         Logger.i("Main", "daemon ready, watching switches.conf every 60s")
+        val bootTuning = ctx.config.getString("tuning_interval_seconds", "")
+        val bootHeavy = ctx.config.getString("heavy_interval_cycles", "")
+        Logger.i(
+            "Main",
+            "周期配置: tuning_interval_seconds=${bootTuning.ifBlank { "默认" }}, heavy_interval_cycles=${bootHeavy.ifBlank { "默认" }}（重启后生效）"
+        )
 
         Runtime.getRuntime().addShutdownHook(Thread {
             Logger.i("Main", "shutdown hook, stopping modules")
@@ -151,6 +157,15 @@ object Main {
             try {
                 if (ctx.config.reloadSwitchesIfChanged()) {
                     Logger.i("Main", "switches.conf 已变化，重新同步模块")
+                    val t = ctx.config.getString("tuning_interval_seconds", "")
+                    val h = ctx.config.getString("heavy_interval_cycles", "")
+                    if (t != bootTuning || h != bootHeavy) {
+                        Logger.w(
+                            "Main",
+                            "周期参数已修改 (tuning_interval_seconds: ${bootTuning.ifBlank { "默认" }} -> ${t.ifBlank { "默认" }}, " +
+                                "heavy_interval_cycles: ${bootHeavy.ifBlank { "默认" }} -> ${h.ifBlank { "默认" }})，重启 daemon 后生效"
+                        )
+                    }
                     syncModules()
                 }
                 Thread.sleep(60000)

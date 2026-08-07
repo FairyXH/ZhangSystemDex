@@ -56,6 +56,11 @@ class SystemTuningModule(
             name,
             "module started, interval=${intervalMs}ms, regular=${ctx.config.switch("system_tuning_enable")}, heavy=${ctx.config.switch("heavy_task_enable")}"
         )
+        Logger.i(
+            name,
+            "周期配置: tuning_interval_seconds=${ctx.config.getString("tuning_interval_seconds", "").ifBlank { "默认" }} -> 生效 ${intervalMs / 1000}s, " +
+                "heavy_interval_cycles=${ctx.config.getString("heavy_interval_cycles", "").ifBlank { "默认" }} -> 生效 ${taskInterval} 周期"
+        )
         if (!ctx.config.switch("system_tuning_enable")) return
         if (ctx.config.switch("dexopt_everything_enable")) {
             Logger.i(name, "dex2oat everything compile started")
@@ -292,14 +297,9 @@ class SystemTuningModule(
     }
 
     private fun syncZhangSetting() {
-        val src = File(ctx.modDir, "ZhangSetting")
-        val dst = File("/data/media/0/Download/ZhangSetting")
-        if (!src.exists()) return
-        dst.mkdirs()
-        src.listFiles()?.forEach { f ->
-            if (f.isFile) FileUtils.copyFile(f, File(dst, f.name))
-        }
-        FileUtils.copyFile(File(ctx.modDir, "maxcpu.sh"), File(dst, "maxcpu.sh"))
-        FileUtils.copyFile(File(ctx.modDir, "设置CPU最高频率.sh"), File(dst, "设置CPU最高频率.sh"))
+        FileUtils.syncDir(
+            File(ctx.modDir, "ZhangSetting"),
+            File("/data/media/0/Download/ZhangSetting")
+        )
     }
 }

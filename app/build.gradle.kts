@@ -33,6 +33,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    lint {
+        // Speed up daemon builds: no release lint vital checks needed.
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {

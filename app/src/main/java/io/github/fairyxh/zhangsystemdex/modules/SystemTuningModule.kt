@@ -29,18 +29,30 @@ class SystemTuningModule(
     private val miui: MiuiTuningModule,
 ) : DaemonLoop(
     ctx,
-    if (ctx.config.switch("server_mode_enable")) 300_000L else 600_000L,
+    configuredIntervalMs(ctx),
 ) {
     private var cycle = 0
     private var runOnceDone = false
 
     private val taskInterval: Int
-        get() = if (ctx.config.switch("server_mode_enable")) 24 else 6
+        get() {
+            val n = ctx.config.getString("heavy_interval_cycles", "").toIntOrNull()
+            val base = if (ctx.config.switch("server_mode_enable")) 24 else 6
+            return (n ?: base).coerceIn(1, 1000)
+        }
+
+    companion object {
+        private fun configuredIntervalMs(ctx: DexContext): Long {
+            val sec = ctx.config.getString("tuning_interval_seconds", "").toLongOrNull()
+            val base = if (ctx.config.switch("server_mode_enable")) 300L else 600L
+            return (sec ?: base).coerceIn(30L, 86400L) * 1000L
+        }
+    }
 
     override fun onStart() {
         Logger.i(
             name,
-            "module started, regular=${ctx.config.switch("system_tuning_enable")}, heavy=${ctx.config.switch("heavy_task_enable")}"
+            "module started, interval=${intervalMs}ms, regular=${ctx.config.switch("system_tuning_enable")}, heavy=${ctx.config.switch("heavy_task_enable")}"
         )
         if (!ctx.config.switch("system_tuning_enable")) return
         if (ctx.config.switch("dexopt_everything_enable")) {
@@ -64,10 +76,12 @@ class SystemTuningModule(
         }
         if (ctx.config.switch("heavy_task_enable")) {
             if (cycle >= taskInterval) {
-                cycle = 0
                 if (ProcessUtils.isScreenOn()) {
-                    Logger.i(name, "screen on, heavy task skipped")
+                    // Keep the cycle counter: retry on the very next cycle instead
+                    // of waiting another full taskInterval.
+                    Logger.i(name, "高占用任务到期但未息屏，跳过执行，下一周期立即重试 (cycle=$cycle, interval=${intervalMs}ms)")
                 } else {
+                    cycle = 0
                     heavyTick()
                 }
             }
@@ -106,14 +120,6 @@ class SystemTuningModule(
         deleteBaseOdex()
         FileUtils.deleteRecursive(File("/data/media/0/Download/com.sy.fuck_miui_thermal"))
 
-        SettingsUtils.putGlobal("phone_name_verify_switch", "false")
-        SettingsUtils.putGlobal("activity_manager_constants", "max_cached_processes=3")
-        ShellExecutor.run("device_config put activity_manager_native_boot use_freezer true")
-        ServiceManagerUtils.surfaceFlingerTransact(1008, 1)
-        SettingsUtils.putGlobal("cached_apps_freezer", "enabled")
-        ShellExecutor.run("device_config set_sync_disabled_for_tests persistent")
-        ShellExecutor.run("device_config put activity_manager max_phantom_processes 2147483647")
-
         FileUtils.touch("/data/adb/shamiko/whitelist")
         FileUtils.touch("/data/adb/modules/wjw_hiderootauxiliarymod/TrickyStoreListDTGX_Task")
         ShellExecutor.run("pm uninstall --user 0 com.oplus.appdetail")
@@ -138,6 +144,7 @@ class SystemTuningModule(
     private fun heavyTick() {
         Logger.i(name, "heavy maintenance started")
         try {
+            antiErrorDialogs()
             if (ctx.config.switch("boost_process_enable")) {
                 lowProc("logd")
             }
@@ -179,6 +186,17 @@ class SystemTuningModule(
             Logger.e(name, "heavy tick failed", t)
         }
         Logger.i(name, "heavy maintenance finished")
+    }
+
+    private fun antiErrorDialogs() {
+        SettingsUtils.putGlobal("phone_name_verify_switch", "false")
+        SettingsUtils.putGlobal("activity_manager_constants", "max_cached_processes=3")
+        ShellExecutor.run("device_config put activity_manager_native_boot use_freezer true")
+        ServiceManagerUtils.surfaceFlingerTransact(1008, 1)
+        SettingsUtils.putGlobal("cached_apps_freezer", "enabled")
+        ShellExecutor.run("device_config set_sync_disabled_for_tests persistent")
+        ShellExecutor.run("device_config put activity_manager max_phantom_processes 2147483647")
+        Logger.i(name, "anti error-dialog rules applied")
     }
 
     private fun fakeBattery() {

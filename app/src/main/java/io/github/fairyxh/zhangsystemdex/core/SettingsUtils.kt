@@ -6,9 +6,28 @@ import android.provider.Settings
 /**
  * Settings database access. Prefers the system ContentResolver obtained from
  * SystemContext, falls back to the `settings` shell command.
+ *
+ * The app_process systemMain Context has a working PackageManager but its
+ * ContentResolver cannot reach the settings provider ("Unable to find app for
+ * caller") because the thread is not attached to ActivityManager. The first
+ * failure is logged once, then every later call goes straight to shell so a
+ * per-cycle loop does not spam WARN lines.
  */
 object SettingsUtils {
-    private fun resolver(): ContentResolver? = SystemContext.get()?.contentResolver
+    @Volatile
+    private var frameworkBroken = false
+
+    private fun resolver(): ContentResolver? {
+        if (frameworkBroken) return null
+        return SystemContext.get()?.contentResolver
+    }
+
+    private fun frameworkFailed(op: String, t: Throwable) {
+        if (!frameworkBroken) {
+            frameworkBroken = true
+            Logger.w("SettingsUtils", "$op failed, fallback shell (logged once): ${t.message}")
+        }
+    }
 
     fun putGlobal(key: String, value: String) {
         val cr = resolver()
@@ -17,7 +36,7 @@ object SettingsUtils {
                 Settings.Global.putString(cr, key, value)
                 return
             } catch (t: Throwable) {
-                Logger.w("SettingsUtils", "ContentResolver global put failed, fallback shell: ${t.message}")
+                frameworkFailed("ContentResolver global put", t)
             }
         }
         ShellExecutor.run("settings put global $key $value")
@@ -30,7 +49,7 @@ object SettingsUtils {
                 Settings.System.putString(cr, key, value)
                 return
             } catch (t: Throwable) {
-                Logger.w("SettingsUtils", "ContentResolver system put failed, fallback shell: ${t.message}")
+                frameworkFailed("ContentResolver system put", t)
             }
         }
         ShellExecutor.run("settings put system $key $value")
@@ -43,7 +62,7 @@ object SettingsUtils {
                 Settings.Secure.putString(cr, key, value)
                 return
             } catch (t: Throwable) {
-                Logger.w("SettingsUtils", "ContentResolver secure put failed, fallback shell: ${t.message}")
+                frameworkFailed("ContentResolver secure put", t)
             }
         }
         ShellExecutor.run("settings put secure $key $value")
@@ -54,7 +73,8 @@ object SettingsUtils {
         if (cr != null) {
             try {
                 return Settings.Secure.getString(cr, key)
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                frameworkFailed("ContentResolver secure get", t)
             }
         }
         return ShellExecutor.run("settings get secure $key")
@@ -67,7 +87,8 @@ object SettingsUtils {
         if (cr != null) {
             try {
                 return Settings.Global.getString(cr, key)
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                frameworkFailed("ContentResolver global get", t)
             }
         }
         return ShellExecutor.run("settings get global $key")

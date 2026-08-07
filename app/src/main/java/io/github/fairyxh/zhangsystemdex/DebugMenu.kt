@@ -47,6 +47,7 @@ object DebugMenu {
         println("15. 服务器模式动作")
         println("16. 游戏列表刷新")
         println("18. LSPosed 数据库诊断")
+        println("19. SystemContext 诊断")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -100,6 +101,7 @@ object DebugMenu {
                     Logger.i("DebugMenu", "游戏列表 ${games.size} 个: $games")
                 }
                 18 -> diagnoseLsposedDb()
+                19 -> diagnoseSystemContext()
                 else -> Logger.w("DebugMenu", "未识别输入: $line")
             }
         } catch (t: Throwable) {
@@ -135,6 +137,59 @@ object DebugMenu {
             }
         } catch (t: Throwable) {
             Logger.e("DebugMenu", "lsposed db diagnose failed", t)
+        }
+    }
+
+    /** Print ActivityThread reflection facts so SystemContext failures can be diagnosed. */
+    private fun diagnoseSystemContext() {
+        try {
+            val at = Class.forName("android.app.ActivityThread")
+            val names = at.declaredMethods.map { it.name }
+                .filter { it.contains("SystemContext") || it.contains("systemMain") || it == "currentActivityThread" }
+            Logger.i("DebugMenu", "ActivityThread methods: $names (total ${at.declaredMethods.size})")
+            // Path 1: existing ActivityThread instance.
+            try {
+                val current = at.getDeclaredMethod("currentActivityThread")
+                current.isAccessible = true
+                val instance = current.invoke(null)
+                Logger.i("DebugMenu", "currentActivityThread: $instance")
+                if (instance != null) {
+                    val gsc = at.getDeclaredMethod("getSystemContext")
+                    gsc.isAccessible = true
+                    Logger.i("DebugMenu", "getSystemContext ok: ${gsc.invoke(instance)}")
+                }
+            } catch (t: Throwable) {
+                Logger.e("DebugMenu", "currentActivityThread path failed", t)
+            }
+            // Path 2: fresh instance + createSystemContext (usually hidden-API filtered).
+            try {
+                val create = at.getDeclaredMethod("createSystemContext")
+                create.isAccessible = true
+                val instance = at.getDeclaredConstructor().newInstance()
+                val created = create.invoke(instance)
+                Logger.i("DebugMenu", "createSystemContext ok: $created")
+            } catch (t: Throwable) {
+                Logger.e("DebugMenu", "createSystemContext failed", t)
+            }
+            // Path 3: systemMain needs a main-thread Looper; then getSystemContext.
+            try {
+                if (android.os.Looper.myLooper() == null) android.os.Looper.prepareMainLooper()
+                val sm = at.getDeclaredMethod("systemMain")
+                sm.isAccessible = true
+                val instance = sm.invoke(null)
+                Logger.i("DebugMenu", "systemMain ok: $instance")
+                val gsc = at.getDeclaredMethod("getSystemContext")
+                gsc.isAccessible = true
+                val created = gsc.invoke(instance)
+                Logger.i("DebugMenu", "getSystemContext ok: $created")
+            } catch (t: Throwable) {
+                Logger.e("DebugMenu", "systemMain path failed", t)
+            }
+            // Final: what the production path resolves to right now.
+            val ctx = io.github.fairyxh.zhangsystemdex.core.SystemContext.getForced()
+            Logger.i("DebugMenu", "SystemContext.getForced() => $ctx")
+        } catch (t: Throwable) {
+            Logger.e("DebugMenu", "diagnose failed", t)
         }
     }
 }

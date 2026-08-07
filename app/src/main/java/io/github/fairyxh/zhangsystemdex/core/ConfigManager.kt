@@ -112,7 +112,37 @@ class ConfigManager(private val modDir: String) {
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "switches.conf parse error: ${t.message}")
         }
+        ensureParamLines()
         Logger.i("ConfigManager", "switches loaded (${switches.size} entries)")
+    }
+
+    /**
+     * Append the optional tuning parameter lines when switches.conf already
+     * exists from an older version. Existing values are never overwritten; a
+     * key is only appended when it is completely absent.
+     */
+    private fun ensureParamLines() {
+        if (!switchesFile.exists()) return
+        val missing = mutableListOf<String>()
+        if (switches["tuning_interval_seconds"] == null) {
+            missing.add("tuning_interval_seconds=\t# 主调优循环周期（秒），留空=600（服务器模式 300）")
+        }
+        if (switches["heavy_interval_cycles"] == null) {
+            missing.add("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）")
+        }
+        if (missing.isEmpty()) return
+        try {
+            val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
+            for (line in missing) {
+                sb.append(line).append('\n')
+                val k = line.substringBefore('=').trim()
+                switches[k] = ""
+            }
+            switchesFile.appendText(sb.toString())
+            Logger.i("ConfigManager", "switches.conf appended missing params: ${missing.map { it.substringBefore('=') }}")
+        } catch (t: Throwable) {
+            Logger.w("ConfigManager", "failed to append switches.conf params: ${t.message}")
+        }
     }
 
     private fun writeSwitches() {
@@ -132,9 +162,12 @@ class ConfigManager(private val modDir: String) {
                 if (key in SPECIAL_DEFAULT_TRUE) continue
                 sb.append("$key=false\t# ${desc}\n")
             }
-            sb.append("\n# ===== 服务器模式外部命令（可选项，留空跳过） =====\n")
-            sb.append("frpc_command=\t# 服务器模式下启动 frpc 的完整命令\n")
-            sb.append("automusic_command=\t# 服务器模式下启动音乐播放的完整命令\n")
+            sb.append("\n# 服务器模式外部命令（可选项）\n")
+            sb.append("frpc_command=\t# 服务器模式下启动 frpc 的命令（留空跳过）\n")
+            sb.append("automusic_command=\t# 服务器模式下启动音乐的命令（留空跳过）\n")
+            sb.append("\n# 主调优循环参数（可选项）\n")
+            sb.append("tuning_interval_seconds=\t# 主调优循环周期（秒），留空=600（服务器模式 300）\n")
+            sb.append("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf initialized")
         } catch (t: Throwable) {
@@ -206,8 +239,8 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable" to "无障碍服务守护",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
-            "heavy_task_enable" to "周期高占用任务（Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，熄屏时每 6 周期执行一次）",
-            "system_tuning_enable" to "主调优循环（热控/调度/防错误弹窗/进程提升等每周期常规任务）",
+            "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，仅熄屏时执行，间隔周期数可配置）",
+            "system_tuning_enable" to "主调优循环（热控/调度/进程提升等每周期常规任务，周期秒数可配置）",
             "service_guard_enable" to "服务守护（Shizuku/Brevent/蓝牙/健康应用）",
             "extra_features_enable" to "附加功能（NFC 守护/通知监听守护/开机自启动）",
             "memory_clean_enable" to "内存清理与低内存后台杀进程",

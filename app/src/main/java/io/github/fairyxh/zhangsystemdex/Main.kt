@@ -14,6 +14,7 @@ import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
 import io.github.fairyxh.zhangsystemdex.modules.GamePauseModule
+import io.github.fairyxh.zhangsystemdex.modules.GameOomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
@@ -140,6 +141,12 @@ object Main {
                 SystemTuningModule(ctx, performance, power, configGen, appManager, serviceGuard, storage, thermal, miui)
             },
             ModuleEntry("game_pause", { enabled("game_pause_enable") }) { GamePauseModule(ctx) },
+            ModuleEntry(
+                "game_oom_protect",
+                { enabled("game_oom_protect_enable") }
+            ) {
+                GameOomProtectModule(ctx)
+            },
             ModuleEntry("accessibility_guard", { enabled("accessibility_guard_enable") }) { AccessibilityGuardModule(ctx) },
             ModuleEntry("service_guard", { enabled("service_guard_enable") || enabled("extra_features_enable") }) {
                 ServiceGuardModule(ctx)

@@ -39,6 +39,9 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
             if (ctx.config.switch("boost_game_enable")) {
                 boostGame(focus)
             }
+            if(ctx.config.switch("game_oom_protect_enable")){
+                GameOomProtect(focus)
+            }
             // Prevent Shizuku residue while the game is running.
             FileUtils.rmQuoted("/data/local/tmp/shizuku")
             FileUtils.rmQuoted("/data/local/tmp/shizuku_starter")
@@ -74,5 +77,26 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
             ProcessUtils.appendCgroup(pid, "/dev/stune/top-app/cgroup.procs")
         }
         Logger.i(name, "已提升游戏进程: $pkg")
+    }
+
+    private fun GameOomProtect(pkg:String){
+        val pids = ProcessUtils.pidsOf(pkg)
+        pids.forEachIndexed { index,pid ->
+            if(index == 0){
+                setOomScoreAdj(pid,-1000)
+            }else{
+                setOomScoreAdj(pid,-500)
+            }
+        }
+    }
+    private fun setOomScoreAdj(pid: Int, value: Int) {
+        ShellExecutor.run(
+            "echo $value > /proc/$pid/oom_score_adj"
+        )
+
+        Logger.i(
+            name,
+            "设置 PID=$pid oom_score_adj=$value"
+        )
     }
 }

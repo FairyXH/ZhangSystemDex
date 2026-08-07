@@ -114,19 +114,32 @@ object FileUtils {
         }
     }
 
-    /** Copy every regular file from src into dst (files only, non-destructive). */
-    fun syncDir(src: File, dst: File) {
-        if (!src.exists()) return
+    /**
+     * Release a module folder to a target: recursive copy with overwrite,
+     * creating the target directory when missing. Equivalent to
+     * `cp -rf <src>/. <dst>/` for the src content. Returns the number of
+     * files copied, or -1 when the source does not exist (a pruned module is
+     * allowed to omit the folder entirely).
+     */
+    fun copyDirRecursive(src: File, dst: File): Int {
+        if (!src.exists() || !src.isDirectory) return -1
+        var copied = 0
         try {
             if (!dst.exists()) {
                 dst.mkdirs()
                 if (!dst.exists()) ShellExecutor.run("mkdir -p '${dst.path}'")
             }
             src.listFiles()?.forEach { f ->
-                if (f.isFile) copyFile(f, File(dst, f.name))
+                val target = File(dst, f.name)
+                if (f.isDirectory) {
+                    copied += copyDirRecursive(f, target)
+                } else if (f.isFile) {
+                    if (copyFile(f, target)) copied++
+                }
             }
         } catch (t: Throwable) {
-            warnOnce("sync_${src.path}", "syncDir ${src.path} 失败: ${t.message}")
+            warnOnce("copyDir_${src.path}", "复制目录 ${src.path} 失败: ${t.message}")
         }
+        return copied
     }
 }

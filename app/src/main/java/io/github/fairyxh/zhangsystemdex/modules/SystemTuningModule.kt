@@ -163,49 +163,66 @@ class SystemTuningModule(
 
     private fun heavyTick() {
         Logger.i(name, "高占用维护开始")
+        val done = ArrayList<String>()
         try {
             antiErrorDialogs()
+            done += "防错误弹窗"
             if (ctx.config.switch("boost_process_enable")) {
                 lowProc("logd")
+                done += "logd 进程优先级降低"
             }
             fakeBattery()
+            done += "假电池锁定"
             if (ctx.config.switch("doze_enable") && !ctx.config.switch("server_mode_enable")) {
                 power.applyDozeList()
+                done += "Doze 白名单"
             }
             if (ctx.config.switch("miui_tuning_enable")) {
                 miui.applyAll()
+                done += "MIUI 调优"
             }
             restartSoter()
+            done += "Soter 服务重启"
             if (ctx.config.switch("thermal_mask_enable")) {
                 thermal.applyMask()
+                done += "温控遮蔽"
             }
             if (ctx.config.switch("dnt_accessibility_enable")) {
                 configGen.generateDoNotTryAccessibility()
+                done += "DNTA 规则"
             }
             FileUtils.deleteRecursive(File("/data/adb/modules/hidemyapplist"))
+            done += "HMA 模块目录清理"
             if (ctx.config.switch("target_list_enable")) {
                 configGen.updateTargetList("tricky")
                 configGen.updateTargetList("hmspush")
+                done += "tricky/hmspush 目标列表"
             }
             if (ctx.config.switch("disable_apps_enable")) {
                 appManager.applyDisableApps()
+                done += "应用停用/遮蔽"
             }
             if (ctx.config.switch("service_guard_enable")) {
                 serviceGuard.restartShizukuBrevent()
+                done += "服务守护重启"
             }
             if (ctx.config.switch("storage_isolation_enable")) {
                 storage.cleanCleanedRubbish()
+                done += "存储隔离清理"
             }
-            syncZhangSetting()
+            val released = syncZhangSetting()
+            done += if (released < 0) "ZhangSetting 释放(模块无该目录，跳过)" else "ZhangSetting 释放($released 个文件)"
             if (ctx.config.switch("run_once_enable") && !runOnceDone) {
                 runOnceDone = true
+                done += "run_once 停止"
                 Logger.i(name, "run_once=true，首轮高占用执行完成后停止")
                 stop()
             }
         } catch (t: Throwable) {
             Logger.e(name, "高占用任务执行失败", t)
+            done += "整体异常(${t.message})"
         }
-        Logger.i(name, "高占用维护完成")
+        Logger.i(name, "高占用维护完成: ${done.joinToString("、")}")
     }
 
     private fun antiErrorDialogs() {
@@ -309,8 +326,8 @@ class SystemTuningModule(
         sleepSafe(5000)
     }
 
-    private fun syncZhangSetting() {
-        FileUtils.syncDir(
+    private fun syncZhangSetting(): Int {
+        return FileUtils.copyDirRecursive(
             File(ctx.modDir, "ZhangSetting"),
             File("/data/media/0/Download/ZhangSetting")
         )

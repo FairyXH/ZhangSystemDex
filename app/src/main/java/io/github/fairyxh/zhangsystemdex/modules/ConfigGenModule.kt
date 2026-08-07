@@ -34,7 +34,7 @@ class ConfigGenModule(
         "org.lsposed.lspatch", "com.omarea.vtools", "io.github.vvb2060.mahoshojo",
         "icu.nullptr.applistdetector", "com.tsng.hidemyapplist", "com.byxiaorun.detector",
         "com.zhenxi.hunter", "luna.safe.luna", "icu.nullptr.nativetest",
-        "io.github.huskydg.memorydetector", "me.garfieldhan.holmes",
+        "io.github.huskydg.memorydetector", "me.garfieldhan.holmes","bin.mt.plus","bin.mt.termex"
     )
 
     private val moreWhiteList = listOf(
@@ -135,7 +135,7 @@ class ConfigGenModule(
             val downloadDir = File("/data/media/0/Download/ZhangSetting")
             downloadDir.mkdirs()
             FileUtils.copyFile(moduleCopy, File(downloadDir, moduleCopy.name))
-            FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
+            FileUtils.copyDirRecursive(File(ctx.modDir, "ZhangSetting"), downloadDir)
             Logger.i(name, "HMA 配置已生成（白名单模式=${whiteMode.size}，黑名单模式=${blackMode.size}，黑名单池=${blackPool.size}）")
         } catch (t: Throwable) {
             Logger.e(name, "生成 HMA 配置失败", t)
@@ -160,7 +160,7 @@ class ConfigGenModule(
             val downloadDir = File("/data/media/0/Download/ZhangSetting")
             downloadDir.mkdirs()
             FileUtils.copyFile(xmlFile, File(downloadDir, xmlFile.name))
-            FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
+            FileUtils.copyDirRecursive(File(ctx.modDir, "ZhangSetting"), downloadDir)
             Logger.i(name, "已生成 DoNotTryAccessibility 规则（${packages.size} 个应用）")
         } catch (t: Throwable) {
             Logger.w(name, "生成 DoNotTryAccessibility 失败: ${t.message}")

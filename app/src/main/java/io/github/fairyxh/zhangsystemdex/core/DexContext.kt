@@ -1,10 +1,13 @@
 package io.github.fairyxh.zhangsystemdex.core
-
+import android.content.Context
 /**
  * Runtime context handed to every module: configuration root, logger, global
  * pause coordinator and the app_process module directory.
  */
 class DexContext(val modDir: String) {
+    val androidContext: Context?
+        get() = ContextProvider.get()
+
     val config: ConfigManager = ConfigManager(modDir)
     val gamePause: GamePauseCoordinator = GamePauseCoordinator()
 

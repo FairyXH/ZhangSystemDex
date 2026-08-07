@@ -1,5 +1,6 @@
 package io.github.fairyxh.zhangsystemdex
 
+import android.annotation.SuppressLint
 import android.os.Process
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
@@ -41,6 +42,42 @@ object Main {
         val enabled: () -> Boolean,
         val factory: () -> DaemonLoop,
     )
+
+    @SuppressLint("PrivateApi")
+    private fun getSystemContext(): android.content.Context? {
+
+        return try {
+
+            val clazz =
+                Class.forName(
+                    "android.app.ActivityThread"
+                )
+
+            val thread =
+                clazz.getMethod(
+                    "currentActivityThread"
+                ).invoke(null)
+
+
+            val method =
+                clazz.getMethod(
+                    "getSystemContext"
+                )
+
+            method.invoke(thread)
+                    as? android.content.Context
+
+
+        } catch(e:Throwable){
+
+            Logger.w(
+                "DexContext",
+                e.toString()
+            )
+
+            null
+        }
+    }
 
     @JvmStatic
     fun main(args: Array<String>) {

@@ -4,6 +4,9 @@ import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
+import android.content.pm.PackageManager
+import io.github.fairyxh.zhangsystemdex.core.ContextProvider
+import io.github.fairyxh.zhangsystemdex.core.PackageManagerProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -36,19 +39,41 @@ class LSPosedScannerModule(private val ctx: DexContext) {
 
     fun scan(force: Boolean = false): List<ModuleInfo> {
         synchronized(lock) {
-            if (!force && modules.isNotEmpty()) return modules
-            val signature = packageSignature()
-            val cached = readCache()
-            if (!force && cached != null && cached.first == signature) {
-                modules = cached.second
-                Logger.i("LSPosedScanner", "缓存命中（${modules.size} 个模块）")
+            if (!force && modules.isNotEmpty()) {
                 return modules
             }
-            Logger.i("LSPosedScanner", "开始全量扫描（签名 ${signature.take(12)}...）")
-            val modulesResult = readLsposedConfig().distinctBy { it.packageName }
-            modules = modulesResult
-            writeCache(signature, modules)
-            Logger.i("LSPosedScanner", "扫描完成: ${modules.size} 个模块")
+            val signature =
+                packageSignature()
+            val cached =
+                readCache()
+            Logger.i(
+                "LSPosedScanner",
+                "开始扫描（签名 ${signature.take(12)}...）"
+            )
+            val scanned =
+                readLsposedConfig()
+                    .distinctBy {
+                        it.packageName
+                    }
+            val old =
+                cached?.second
+                    ?: emptyList()
+            val merged =
+                (old + scanned)
+                    .associateBy {
+                        it.packageName
+                    }
+                    .values
+                    .toList()
+            modules = merged
+            writeCache(
+                signature,
+                modules
+            )
+            Logger.i(
+                "LSPosedScanner",
+                "扫描完成: ${modules.size} 个模块"
+            )
             return modules
         }
     }
@@ -182,6 +207,14 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 }
             }
         }
+        val manifestModules = scanManifestModules()
+        if (manifestModules.isNotEmpty()) {
+            Logger.i(
+                "LSPosedScanner",
+                "Manifest扫描: 发现 ${manifestModules.size} 个Xposed模块"
+            )
+            return manifestModules
+        }
         return emptyList()
     }
 
@@ -195,6 +228,90 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 collectLsposedTargets(f, out, depth + 1)
             }
         }
+    }
+    private fun scanManifestModules(): List<ModuleInfo> {
+        val result = ArrayList<ModuleInfo>()
+        try {
+            val packages =
+                PackageManagerProvider
+                    .getInstalledPackages()
+            for (pkg in packages) {
+                val appInfo =
+                    pkg.applicationInfo
+                        ?: continue
+                val metaData =
+                    appInfo.metaData
+                        ?: continue
+                /*
+                 * 判断是否为 Xposed 模块
+                 *
+                 * 常见标记:
+                 * xposedmodule
+                 * xposedminversion
+                 * xposeddescription
+                 */
+                val isXposedModule =
+                    metaData.getBoolean(
+                        "xposedmodule",
+                        false
+                    )
+                            ||
+                            metaData.containsKey(
+                                "xposedminversion"
+                            )
+                            ||
+                            metaData.containsKey(
+                                "xposeddescription"
+                            )
+                if (!isXposedModule) {
+                    continue
+                }
+                val packageName =
+                    pkg.packageName
+                val appName =
+                    try {
+                        // app_process环境没有PackageManager对象
+                        // 使用ApplicationInfo中的非空字段
+                        appInfo.name
+                            ?: packageName
+                    } catch (_: Throwable) {
+                        packageName
+                    }
+                result.add(
+                    ModuleInfo(
+                        packageName =
+                            packageName,
+                        name =
+                            appName,
+                        version =
+                            pkg.versionName
+                                ?: "",
+                        /*
+                         * Manifest只能证明：
+                         * "声明自己是Xposed模块"
+                         *
+                         * 不能证明：
+                         * "当前被LSPosed启用"
+                         *
+                         * 所以这里不标记启用
+                         */
+                        enabled = false,
+                        scopes =
+                            emptyList()
+                    )
+                )
+                Logger.i(
+                    "LSPosedScanner",
+                    "Manifest发现Xposed模块: $packageName"
+                )
+            }
+        } catch (t: Throwable) {
+            Logger.w(
+                "LSPosedScanner",
+                "Manifest扫描失败: ${t.message}"
+            )
+        }
+        return result
     }
 
     private fun packageSignature(): String {

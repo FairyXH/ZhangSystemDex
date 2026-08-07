@@ -8,13 +8,13 @@ import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 /**
  * Game OOM protect module.
  *
- * Maintain:
+ * Protect game processes by maintaining:
  *
  * /proc/<pid>/oom_score_adj
  *
- * for foreground games.
+ * A game process existing means game mode.
  *
- * Prevent Android LMK from killing important game processes.
+ * No window focus detection required.
  */
 class GameOomProtectModule(
     ctx: DexContext
@@ -25,7 +25,8 @@ class GameOomProtectModule(
 ) {
     private var games: Set<String> = emptySet()
     private var lastRefreshTime = 0L
-    private var lastGame: String? = null
+    private val protectedGames =
+        mutableSetOf<String>()
     override fun onStart() {
         refreshGames(true)
         Logger.i(
@@ -38,32 +39,42 @@ class GameOomProtectModule(
             return
         }
         refreshGames(false)
-        val focus =
-            ProcessUtils.focusedPackage()
-                ?: return
-        if (!games.contains(focus)) {
-            if (lastGame != null) {
-                Logger.i(
-                    name,
-                    "离开游戏，停止OOM保护: $lastGame"
+        val currentProtected =
+            mutableSetOf<String>()
+        for (game in games) {
+            val pids =
+                ProcessUtils.pidsOf(game)
+            if (pids.isNotEmpty()) {
+                currentProtected.add(game)
+                if (!protectedGames.contains(game)) {
+                    Logger.i(
+                        name,
+                        "发现游戏进程: $game"
+                    )
+                }
+                protectGame(
+                    game,
+                    pids
                 )
-                lastGame = null
             }
-            return
         }
-        if (lastGame != focus) {
+        protectedGames.clear()
+        protectedGames.addAll(currentProtected)
+        if (currentProtected.isEmpty()
+            && protectedGames.isNotEmpty()
+        ) {
             Logger.i(
                 name,
-                "检测到游戏前台: $focus"
+                "所有游戏进程退出，停止OOM保护"
             )
-            lastGame = focus
         }
-        protectGame(focus)
     }
     /**
      * 每60秒刷新一次游戏列表
      */
-    private fun refreshGames(force: Boolean) {
+    private fun refreshGames(
+        force: Boolean
+    ) {
         val now =
             System.currentTimeMillis()
         if (!force &&
@@ -88,20 +99,17 @@ class GameOomProtectModule(
     /**
      * 设置游戏进程OOM优先级
      */
-    private fun protectGame(pkg: String) {
-        val pids =
-            ProcessUtils.pidsOf(pkg)
-        if (pids.isEmpty()) {
-            Logger.w(
-                name,
-                "未找到游戏进程: $pkg"
-            )
-            return
-        }
+    private fun protectGame(
+        pkg: String,
+        pids: List<Int>
+    ) {
         for ((index, pid) in pids.withIndex()) {
             /*
-             * 主进程最高保护
-             * 子进程降低保护等级
+             * 主进程:
+             * -1000 最高保护
+             *
+             * 子进程:
+             * -500
              */
             val adj =
                 if (index == 0) {
@@ -114,17 +122,21 @@ class GameOomProtectModule(
                 adj
             )
         }
+        Logger.i(
+            name,
+            "已保护游戏进程: $pkg (${pids.size}个PID)"
+        )
     }
     /**
-     * 写入 /proc/<pid>/oom_score_adj
+     * 设置 /proc/<pid>/oom_score_adj
      */
     private fun setOomScoreAdj(
         pid: Int,
         value: Int
     ) {
-        val cmd =
+        ShellExecutor.run(
             "echo $value > /proc/$pid/oom_score_adj"
-        ShellExecutor.run(cmd)
+        )
         Logger.i(
             name,
             "设置 PID=$pid oom_score_adj=$value"

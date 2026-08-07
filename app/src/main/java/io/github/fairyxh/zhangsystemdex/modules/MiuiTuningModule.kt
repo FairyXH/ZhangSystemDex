@@ -2,6 +2,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
@@ -40,8 +41,8 @@ class MiuiTuningModule(private val ctx: DexContext) {
 
     private fun disableJoyose() {
         val dbPath = "/data/data/com.xiaomi.joyose/databases/"
-        ShellExecutor.run("pm disable com.xiaomi.joyose/.smartop.SmartOpService")
-        ShellExecutor.run("pm disable com.xiaomi.joyose/.cloud.CloudServerReceiver")
+        FrameworkOps.setComponentEnabled("com.xiaomi.joyose/.smartop.SmartOpService", false)
+        FrameworkOps.setComponentEnabled("com.xiaomi.joyose/.cloud.CloudServerReceiver", false)
         FileUtils.chattr(dbPath, "-R -i")
         FileUtils.deleteRecursive(File(dbPath))
         ShellExecutor.run("pm clear com.xiaomi.joyose")
@@ -52,10 +53,10 @@ class MiuiTuningModule(private val ctx: DexContext) {
 
     private fun disablePowerKeeper() {
         FileUtils.chattr("/data/data/com.miui.powerkeeper/databases/", "-R -i")
-        ShellExecutor.run("pm disable com.miui.powerkeeper/com.miui.powerkeeper.cloudcontrol.CloudUpdateReceiver")
-        ShellExecutor.run("pm disable com.miui.powerkeeper/com.miui.powerkeeper.cloudcontrol.CloudUpdateJobService")
-        ShellExecutor.run("pm disable com.miui.powerkeeper/com.miui.powerkeeper.ui.CloudInfoActivity")
-        ShellExecutor.run("pm disable com.miui.powerkeeper/com.miui.powerkeeper.statemachine.PowerStateMachineService")
+        FrameworkOps.setComponentEnabled("com.miui.powerkeeper/com.miui.powerkeeper.cloudcontrol.CloudUpdateReceiver", false)
+        FrameworkOps.setComponentEnabled("com.miui.powerkeeper/com.miui.powerkeeper.cloudcontrol.CloudUpdateJobService", false)
+        FrameworkOps.setComponentEnabled("com.miui.powerkeeper/com.miui.powerkeeper.ui.CloudInfoActivity", false)
+        FrameworkOps.setComponentEnabled("com.miui.powerkeeper/com.miui.powerkeeper.statemachine.PowerStateMachineService", false)
         ShellExecutor.run("pm clear com.miui.powerkeeper")
     }
 

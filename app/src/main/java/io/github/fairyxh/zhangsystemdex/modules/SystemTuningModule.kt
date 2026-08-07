@@ -1,8 +1,10 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
+import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
 import io.github.fairyxh.zhangsystemdex.core.PropUtils
@@ -208,7 +210,7 @@ class SystemTuningModule(
         for ((path, value) in rules) {
             val f = File(path)
             if (!f.exists()) continue
-            ShellExecutor.run("chown root:root '$path'")
+            FileUtils.chown(path, 0, 0)
             FileUtils.chmod(path, "0666")
             ProcessUtils.writeFile(path, value)
             FileUtils.chmod(path, "0444")
@@ -225,14 +227,12 @@ class SystemTuningModule(
 
     private fun boostServices() {
         boostHome("com.miui.home")
-        val homePackages = ShellExecutor.run(
-            "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | grep /"
-        )?.lineSequence()?.toList() ?: emptyList()
-        for (line in homePackages) {
-            boostHome(line.trim().substringBefore('/'))
+        for (pkg in FrameworkOps.homePackages()) {
+            boostHome(pkg)
         }
-        val imes = ShellExecutor.run("ime list -s")?.lineSequence()?.toList() ?: emptyList()
-        for (l in imes) boostHome(l.trim().substringBefore('/'))
+        for (pkg in AppListProvider.inputMethods()) {
+            boostHome(pkg)
+        }
         boostUi("com.android.systemui")
         boostUi("surfaceflinger")
         boostUi("netd")
@@ -284,10 +284,10 @@ class SystemTuningModule(
     }
 
     private fun restartSoter() {
-        ShellExecutor.run("stop vendor.soter")
+        FrameworkOps.ctlService("stop", "vendor.soter")
         sleepSafe(3000)
         ShellExecutor.run("pm clear com.tencent.soter.soterserver")
-        ShellExecutor.run("start vendor.soter")
+        FrameworkOps.ctlService("start", "vendor.soter")
         sleepSafe(5000)
     }
 

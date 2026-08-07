@@ -7,6 +7,9 @@ package io.github.fairyxh.zhangsystemdex.core
 object PropUtils {
     private var resetprop: String = "resetprop"
 
+    @Volatile
+    private var spSetWarned = false
+
     fun detect() {
         resetprop = RootUtils.resetpropBinary()
     }
@@ -23,6 +26,22 @@ object PropUtils {
     }
 
     fun set(name: String, value: String, persistent: Boolean = false) {
+        // Non-persistent props go through SystemProperties.set first (verified
+        // by read-back so a silently ignored ro.*/invalid write falls back to
+        // resetprop instead of being reported as success).
+        if (!persistent) {
+            try {
+                val clazz = Class.forName("android.os.SystemProperties")
+                val m = clazz.getMethod("set", String::class.java, String::class.java)
+                m.invoke(null, name, value)
+                if ((get(name) ?: "") == value) return
+            } catch (t: Throwable) {
+                if (!spSetWarned) {
+                    spSetWarned = true
+                    Logger.w("PropUtils", "SystemProperties.set failed, fallback resetprop (logged once): ${t.message}")
+                }
+            }
+        }
         val p = if (persistent) " -p" else ""
         ShellExecutor.run("$resetprop$p -n $name $value")
     }

@@ -4,6 +4,7 @@ import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
@@ -54,12 +55,13 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
                 if (entry.startsWith("user,")) {
                     val pkg = entry.substringAfter(',')
                     if (pkg.isNotEmpty() && !white.contains(pkg)) {
-                        ShellExecutor.run("dumpsys deviceidle whitelist -$pkg")
+                        FrameworkOps.removePowerSaveWhitelist(pkg)
                     }
                 }
             }
-            val args = white.joinToString(" ") { "+$it" }
-            ShellExecutor.run("dumpsys deviceidle whitelist $args")
+            for (pkg in white) {
+                FrameworkOps.addPowerSaveWhitelist(pkg)
+            }
             Logger.i(name, "doze whitelist updated: ${white.size} packages")
         } catch (t: Throwable) {
             Logger.w(name, "doze list failed: ${t.message}")
@@ -152,9 +154,9 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
             ShellExecutor.run("dumpsys deviceidle disable all")
             ShellExecutor.run("dumpsys deviceidle enable light")
             ShellExecutor.run("dumpsys deviceidle enable deep")
-            ShellExecutor.run("dumpsys deviceidle whitelist +com.tencent.mobileqq")
-            ShellExecutor.run("dumpsys deviceidle whitelist +com.tencent.mm")
-            ShellExecutor.run("dumpsys deviceidle whitelist +com.alibaba.android.rimet")
+            FrameworkOps.addPowerSaveWhitelist("com.tencent.mobileqq")
+            FrameworkOps.addPowerSaveWhitelist("com.tencent.mm")
+            FrameworkOps.addPowerSaveWhitelist("com.alibaba.android.rimet")
             ShellExecutor.run("dumpsys deviceidle motion")
             awake = true
         }
@@ -164,7 +166,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         val out = ShellExecutor.run("dumpsys deviceidle whitelist | grep user") ?: return
         for (line in out.lineSequence()) {
             val pkg = line.substringAfterLast(',').trim()
-            if (pkg.isNotEmpty()) ShellExecutor.run("dumpsys deviceidle whitelist -$pkg")
+            if (pkg.isNotEmpty()) FrameworkOps.removePowerSaveWhitelist(pkg)
         }
     }
 }

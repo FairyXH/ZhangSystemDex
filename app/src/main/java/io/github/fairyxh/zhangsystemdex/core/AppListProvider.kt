@@ -92,6 +92,18 @@ object AppListProvider {
     }
 
     fun inputMethods(): List<String> {
+        val ctx = SystemContext.get()
+        if (ctx != null) {
+            try {
+                val imm = ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as? android.view.inputmethod.InputMethodManager
+                if (imm != null) {
+                    return imm.inputMethodList.map { it.packageName }.distinct()
+                }
+            } catch (t: Throwable) {
+                Logger.w("AppListProvider", "InputMethodManager enumeration failed: ${t.message}")
+            }
+        }
         val out = ShellExecutor.run("ime list -s") ?: return emptyList()
         return out.lineSequence().map { it.trim().substringBefore('/') }.filter { it.isNotEmpty() }.toList()
     }

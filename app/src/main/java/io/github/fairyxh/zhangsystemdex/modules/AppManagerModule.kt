@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import java.io.File
@@ -40,20 +41,35 @@ class AppManagerModule(private val ctx: DexContext) {
         val packages = conf.readLines()
             .map { it.trim().removePrefix("+") }
             .filter { it.isNotEmpty() && !it.startsWith("#") }
-        val groups = ShellExecutor.run("pm list permissions-group")?.lineSequence()?.toList() ?: emptyList()
+        val groups = permissionGroups()
         for (pkg in packages) {
             if (!AppListProvider.installed(pkg)) continue
             val ops = ShellExecutor.run("appops get $pkg") ?: continue
             for (line in ops.lineSequence()) {
                 val op = line.trim().substringBefore(':').trim()
-                if (op.isNotEmpty()) ShellExecutor.run("appops set $pkg $op allow")
+                if (op.isNotEmpty()) FrameworkOps.appOpsSetAllow(pkg, op)
             }
-            for (group in groups) {
-                val g = group.trim().substringAfter(':')
-                if (g.isNotEmpty()) ShellExecutor.run("pm grant $pkg $g")
+            for (g in groups) {
+                if (g.isNotEmpty()) FrameworkOps.grantPermission(pkg, g)
             }
             Logger.i("AppManager", "appops/grant allow-all done: $pkg")
         }
+    }
+
+    private fun permissionGroups(): List<String> {
+        val pm = io.github.fairyxh.zhangsystemdex.core.SystemContext.get()?.packageManager
+        if (pm != null) {
+            try {
+                return pm.getAllPermissionGroups(0).mapNotNull { it.name }.filter { it.isNotEmpty() }
+            } catch (t: Throwable) {
+                Logger.w("AppManager", "allPermissionGroups failed, fallback shell: ${t.message}")
+            }
+        }
+        return ShellExecutor.run("pm list permissions-group")
+            ?.lineSequence()
+            ?.map { it.trim().substringAfter(':') }
+            ?.filter { it.isNotEmpty() }
+            ?.toList() ?: emptyList()
     }
 
     private fun disableAndShadow(pkg: String) {
@@ -69,9 +85,9 @@ class AppManagerModule(private val ctx: DexContext) {
         ShellExecutor.run("pm uninstall $pkg")
         val users = File("/data/media").listFiles { f -> f.isDirectory } ?: emptyArray()
         for (u in users) {
-            ShellExecutor.run("pm disable-user --user ${u.name} $pkg")
+            FrameworkOps.setApplicationDisabledUser(pkg, u.name.toIntOrNull() ?: 0)
         }
-        ShellExecutor.run("pm disable $pkg")
+        FrameworkOps.setApplicationEnabled(pkg, false)
         Logger.i("AppManager", "disabled $pkg")
     }
 

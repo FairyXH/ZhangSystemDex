@@ -1,7 +1,9 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
+import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
@@ -55,19 +57,16 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
     }
 
     private fun forceStopBackground() {
-        val whitelist = readWhitelist()
-        val exclude = buildString {
-            append("bin.mt.plus|android|miui|system|mojang")
-            for (pkg in whitelist) append('|').append(Regex.escape(pkg))
-        }
-        val out = ShellExecutor.run("pm list packages -3 | grep -vE '$exclude'") ?: return
+        val whitelist = readWhitelist().toSet()
         val focus = ProcessUtils.focusedPackage()
-        for (line in out.lineSequence()) {
-            val pkg = line.trim().removePrefix("package:").trim()
+        for (pkg in AppListProvider.thirdPartyPackages()) {
             if (pkg.isEmpty()) continue
-            if (pkg == focus) continue
+            if (pkg in whitelist || pkg == focus) continue
+            if (pkg.startsWith("android") || pkg.startsWith("miui") || pkg.startsWith("system") ||
+                pkg.startsWith("bin.mt.plus") || pkg.startsWith("mojang")
+            ) continue
             Logger.i(name, "force-stop $pkg")
-            ShellExecutor.run("am force-stop $pkg")
+            FrameworkOps.forceStop(pkg)
         }
     }
 

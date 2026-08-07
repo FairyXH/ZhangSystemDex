@@ -2,6 +2,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
@@ -39,8 +40,8 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
                 boostGame(focus)
             }
             // Prevent Shizuku residue while the game is running.
-            ShellExecutor.run("rm -rf /data/local/tmp/shizuku")
-            ShellExecutor.run("rm -f /data/local/tmp/shizuku_starter")
+            FileUtils.rmQuoted("/data/local/tmp/shizuku")
+            FileUtils.rmQuoted("/data/local/tmp/shizuku_starter")
             sleepSafe(60_000)
         } else {
             if (activeGame != null && focus == activeGame && !screenOn) {

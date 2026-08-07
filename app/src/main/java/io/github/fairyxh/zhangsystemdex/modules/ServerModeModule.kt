@@ -2,6 +2,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
 import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
@@ -33,19 +34,18 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
     fun runOnce() {
         round++
         FileUtilsChmodRc()
-        ShellExecutor.run("svc wifi enable")
-        ShellExecutor.run("svc bluetooth enable")
-        ShellExecutor.run("svc power stayon")
+        FrameworkOps.wifiEnabled(true)
+        FrameworkOps.bluetoothEnabled(true)
+        SettingsUtils.putGlobal("stay_on_while_plugged_in", "7")
         SettingsUtils.putGlobal("wifi_on", "1")
         SettingsUtils.putGlobal("bluetooth_on", "1")
-        ShellExecutor.run("input keyevent 126")
+        FrameworkOps.mediaPlay()
         ShellExecutor.run("dumpsys deviceidle disable")
         ProcessUtils.writeFile("/sys/power/state", "on")
 
         val frpc = ctx.config.getString("frpc_command", "").trim()
         if (frpc.isNotEmpty()) {
-            val running = ShellExecutor.run("ps -A | grep frpc | grep -v grep")
-            if (running.isNullOrEmpty()) ShellExecutor.runBackground(frpc)
+            if (ProcessUtils.pidsOf("frpc").isEmpty()) ShellExecutor.runBackground(frpc)
         }
         val music = ctx.config.getString("automusic_command", "").trim()
         if (music.isNotEmpty()) ShellExecutor.runBackground(music)
@@ -54,8 +54,8 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
 
         if (round >= 3) {
             round = 0
-            ShellExecutor.run("am start -n me.neversleep.plusplus/.MainActivity --ez power true")
-            ShellExecutor.run("input keyevent 224")
+            FrameworkOps.startActivity("me.neversleep.plusplus/.MainActivity", mapOf("power" to true))
+            FrameworkOps.wakeUp()
             SettingsUtils.putSystem("screen_off_timeout", "2147483647")
         }
     }

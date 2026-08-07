@@ -84,6 +84,7 @@ log_enabled=true           # 日志总开关：false 时完全静默（终端+�
 | `SqliteUtils` | framework SQLite 直开第三方数据库（MIUI/欧加），失败降级 sqlite3 CLI |
 | `AppListProvider` | 已安装包枚举：PackageManager 优先，`pm list packages` 降级 |
 | `ServiceManagerUtils` | ServiceManager 反射 + Parcel 事务（SurfaceFlinger 私有接口） |
+| `FrameworkOps` | **Framework-first 操作封装**：包管理（enable/disable/disable-user/组件/权限授予）、AppOps 反射、force-stop、Doze 白名单、WiFi/蓝牙、wakeUp/媒体按键、Intent 启动、ctl 服务控制、HOME 解析。API 优先、失败自动降级等效 shell、警告按操作去重 |
 | `BinderUtils` | ServiceManager 反射辅助（asInterface 等） |
 | `ShellExecutor` | 兜底 shell 执行（仅无等价实现时使用） |
 | `DaemonLoop` | 守护循环基类：独立线程、周期、异常隔离、游戏暂停感知 |
@@ -163,5 +164,9 @@ Magisk 管理器移除模块时执行 `uninstall.sh`：停止 Dex daemon、清�
 - **SystemContext**：Android 15 上 `createSystemContext()` 被 hidden-API 过滤（伪 NoSuchMethodException），
   daemon 改走 `Looper.prepareMainLooper() + ActivityThread.systemMain()`；其 ContentResolver 无法访问
   settings provider，settings 读写自动走 shell（仅首次 WARN）。
+- **Shell 使用原则**：可 API 化的操作已优先 API（包管理/WiFi/蓝牙/Doze 白名单/HOME 与输入法解析/
+  renice/chown/chmod/rm/mv/启动服务与广播/ctl 服务），失败自动降级等效 shell（每类一次警告）。
+  保留 shell 的仅限无 Java 等价：`chrt`/`chattr`/`fstrim`/`sync`/`device_config`/`pm clear`/
+  `pm uninstall`/`dumpsys deviceidle` 强制空闲/`cmd package compile`/`setenforce`/原生二进制启动。
 - 部分功能依赖 OEM 环境（MIUI 数据库、ColorOS launcher 文件、高通 sysfs），在非对应机型上自动跳过并记录 WARN。
 - `设置CPU最高频率.sh` 因依赖脚本已迁移删除而失效，如需使用可自行恢复 `maxcpu.sh` 或调用 Dex 的 PerformanceModule。

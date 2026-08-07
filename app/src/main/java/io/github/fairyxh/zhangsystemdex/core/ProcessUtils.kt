@@ -8,6 +8,9 @@ import java.io.File
  * no Java API) but are wrapped semantically.
  */
 object ProcessUtils {
+    @Volatile
+    private var setpriorityWarned = false
+
     fun writeFile(path: String, value: String): Boolean {
         try {
             File(path).writeText(value)
@@ -58,6 +61,24 @@ object ProcessUtils {
     }
 
     fun renice(pid: Int, niceness: Int) {
+        try {
+            // Os.setpriority is not exposed in the SDK stub; reflect it
+            // (PRIO_PROCESS = 0).
+            val osClass = Class.forName("android.system.Os")
+            val m = osClass.getMethod(
+                "setpriority",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            )
+            m.invoke(null, 0, pid, niceness)
+            return
+        } catch (t: Throwable) {
+            if (!setpriorityWarned) {
+                setpriorityWarned = true
+                Logger.w("ProcessUtils", "setpriority failed, fallback shell (logged once): ${t.message}")
+            }
+        }
         ShellExecutor.run("renice -n $niceness -p $pid")
     }
 
@@ -77,8 +98,17 @@ object ProcessUtils {
     }
 
     /** Mirror dumpsys deviceidle get screen: "true" when screen is on. */
-    fun isScreenOn(): Boolean =
-        ShellExecutor.run("dumpsys deviceidle get screen")?.trim() == "true"
+    fun isScreenOn(): Boolean {
+        val pm = SystemContext.get()?.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+        if (pm != null) {
+            try {
+                return pm.isInteractive
+            } catch (t: Throwable) {
+                Logger.w("ProcessUtils", "PowerManager.isInteractive failed: ${t.message}")
+            }
+        }
+        return ShellExecutor.run("dumpsys deviceidle get screen")?.trim() == "true"
+    }
 
     fun memFreePercent(): Int {
         val meminfo = readFile("/proc/meminfo") ?: return 100

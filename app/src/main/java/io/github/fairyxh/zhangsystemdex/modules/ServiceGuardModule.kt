@@ -1,8 +1,10 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
+import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
@@ -68,7 +70,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
             if (source.exists()) {
                 FileUtils.copyFile(source, target)
                 FileUtils.chmod(target.path, "700")
-                ShellExecutor.run("chown 2000:2000 ${target.path}")
+                FileUtils.chown(target.path, 2000, 2000)
             }
             if (target.exists()) {
                 ShellExecutor.run("${target.path} \"\"")
@@ -81,10 +83,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
 
     fun startBrevent() {
         try {
-            val base = ShellExecutor.run("pm path me.piebridge.brevent")
-                ?.lineSequence()
-                ?.firstOrNull()
-                ?.removePrefix("package:")
+            val base = AppListProvider.sourceDir("me.piebridge.brevent")
                 ?.substringBefore("base.apk")
             if (base.isNullOrEmpty()) {
                 Logger.i(name, "brevent not installed, skip")
@@ -106,8 +105,8 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
 
     private fun healthLoop() {
         FileUtils.rmQuoted("${ctx.config.rootDir}disable")
-        ShellExecutor.run("pm enable com.heytap.health")
-        ShellExecutor.run("pm enable com.mi.health")
+        FrameworkOps.setApplicationEnabled("com.heytap.health", true)
+        FrameworkOps.setApplicationEnabled("com.mi.health", true)
         cleanupShizukuTmp()
         try {
             val ts = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
@@ -124,13 +123,13 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
     }
 
     private fun keepBluetooth() {
-        ShellExecutor.run("svc bluetooth enable")
+        FrameworkOps.bluetoothEnabled(true)
         SettingsUtils.putGlobal("bluetooth_on", "1")
     }
 
     private fun nfcGuard() {
-        ShellExecutor.run("am start com.android.nfc/com.android.nfc.NfcRootActivity")
-        ShellExecutor.run("am startservice com.android.nfc/com.android.nfc.handover.PeripheralHandoverService")
+        FrameworkOps.startActivity("com.android.nfc/com.android.nfc.NfcRootActivity")
+        FrameworkOps.startService("com.android.nfc/com.android.nfc.handover.PeripheralHandoverService")
         SettingsUtils.putGlobal("hide_error_dialogs", "1")
         SettingsUtils.putSecure("anr_show_background", "0")
         SettingsUtils.putSecure("show_first_crash_dialog_dev_option", "0")
@@ -144,7 +143,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
         SettingsUtils.putSecure("enabled_notification_listeners", setup)
         for (service in setup.split(':')) {
             val s = service.trim()
-            if (s.isNotEmpty()) ShellExecutor.run("am startservice $s")
+            if (s.isNotEmpty()) FrameworkOps.startService(s)
         }
     }
 
@@ -154,9 +153,9 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
         val services = conf.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
         if (services.isEmpty()) return
         for (i in 1..2) {
-            ShellExecutor.run("am broadcast -a android.intent.action.BOOT_COMPLETED")
+            FrameworkOps.sendBootCompleted()
             for (svc in services) {
-                ShellExecutor.run("am startservice $svc")
+                FrameworkOps.startService(svc)
             }
         }
     }

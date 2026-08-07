@@ -60,6 +60,15 @@ object Main {
         val sysCtx = SystemContext.get()
         Logger.i("Main", if (sysCtx != null) "system context available, framework APIs preferred" else "system context unavailable, shell fallback active")
 
+        // Self-test mode: run every module directly (ignoring switches) with
+        // verification, then exit. Triggered by the `selftest` startup arg.
+        if (args.contains("selftest")) {
+            Logger.i("Main", "self-test mode")
+            SelfTest.run(ctx)
+            Logger.i("Main", "self-test finished, exiting")
+            return
+        }
+
         // Debug menu mode: run a single feature once by number, then exit.
         if (args.contains("menu")) {
             Logger.i("Main", "debug menu mode")

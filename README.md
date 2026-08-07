@@ -81,7 +81,7 @@ log_enabled=true           # 日志总开关：false 时完全静默（终端+�
 | `SettingsUtils` | Settings 三域（global/system/secure）读写：ContentResolver 优先，shell 降级 |
 | `ProcessUtils` | /proc 进程枚举、pgrep、renice/chrt、cpuset/stune、前台应用与亮屏检测、内存统计 |
 | `FileUtils` | 递归删除/复制/chmod/chattr 等文件操作（chattr 无 Java 等价，shell 兜底） |
-| `SqliteUtils` | framework SQLite 直开第三方数据库（MIUI/欧加），失败降级 sqlite3 CLI |
+| `SqliteUtils` | SQLite 访问：framework `SQLiteDatabase` 优先，Android 15 app_process 不可用时自动走内置 `sqlite_lib/` 的 sqlite3 CLI；失败/缺失只记录一次 |
 | `AppListProvider` | 已安装包枚举：PackageManager 优先，`pm list packages` 降级 |
 | `ServiceManagerUtils` | ServiceManager 反射 + Parcel 事务（SurfaceFlinger 私有接口） |
 | `FrameworkOps` | **Framework-first 操作封装**：包管理（enable/disable/disable-user/组件/权限授予）、AppOps 反射、force-stop、Doze 白名单、WiFi/蓝牙、wakeUp/媒体按键、Intent 启动、ctl 服务控制、HOME 解析。API 优先、失败自动降级等效 shell、警告按操作去重 |
@@ -141,8 +141,14 @@ Magisk late_start 执行 `service.sh`：
 ### 调试运行
 
 ```sh
-sh /data/adb/modules/Zhang/调试运行Dex.sh
+sh /data/adb/modules/Zhang/调试运行Dex.sh          # 默认进入数字菜单
+sh /data/adb/modules/Zhang/调试运行Dex.sh selftest # 自测工具（菜单 20 亦可）
 ```
+
+**自测工具 `SelfTest`**：无视开关直接调用所有模块并带验证断言，输出 PASS/FAIL/WARN/SKIP 汇总；
+危险操作（存储隔离清理/应用停用/AppOps 授权/CPU 满频/服务器 governor）仍按开关门控或标注 SKIP。
+自测发现并修复：app_process 下 framework SQLite 不可用 → 内置 sqlite3 CLI（`sqlite_lib/`）兜底，
+LSPosed 扫描恢复（55 模块/29 启用）。
 
 与 `service.sh` 启动参数完全等效，但前台运行、终端实时输出、Ctrl+C 结束；
 启动前自动停止正式 daemon 避免双实例。

@@ -62,6 +62,7 @@ class ConfigManager(private val modDir: String) {
         logDir.mkdirs()
         cacheDir.mkdirs()
         initUserConfigs()
+        syncSqliteLib()
         loadSwitches()
     }
 
@@ -212,6 +213,23 @@ class ConfigManager(private val modDir: String) {
             Logger.i("ConfigManager", "initialized $rel")
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "failed to init $rel: ${t.message}")
+        }
+    }
+
+    /** Ship the bundled sqlite3 CLI (module dir sqlite_lib/) to cache/sqlite_lib. */
+    private fun syncSqliteLib() {
+        val src = File(modDir, "sqlite_lib")
+        if (!src.exists()) return
+        val dst = File(cacheDir, "sqlite_lib")
+        if (dst.exists()) return
+        try {
+            dst.mkdirs()
+            src.listFiles()?.forEach { f ->
+                if (f.isFile) FileUtils.copyFile(f, File(dst, f.name))
+            }
+            Logger.i("ConfigManager", "sqlite_lib synced to ${dst.path}")
+        } catch (t: Throwable) {
+            Logger.w("ConfigManager", "sqlite_lib sync failed: ${t.message}")
         }
     }
 

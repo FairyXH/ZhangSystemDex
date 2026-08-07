@@ -48,6 +48,7 @@ object DebugMenu {
         println("16. 游戏列表刷新")
         println("18. LSPosed 数据库诊断")
         println("19. SystemContext 诊断")
+        println("20. 自测工具（无视开关全量自测 + 验证）")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -102,6 +103,7 @@ object DebugMenu {
                 }
                 18 -> diagnoseLsposedDb()
                 19 -> diagnoseSystemContext()
+                20 -> SelfTest.run(ctx)
                 else -> Logger.w("DebugMenu", "未识别输入: $line")
             }
         } catch (t: Throwable) {

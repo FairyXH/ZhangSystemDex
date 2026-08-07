@@ -131,6 +131,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["heavy_interval_cycles"] == null) {
             missing.add("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）")
         }
+        if (switches["heavy_screen_off_only"] == null) {
+            missing.add("heavy_screen_off_only=false\t# 高占用任务是否仅在息屏时执行（false=亮屏也允许执行）")
+        }
         if (missing.isEmpty()) return
         try {
             val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
@@ -169,6 +172,7 @@ class ConfigManager(private val modDir: String) {
             sb.append("\n# 主调优循环参数（可选项）\n")
             sb.append("tuning_interval_seconds=\t# 主调优循环周期（秒），留空=600（服务器模式 300）\n")
             sb.append("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）\n")
+            sb.append("heavy_screen_off_only=false\t# 高占用任务是否仅在息屏时执行（false=亮屏也允许执行）\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
@@ -265,7 +269,8 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable" to "无障碍服务守护",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
-            "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，仅熄屏时执行，间隔周期数可配置）",
+            "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，默认亮屏也执行，是否仅息屏由 heavy_screen_off_only 控制，间隔周期数可配置）",
+            "heavy_screen_off_only" to "高占用任务是否仅在息屏时执行（false=亮屏也允许执行，默认 false）",
             "system_tuning_enable" to "主调优循环（热控/调度/进程提升等每周期常规任务，周期秒数可配置）",
             "service_guard_enable" to "服务守护（Shizuku/Brevent/蓝牙/健康应用）",
             "extra_features_enable" to "附加功能（NFC 守护/通知监听守护/开机自启动）",

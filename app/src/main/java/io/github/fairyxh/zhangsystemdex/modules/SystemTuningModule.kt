@@ -85,10 +85,10 @@ class SystemTuningModule(
         }
         if (ctx.config.switch("heavy_task_enable")) {
             if (cycle >= taskInterval) {
-                if (ProcessUtils.isScreenOn()) {
+                if (heavyScreenOffOnly() && ProcessUtils.isScreenOn()) {
                     // Keep the cycle counter: retry on the very next cycle instead
                     // of waiting another full taskInterval.
-                    Logger.i(name, "高占用任务到期但未息屏，跳过执行，下一周期立即重试 (cycle=$cycle, interval=${intervalMs}ms)")
+                    Logger.i(name, "高占用任务到期但未息屏（heavy_screen_off_only=true），跳过执行，下一周期立即重试 (cycle=$cycle, interval=${intervalMs}ms)")
                 } else {
                     cycle = 0
                     heavyTick()
@@ -99,16 +99,18 @@ class SystemTuningModule(
         }
     }
 
-    /** 启动时立即检查高占用：熄屏执行，亮屏输出跳过提示（保持周期计数，下一周期重试）。 */
+    /** 启动时立即检查高占用：heavy_screen_off_only=true 且亮屏时跳过（保持周期计数，下一周期重试），否则立即执行。 */
     private fun maybeRunHeavy() {
         if (!ctx.config.switch("heavy_task_enable")) return
-        if (ProcessUtils.isScreenOn()) {
-            Logger.i(name, "启动时高占用任务就绪但未息屏，跳过执行，下一周期立即重试 (cycle=$cycle)")
+        if (heavyScreenOffOnly() && ProcessUtils.isScreenOn()) {
+            Logger.i(name, "启动时高占用任务就绪但未息屏（heavy_screen_off_only=true），跳过执行，下一周期立即重试 (cycle=$cycle)")
         } else {
             cycle = 0
             heavyTick()
         }
     }
+
+    private fun heavyScreenOffOnly(): Boolean = ctx.config.switch("heavy_screen_off_only")
 
     private fun regularTick() {
         FileUtils.chmod("/proc/fs/ext4", "000")

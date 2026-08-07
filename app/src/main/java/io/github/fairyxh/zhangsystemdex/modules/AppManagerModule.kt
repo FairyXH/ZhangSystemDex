@@ -105,8 +105,7 @@ class AppManagerModule(private val ctx: DexContext) {
         val modDir = File(ctx.modDir)
         val systemDir = File(modDir, "system")
         val excluded = setOf(
-            "adbtools", "META-INF", "ZhangSetting", "system", "bin",
-            "product", "system_ext", "sqlite_lib",
+            "adbtools", "META-INF", "ZhangSetting", "system", "bin", "sqlite_lib",
         )
         val entries = modDir.listFiles { f ->
             f.isDirectory && !Files.isSymbolicLink(f.toPath())

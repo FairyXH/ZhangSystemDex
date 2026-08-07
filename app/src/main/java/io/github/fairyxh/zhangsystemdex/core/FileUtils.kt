@@ -27,13 +27,26 @@ object FileUtils {
     }
 
     fun copyFile(src: File, dst: File): Boolean {
+        // Ensure the parent exists first; /data/media (FUSE) can reject
+        // Java mkdirs, so fall back to a shell mkdir -p.
+        val parent = dst.parentFile
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs()
+            if (!parent.exists()) ShellExecutor.run("mkdir -p '${parent.path}'")
+        }
         return try {
             dst.parentFile?.mkdirs()
             src.copyTo(dst, overwrite = true)
             true
         } catch (t: Throwable) {
-            Logger.w("FileUtils", "复制 ${src.path} -> ${dst.path} 失败: ${t.message}")
-            false
+            // Java File API can fail on FUSE mounts; retry with shell cp.
+            val rc = ShellExecutor.runExit("cp -f '${src.path}' '${dst.path}'")
+            if (rc == 0) {
+                true
+            } else {
+                Logger.w("FileUtils", "复制 ${src.path} -> ${dst.path} 失败: ${t.message} (shell rc=$rc)")
+                false
+            }
         }
     }
 
@@ -105,12 +118,15 @@ object FileUtils {
     fun syncDir(src: File, dst: File) {
         if (!src.exists()) return
         try {
-            dst.mkdirs()
+            if (!dst.exists()) {
+                dst.mkdirs()
+                if (!dst.exists()) ShellExecutor.run("mkdir -p '${dst.path}'")
+            }
             src.listFiles()?.forEach { f ->
                 if (f.isFile) copyFile(f, File(dst, f.name))
             }
         } catch (t: Throwable) {
-            warnOnce("sync_${src.path}", "syncDir ${src.path} failed: ${t.message}")
+            warnOnce("sync_${src.path}", "syncDir ${src.path} 失败: ${t.message}")
         }
     }
 }

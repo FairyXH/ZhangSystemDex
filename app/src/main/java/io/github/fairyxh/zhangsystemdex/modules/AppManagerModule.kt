@@ -7,6 +7,7 @@ import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import java.io.File
+import java.nio.file.Files
 
 /**
  * App management: disable/uninstall of anti-fraud and quick-app packages with
@@ -91,19 +92,32 @@ class AppManagerModule(private val ctx: DexContext) {
         Logger.i("AppManager", "已停用 $pkg")
     }
 
-    /** Rebuild the module overlay: copy top-level module dirs into system/. */
+    /**
+     * Rebuild the module overlay into system/. Safety rules:
+     * - only real directories are considered (a symlink such as
+     *   product -> ./system/product must never be treated as a source, or the
+     *   target tree would be deleted then re-copied from an empty link);
+     * - existing system/ content is merged, never deleted;
+     * - product/system_ext/sqlite_lib are Magisk-native overlays/resources and
+     *   are not duplicated into system/.
+     */
     fun copyMount() {
         val modDir = File(ctx.modDir)
         val systemDir = File(modDir, "system")
-        val excluded = setOf("adbtools", "META-INF", "ZhangSetting", "system", "bin")
-        val entries = modDir.listFiles { f -> f.isDirectory } ?: return
+        val excluded = setOf(
+            "adbtools", "META-INF", "ZhangSetting", "system", "bin",
+            "product", "system_ext", "sqlite_lib",
+        )
+        val entries = modDir.listFiles { f ->
+            f.isDirectory && !Files.isSymbolicLink(f.toPath())
+        } ?: return
         for (entry in entries) {
             if (entry.name in excluded) continue
             val dst = File(systemDir, entry.name)
             try {
-                FileUtils.deleteRecursive(dst)
+                dst.mkdirs()
                 entry.copyRecursively(dst, overwrite = true)
-                Logger.i("AppManager", "copy_mount: ${entry.name} -> system/")
+                Logger.i("AppManager", "copy_mount 合并: ${entry.name} -> system/")
             } catch (t: Throwable) {
                 Logger.w("AppManager", "copy_mount ${entry.name} 失败: ${t.message}")
             }

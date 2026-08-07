@@ -62,7 +62,7 @@ object SystemContext {
                 return succeed(created, "currentActivityThread.getSystemContext ok")
             }
         } catch (t: Throwable) {
-            Logger.w("SystemContext", "currentActivityThread path failed: ${t.message}")
+            Logger.w("SystemContext", "currentActivityThread 路径失败: ${t.message}")
         }
 
         // Path 2: fresh ActivityThread + createSystemContext (hidden-API filtered on Android 15).
@@ -74,7 +74,7 @@ object SystemContext {
             val created = create.invoke(instance) as Context
             return succeed(created, "createSystemContext ok")
         } catch (t: Throwable) {
-            Logger.w("SystemContext", "createSystemContext unavailable: ${t.message}")
+            Logger.w("SystemContext", "createSystemContext 不可用: ${t.message}")
         }
 
         // Path 3: ActivityThread.systemMain() needs a main-thread Looper; the
@@ -91,11 +91,11 @@ object SystemContext {
             val created = gsc.invoke(instance) as Context
             return succeed(created, "systemMain fallback ok")
         } catch (t: Throwable) {
-            Logger.e("SystemContext", "systemMain fallback failed", t)
+            Logger.e("SystemContext", "systemMain 回退失败", t)
         }
 
         lastFailed = true
-        Logger.w("SystemContext", "system context unavailable, shell fallback active")
+        Logger.w("SystemContext", "系统上下文不可用，已启用 shell 回退")
         return null
     }
 

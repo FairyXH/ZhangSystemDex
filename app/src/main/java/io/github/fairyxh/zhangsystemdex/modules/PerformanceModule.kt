@@ -57,9 +57,9 @@ class PerformanceModule(private val ctx: DexContext) {
                 ProcessUtils.writeFile("/sys/class/kgsl/kgsl-3d0/devfreq/max_freq", maxGpu)
                 ProcessUtils.writeFile("/sys/class/kgsl/kgsl-3d0/devfreq/min_freq", maxGpu)
             }
-            Logger.i("Performance", "max cpu/gpu applied on ${coreNames.size} cores")
+            Logger.i("Performance", "已在 ${coreNames.size} 个核心上应用最大 CPU/GPU 频率")
         } catch (t: Throwable) {
-            Logger.w("Performance", "max cpu failed: ${t.message}")
+            Logger.w("Performance", "设置最大 CPU 频率失败: ${t.message}")
         }
     }
 }

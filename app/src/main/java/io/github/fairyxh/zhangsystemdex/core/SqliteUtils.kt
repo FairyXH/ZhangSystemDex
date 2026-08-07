@@ -35,16 +35,16 @@ object SqliteUtils {
             val clazz = Class.forName("android.database.sqlite.SQLiteCompatibilityWalFlags")
             val m = clazz.getMethod("init", ContentResolver::class.java)
             m.invoke(null, null)
-            Logger.i("SqliteUtils", "SQLiteCompatibilityWalFlags initialized (skip settings read)")
+            Logger.i("SqliteUtils", "SQLiteCompatibilityWalFlags 已初始化（跳过设置读取）")
         } catch (t: Throwable) {
-            Logger.w("SqliteUtils", "SQLiteCompatibilityWalFlags unavailable: ${t.message}")
+            Logger.w("SqliteUtils", "SQLiteCompatibilityWalFlags 不可用: ${t.message}")
         }
     }
 
     private fun frameworkUnavailable(op: String, t: Throwable): Boolean {
         if (!frameworkBroken) {
             frameworkBroken = true
-            Logger.w("SqliteUtils", "$op framework SQLite unavailable (logged once): ${t.message}")
+            Logger.w("SqliteUtils", "$op 框架 SQLite 不可用（仅记录一次）: ${t.message}")
         }
         return cliAvailable()
     }
@@ -57,7 +57,7 @@ object SqliteUtils {
                 File("/data/adb/Zhang/cache/sqlite_lib/sqlite3").exists() ||
                 ShellExecutor.runExit("command -v sqlite3") == 0
             if (!cliAvailable) {
-                Logger.w("SqliteUtils", "sqlite3 CLI not found (logged once): database operations unavailable without framework SQLite")
+                Logger.w("SqliteUtils", "未找到 sqlite3 CLI（仅记录一次）: 无框架 SQLite 时数据库操作不可用")
             }
         }
         return cliAvailable

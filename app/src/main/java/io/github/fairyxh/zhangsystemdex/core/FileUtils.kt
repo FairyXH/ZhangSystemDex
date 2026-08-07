@@ -13,7 +13,7 @@ object FileUtils {
 
     private fun warnOnce(key: String, msg: String) {
         synchronized(warned) {
-            if (warned.add(key)) Logger.w("FileUtils", "$msg (logged once)")
+            if (warned.add(key)) Logger.w("FileUtils", "$msg（仅记录一次）")
         }
     }
 
@@ -32,7 +32,7 @@ object FileUtils {
             src.copyTo(dst, overwrite = true)
             true
         } catch (t: Throwable) {
-            Logger.w("FileUtils", "copy ${src.path} -> ${dst.path} failed: ${t.message}")
+            Logger.w("FileUtils", "复制 ${src.path} -> ${dst.path} 失败: ${t.message}")
             false
         }
     }

@@ -18,9 +18,9 @@ object HiddenApiBypass {
             val setExempt = vm.getDeclaredMethod("setHiddenApiExemptions", Array<String>::class.java)
             setExempt.isAccessible = true
             setExempt.invoke(runtime, arrayOf("L"))
-            Logger.i("HiddenApiBypass", "hidden api exemptions enabled")
+            Logger.i("HiddenApiBypass", "已启用 Hidden API 豁免")
         } catch (t: Throwable) {
-            Logger.w("HiddenApiBypass", "bypass failed: ${t.message}")
+            Logger.w("HiddenApiBypass", "绕过失败: ${t.message}")
         }
     }
 }

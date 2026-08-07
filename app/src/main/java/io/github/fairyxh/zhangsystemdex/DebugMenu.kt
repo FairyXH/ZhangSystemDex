@@ -54,7 +54,7 @@ object DebugMenu {
         val line = try {
             BufferedReader(InputStreamReader(System.`in`)).readLine()?.trim() ?: ""
         } catch (t: Throwable) {
-            Logger.e("DebugMenu", "read stdin failed", t)
+            Logger.e("DebugMenu", "读取输入失败", t)
             ""
         }
         val choice = line.toIntOrNull() ?: -1
@@ -75,7 +75,7 @@ object DebugMenu {
                 8 -> MemoryModule(ctx).runOnce()
                 9 -> {
                     if (!ctx.config.switch("storage_isolation_enable")) {
-                        Logger.w("DebugMenu", "storage_isolation_enable=false, blocked")
+                        Logger.w("DebugMenu", "storage_isolation_enable=false，已拦截")
                     } else {
                         StorageIsolationModule(ctx)
                             .generateConfig(allApps = ctx.config.switch("storage_isolate_all_enable"))
@@ -83,7 +83,7 @@ object DebugMenu {
                 }
                 10 -> {
                     if (!ctx.config.switch("storage_isolation_enable")) {
-                        Logger.w("DebugMenu", "storage_isolation_enable=false, blocked")
+                        Logger.w("DebugMenu", "storage_isolation_enable=false，已拦截")
                     } else {
                         StorageIsolationModule(ctx).runOnce()
                     }
@@ -129,16 +129,16 @@ object DebugMenu {
                 }
             }
             for (db in dbs) {
-                Logger.i("DebugMenu", "=== DB: $db ===")
+                Logger.i("DebugMenu", "=== 数据库: $db ===")
                 val tables = SqliteUtils.queryFirst(db, "SELECT name FROM sqlite_master WHERE type='table'")
-                Logger.i("DebugMenu", "tables: $tables")
+                Logger.i("DebugMenu", "表: $tables")
                 for (t in tables) {
                     val cols = SqliteUtils.queryFirst(db, "SELECT name FROM pragma_table_info('$t')")
-                    Logger.i("DebugMenu", "  table [$t] columns: $cols")
+                    Logger.i("DebugMenu", "  表 [$t] 列: $cols")
                 }
             }
         } catch (t: Throwable) {
-            Logger.e("DebugMenu", "lsposed db diagnose failed", t)
+            Logger.e("DebugMenu", "LSPosed 数据库诊断失败", t)
         }
     }
 
@@ -148,20 +148,20 @@ object DebugMenu {
             val at = Class.forName("android.app.ActivityThread")
             val names = at.declaredMethods.map { it.name }
                 .filter { it.contains("SystemContext") || it.contains("systemMain") || it == "currentActivityThread" }
-            Logger.i("DebugMenu", "ActivityThread methods: $names (total ${at.declaredMethods.size})")
+            Logger.i("DebugMenu", "ActivityThread 方法: $names（共 ${at.declaredMethods.size} 个）")
             // Path 1: existing ActivityThread instance.
             try {
                 val current = at.getDeclaredMethod("currentActivityThread")
                 current.isAccessible = true
                 val instance = current.invoke(null)
-                Logger.i("DebugMenu", "currentActivityThread: $instance")
+                Logger.i("DebugMenu", "currentActivityThread 实例: $instance")
                 if (instance != null) {
                     val gsc = at.getDeclaredMethod("getSystemContext")
                     gsc.isAccessible = true
-                    Logger.i("DebugMenu", "getSystemContext ok: ${gsc.invoke(instance)}")
+                    Logger.i("DebugMenu", "getSystemContext 成功: ${gsc.invoke(instance)}")
                 }
             } catch (t: Throwable) {
-                Logger.e("DebugMenu", "currentActivityThread path failed", t)
+                Logger.e("DebugMenu", "currentActivityThread 路径失败", t)
             }
             // Path 2: fresh instance + createSystemContext (usually hidden-API filtered).
             try {
@@ -169,9 +169,9 @@ object DebugMenu {
                 create.isAccessible = true
                 val instance = at.getDeclaredConstructor().newInstance()
                 val created = create.invoke(instance)
-                Logger.i("DebugMenu", "createSystemContext ok: $created")
+                Logger.i("DebugMenu", "createSystemContext 成功: $created")
             } catch (t: Throwable) {
-                Logger.e("DebugMenu", "createSystemContext failed", t)
+                Logger.e("DebugMenu", "createSystemContext 失败", t)
             }
             // Path 3: systemMain needs a main-thread Looper; then getSystemContext.
             try {
@@ -179,19 +179,19 @@ object DebugMenu {
                 val sm = at.getDeclaredMethod("systemMain")
                 sm.isAccessible = true
                 val instance = sm.invoke(null)
-                Logger.i("DebugMenu", "systemMain ok: $instance")
+                Logger.i("DebugMenu", "systemMain 成功: $instance")
                 val gsc = at.getDeclaredMethod("getSystemContext")
                 gsc.isAccessible = true
                 val created = gsc.invoke(instance)
-                Logger.i("DebugMenu", "getSystemContext ok: $created")
+                Logger.i("DebugMenu", "getSystemContext 成功: $created")
             } catch (t: Throwable) {
-                Logger.e("DebugMenu", "systemMain path failed", t)
+                Logger.e("DebugMenu", "systemMain 路径失败", t)
             }
             // Final: what the production path resolves to right now.
             val ctx = io.github.fairyxh.zhangsystemdex.core.SystemContext.getForced()
             Logger.i("DebugMenu", "SystemContext.getForced() => $ctx")
         } catch (t: Throwable) {
-            Logger.e("DebugMenu", "diagnose failed", t)
+            Logger.e("DebugMenu", "诊断失败", t)
         }
     }
 }

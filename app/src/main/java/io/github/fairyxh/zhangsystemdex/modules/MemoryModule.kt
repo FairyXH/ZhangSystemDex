@@ -19,11 +19,11 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
 
     override fun onStart() {
         if (!ctx.config.switch("memory_clean_enable")) {
-            Logger.i(name, "memory module disabled by switch")
+            Logger.i(name, "内存模块已被开关禁用")
             stop()
             return
         }
-        Logger.i(name, "threshold=5% free memory, drop_caches every 300s")
+        Logger.i(name, "阈值=剩余 5%，每 300s 清理页缓存")
     }
 
     override fun tick() {
@@ -34,22 +34,22 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
         }
         val freePercent = ProcessUtils.memFreePercent()
         if (freePercent < 5) {
-            Logger.i(name, "low memory: $freePercent% free, force-stopping background apps")
+            Logger.i(name, "内存不足: 剩余 $freePercent%，强制停止后台应用")
             forceStopBackground()
             sleepSafe(30_000)
         } else if (now() - lastDropLog > 600_000) {
-            Logger.i(name, "memory free: $freePercent%")
+            Logger.i(name, "内存剩余: $freePercent%")
             lastDropLog = now()
         }
     }
 
     fun runOnce() {
         dropCaches()
-        Logger.i(name, "memory free: ${ProcessUtils.memFreePercent()}%")
+        Logger.i(name, "内存剩余: ${ProcessUtils.memFreePercent()}%")
     }
 
     private fun dropCaches() {
-        Logger.i(name, "dropping page caches")
+        Logger.i(name, "正在清理页缓存")
         ShellExecutor.run("sync")
         for (i in 1..3) {
             ProcessUtils.writeFile("/proc/sys/vm/drop_caches", "3")
@@ -65,7 +65,7 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
             if (pkg.startsWith("android") || pkg.startsWith("miui") || pkg.startsWith("system") ||
                 pkg.startsWith("bin.mt.plus") || pkg.startsWith("mojang")
             ) continue
-            Logger.i(name, "force-stop $pkg")
+            Logger.i(name, "强制停止 $pkg")
             FrameworkOps.forceStop(pkg)
         }
     }

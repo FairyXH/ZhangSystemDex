@@ -67,7 +67,7 @@ object ShellExecutor {
         try {
             ProcessBuilder("/system/bin/sh", "-c", cmd).start()
         } catch (t: Throwable) {
-            Logger.w("ShellExecutor", "background exec failed: ${t.message}")
+            Logger.w("ShellExecutor", "后台执行失败: ${t.message}")
         }
     }
 

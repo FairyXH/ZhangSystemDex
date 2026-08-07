@@ -26,7 +26,7 @@ object ServiceManagerUtils {
             for (arg in intArgs) data.writeInt(arg)
             binder.transact(code, data, reply, 0)
         } catch (t: Throwable) {
-            Logger.w("BinderUtils", "SurfaceFlinger transact $code failed: ${t.message}")
+            Logger.w("BinderUtils", "SurfaceFlinger 事务 $code 失败: ${t.message}")
             false
         } finally {
             data.recycle()

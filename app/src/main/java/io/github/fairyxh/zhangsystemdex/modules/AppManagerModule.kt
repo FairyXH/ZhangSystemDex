@@ -31,7 +31,7 @@ class AppManagerModule(private val ctx: DexContext) {
 
             copyMount()
         } catch (t: Throwable) {
-            Logger.e("AppManager", "applyDisableApps failed", t)
+            Logger.e("AppManager", "停用应用失败", t)
         }
     }
 
@@ -52,7 +52,7 @@ class AppManagerModule(private val ctx: DexContext) {
             for (g in groups) {
                 if (g.isNotEmpty()) FrameworkOps.grantPermission(pkg, g)
             }
-            Logger.i("AppManager", "appops/grant allow-all done: $pkg")
+            Logger.i("AppManager", "AppOps/权限放行完成: $pkg")
         }
     }
 
@@ -62,7 +62,7 @@ class AppManagerModule(private val ctx: DexContext) {
             try {
                 return pm.getAllPermissionGroups(0).mapNotNull { it.name }.filter { it.isNotEmpty() }
             } catch (t: Throwable) {
-                Logger.w("AppManager", "allPermissionGroups failed, fallback shell: ${t.message}")
+                Logger.w("AppManager", "权限组枚举失败，降级 shell: ${t.message}")
             }
         }
         return ShellExecutor.run("pm list permissions-group")
@@ -78,7 +78,7 @@ class AppManagerModule(private val ctx: DexContext) {
         val dirName = File(src).parent ?: return
         FileUtils.mkdirs(ctx.modDir + dirName)
         FileUtils.touch(ctx.modDir + src)
-        Logger.i("AppManager", "shadowed $pkg at ${ctx.modDir}$src")
+        Logger.i("AppManager", "已遮蔽 $pkg -> ${ctx.modDir}$src")
     }
 
     private fun disableApp(pkg: String) {
@@ -88,7 +88,7 @@ class AppManagerModule(private val ctx: DexContext) {
             FrameworkOps.setApplicationDisabledUser(pkg, u.name.toIntOrNull() ?: 0)
         }
         FrameworkOps.setApplicationEnabled(pkg, false)
-        Logger.i("AppManager", "disabled $pkg")
+        Logger.i("AppManager", "已停用 $pkg")
     }
 
     /** Rebuild the module overlay: copy top-level module dirs into system/. */
@@ -105,7 +105,7 @@ class AppManagerModule(private val ctx: DexContext) {
                 entry.copyRecursively(dst, overwrite = true)
                 Logger.i("AppManager", "copy_mount: ${entry.name} -> system/")
             } catch (t: Throwable) {
-                Logger.w("AppManager", "copy_mount ${entry.name} failed: ${t.message}")
+                Logger.w("AppManager", "copy_mount ${entry.name} 失败: ${t.message}")
             }
         }
     }

@@ -23,7 +23,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
     private val serviceGuardOn: Boolean get() = ctx.config.switch("service_guard_enable")
 
     override fun onStart() {
-        Logger.i(name, "module started (serviceGuard=$serviceGuardOn, extra=$addOpen)")
+        Logger.i(name, "模块启动（服务守护=$serviceGuardOn，附加=$addOpen）")
         if (serviceGuardOn) {
             startShizuku()
             startBrevent()
@@ -43,14 +43,14 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
     }
 
     fun restartShizukuBrevent() {
-        Logger.i(name, "restarting shizuku/brevent")
+        Logger.i(name, "正在重启 shizuku/brevent")
         startShizuku()
         startBrevent()
     }
 
     /** Run the guardian actions once (for the debug menu). */
     fun runOnce() {
-        Logger.i(name, "service guard runOnce")
+        Logger.i(name, "服务守护单次执行")
         if (serviceGuardOn) {
             startShizuku()
             startBrevent()
@@ -76,7 +76,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
                 ShellExecutor.run("${target.path} \"\"")
             }
         } catch (t: Throwable) {
-            Logger.w(name, "shizuku start failed: ${t.message}")
+            Logger.w(name, "启动 shizuku 失败: ${t.message}")
         }
         cleanupShizukuTmp()
     }
@@ -86,7 +86,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
             val base = AppListProvider.sourceDir("me.piebridge.brevent")
                 ?.substringBefore("base.apk")
             if (base.isNullOrEmpty()) {
-                Logger.i(name, "brevent not installed, skip")
+                Logger.i(name, "未安装 brevent，跳过")
                 return
             }
             val lib = File("${base}lib/arm64/libbrevent.so")
@@ -99,7 +99,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
                 ShellExecutor.runBackground(target.path)
             }
         } catch (t: Throwable) {
-            Logger.w(name, "brevent start failed: ${t.message}")
+            Logger.w(name, "启动 brevent 失败: ${t.message}")
         }
     }
 
@@ -113,7 +113,7 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
                 .format(java.util.Date())
             recentFile().appendText("$ts Finished\n")
         } catch (t: Throwable) {
-            Logger.w(name, "recent log failed: ${t.message}")
+            Logger.w(name, "读取最近日志失败: ${t.message}")
         }
     }
 

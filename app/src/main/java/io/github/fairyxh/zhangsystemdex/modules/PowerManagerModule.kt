@@ -24,7 +24,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
     private var awake = false
 
     override fun onStart() {
-        Logger.i(name, "module started")
+        Logger.i(name, "模块启动")
         if (ctx.config.switch("doze_enable")) {
             applyDozeList()
         }
@@ -62,9 +62,9 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
             for (pkg in white) {
                 FrameworkOps.addPowerSaveWhitelist(pkg)
             }
-            Logger.i(name, "doze whitelist updated: ${white.size} packages")
+            Logger.i(name, "Doze 白名单已更新: ${white.size} 个包")
         } catch (t: Throwable) {
-            Logger.w(name, "doze list failed: ${t.message}")
+            Logger.w(name, "Doze 白名单失败: ${t.message}")
         }
     }
 
@@ -118,10 +118,10 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
                     }
                 }
                 launcherFile.writeText(cArr.toString())
-                Logger.i(name, "coloros locked apps written (${cArr.length()})")
+                Logger.i(name, "已写入 ColorOS 锁定应用（${cArr.length()} 个）")
             }
         } catch (t: Throwable) {
-            Logger.w(name, "locked apps failed: ${t.message}")
+            Logger.w(name, "锁定应用失败: ${t.message}")
         }
     }
 
@@ -139,7 +139,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
                 awakeIdle()
             }
         } catch (t: Throwable) {
-            Logger.w(name, "nightly doze failed: ${t.message}")
+            Logger.w(name, "夜间 Doze 失败: ${t.message}")
         }
     }
 

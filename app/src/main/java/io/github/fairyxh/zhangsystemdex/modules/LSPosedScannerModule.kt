@@ -41,14 +41,14 @@ class LSPosedScannerModule(private val ctx: DexContext) {
             val cached = readCache()
             if (!force && cached != null && cached.first == signature) {
                 modules = cached.second
-                Logger.i("LSPosedScanner", "cache hit (${modules.size} modules)")
+                Logger.i("LSPosedScanner", "缓存命中（${modules.size} 个模块）")
                 return modules
             }
-            Logger.i("LSPosedScanner", "full scan started (signature ${signature.take(12)}...)")
+            Logger.i("LSPosedScanner", "开始全量扫描（签名 ${signature.take(12)}...）")
             val modulesResult = readLsposedConfig().distinctBy { it.packageName }
             modules = modulesResult
             writeCache(signature, modules)
-            Logger.i("LSPosedScanner", "scan finished: ${modules.size} modules")
+            Logger.i("LSPosedScanner", "扫描完成: ${modules.size} 个模块")
             return modules
         }
     }
@@ -78,11 +78,11 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                     result.add(ModuleInfo(pkg, pkg, "", true, scopes))
                 }
                 if (result.isNotEmpty()) {
-                    Logger.i("LSPosedScanner", "lsposed config: ${result.size} modules from ${f.path}")
+                    Logger.i("LSPosedScanner", "LSPosed 配置: 从 ${f.path} 读取到 ${result.size} 个模块")
                     return result
                 }
             } catch (t: Throwable) {
-                Logger.w("LSPosedScanner", "read ${f.path} failed: ${t.message}")
+                Logger.w("LSPosedScanner", "读取 ${f.path} 失败: ${t.message}")
             }
         }
         // Fallback: newer LSPosed keeps module scope data in the manager database.
@@ -128,7 +128,7 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                     val enabledCount = result.count { it.enabled }
                     Logger.i(
                         "LSPosedScanner",
-                        "lsposed modules_config.db: ${result.size} total, $enabledCount enabled (raw ${rawPkgs.size}, installed ${installed.size})"
+                        "LSPosed modules_config.db: 共 ${result.size} 个，启用 $enabledCount 个（原始 ${rawPkgs.size}，已安装 ${installed.size}）"
                     )
                     return result
                 }
@@ -136,11 +136,11 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                 // per-module scope apps and includes disabled/historical rows).
                 Logger.w(
                     "LSPosedScanner",
-                    "modules_config.db: no installed modules from modules table (raw=${rawPkgs.size}, installed=${installed.size}), refusing scope-table fallback"
+                    "modules_config.db: modules 表中无已安装模块（原始=${rawPkgs.size}，已安装=${installed.size}），拒绝使用 scope 表回退"
                 )
                 return emptyList()
             } catch (t: Throwable) {
-                Logger.w("LSPosedScanner", "lsposed modules_config.db parse failed: ${t.message}")
+                Logger.w("LSPosedScanner", "解析 LSPosed modules_config.db 失败: ${t.message}")
             }
         }
         val queries = listOf(
@@ -161,11 +161,11 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                         result.add(ModuleInfo(pkg, pkg, "", true, scopes))
                     }
                     if (result.isNotEmpty()) {
-                        Logger.i("LSPosedScanner", "lsposed modules.list: ${result.size} modules from $target")
+                        Logger.i("LSPosedScanner", "LSPosed modules.list: 从 $target 读取到 ${result.size} 个模块")
                         return result
                     }
                 } catch (t: Throwable) {
-                    Logger.w("LSPosedScanner", "read $target failed: ${t.message}")
+                    Logger.w("LSPosedScanner", "读取 $target 失败: ${t.message}")
                 }
                 continue
             }
@@ -174,11 +174,11 @@ class LSPosedScannerModule(private val ctx: DexContext) {
                     val rows = SqliteUtils.queryFirst(target, q)
                     if (rows.isNotEmpty()) {
                         val result = rows.distinct().map { ModuleInfo(it, it, "", true, emptyList()) }
-                        Logger.i("LSPosedScanner", "lsposed db: ${result.size} modules from $target (query: $q)")
+                        Logger.i("LSPosedScanner", "LSPosed 数据库: 从 $target 查询到 ${result.size} 个模块（查询: $q）")
                         return result
                     }
                 } catch (t: Throwable) {
-                    Logger.w("LSPosedScanner", "lsposed db query $target failed: ${t.message}")
+                    Logger.w("LSPosedScanner", "查询 LSPosed 数据库 $target 失败: ${t.message}")
                 }
             }
         }
@@ -226,7 +226,7 @@ class LSPosedScannerModule(private val ctx: DexContext) {
             }
             Pair(sig, list)
         } catch (t: Throwable) {
-            Logger.w("LSPosedScanner", "cache read failed: ${t.message}")
+            Logger.w("LSPosedScanner", "读取缓存失败: ${t.message}")
             null
         }
     }
@@ -249,7 +249,7 @@ class LSPosedScannerModule(private val ctx: DexContext) {
             obj.put("modules", arr)
             cacheFile.writeText(obj.toString(2))
         } catch (t: Throwable) {
-            Logger.w("LSPosedScanner", "cache write failed: ${t.message}")
+            Logger.w("LSPosedScanner", "写入缓存失败: ${t.message}")
         }
     }
 }

@@ -34,17 +34,17 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
 
     override fun onStart() {
         if (!isolationEnabled) {
-            Logger.w(name, "storage_isolation_enable=false, module must not run")
+            Logger.w(name, "storage_isolation_enable=false，模块禁止运行")
             stop()
             return
         }
-        Logger.i(name, "module started (storage_isolation_enable=true)")
+        Logger.i(name, "模块启动（storage_isolation_enable=true）")
         removeRedirectStorageTrace()
     }
 
     override fun tick() {
         if (!isolationEnabled) {
-            Logger.w(name, "storage_isolation_enable=false, tick blocked")
+            Logger.w(name, "storage_isolation_enable=false，周期任务被拦截")
             return
         }
         removeRedirectStorageTrace()
@@ -58,7 +58,7 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
 
     private fun removeRedirectStorageTrace() {
         if (!isolationEnabled) {
-            Logger.w(name, "removeRedirectStorageTrace blocked (switch off)")
+            Logger.w(name, "清理重定向痕迹被拦截（开关关闭）")
             return
         }
         FileUtils.deleteRecursive(File("/data/media/0/Android/data/moe.shizuku.redirectstorage"))
@@ -66,7 +66,7 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
 
     private fun quarantineRubbish() {
         if (!isolationEnabled) {
-            Logger.w(name, "quarantineRubbish blocked (switch off)")
+            Logger.w(name, "隔离垃圾被拦截（开关关闭）")
             return
         }
         try {
@@ -95,17 +95,17 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
                     FileUtils.chattr(f.path, "-AacDdijsStu")
                     val dest = File(cleanedDir, f.name)
                     FileUtils.mvQuoted(f.path, dest.path)
-                    Logger.w(name, "QUARANTINED ${f.path} -> ${dest.path}")
+                    Logger.w(name, "已隔离 ${f.path} -> ${dest.path}")
                 }
             }
         } catch (t: Throwable) {
-            Logger.w(name, "quarantine failed: ${t.message}")
+            Logger.w(name, "隔离失败: ${t.message}")
         }
     }
 
     fun cleanCleanedRubbish() {
         if (!isolationEnabled) {
-            Logger.w(name, "cleanCleanedRubbish blocked (switch off)")
+            Logger.w(name, "清理隔离区被拦截（开关关闭）")
             return
         }
         try {
@@ -113,35 +113,35 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
             val keep = setOf("Android", "DCIM", "Download")
             for (f in cleanedDir.listFiles() ?: return) {
                 if (f.name !in keep) {
-                    Logger.w(name, "DELETING ${f.path}")
+                    Logger.w(name, "正在删除 ${f.path}")
                     FileUtils.deleteRecursive(f)
                 }
             }
         } catch (t: Throwable) {
-            Logger.w(name, "clean rubbish failed: ${t.message}")
+            Logger.w(name, "清理垃圾失败: ${t.message}")
         }
     }
 
     /** Run trace cleanup and rubbish quarantine once (for the debug menu). */
     fun runOnce() {
         if (!isolationEnabled) {
-            Logger.w(name, "runOnce blocked (storage_isolation_enable=false)")
+            Logger.w(name, "runOnce 被拦截（storage_isolation_enable=false）")
             return
         }
-        Logger.i(name, "storage isolation runOnce (storage_isolation_enable=true)")
+        Logger.i(name, "存储隔离单次执行（storage_isolation_enable=true）")
         removeRedirectStorageTrace()
         quarantineRubbish()
     }
 
     fun generateConfig(allApps: Boolean) {
         if (!isolationEnabled) {
-            Logger.w(name, "generateConfig blocked (switch off)")
+            Logger.w(name, "生成配置被拦截（开关关闭）")
             return
         }
         try {
             val targetDir = File("/data/adb/storage-isolation")
             if (!targetDir.exists()) {
-                Logger.i(name, "storage-isolation not installed, skip config")
+                Logger.i(name, "未安装 storage-isolation，跳过配置生成")
                 return
             }
             val excluded = setOf(
@@ -195,11 +195,11 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
 
             val targetFile = File(targetDir, "configuration.json")
             targetFile.writeText(obj.toString(2))
-            Logger.i(name, "configuration.json written (${packageArr.length()} entries)")
+            Logger.i(name, "configuration.json 已写入（${packageArr.length()} 条）")
             val daemon = File(targetDir, "bin/daemon")
             if (daemon.exists()) ShellExecutor.run("${daemon.path}")
         } catch (t: Throwable) {
-            Logger.w(name, "generateConfig failed: ${t.message}")
+            Logger.w(name, "生成配置失败: ${t.message}")
         }
     }
 

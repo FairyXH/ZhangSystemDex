@@ -14,7 +14,7 @@ object BinderUtils {
             }
             getServiceMethod?.invoke(null, name) as? IBinder
         } catch (t: Throwable) {
-            Logger.e("Binder", "getService($name) failed", t)
+            Logger.e("Binder", "获取服务 $name 失败", t)
             null
         }
     }
@@ -24,7 +24,7 @@ object BinderUtils {
             val stub = Class.forName(stubClassName)
             stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
         } catch (t: Throwable) {
-            Logger.e("Binder", "asInterface($stubClassName) failed", t)
+            Logger.e("Binder", "asInterface($stubClassName) 失败", t)
             null
         }
     }

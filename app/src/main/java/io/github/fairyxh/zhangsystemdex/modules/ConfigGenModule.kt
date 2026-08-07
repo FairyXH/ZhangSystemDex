@@ -43,7 +43,7 @@ class ConfigGenModule(
     )
 
     override fun onStart() {
-        Logger.i(name, "module started, initial full generation with Xposed scan")
+        Logger.i(name, "模块启动，首次全量生成（含 Xposed 扫描）")
         generateHma(forceScan = true)
     }
 
@@ -127,7 +127,7 @@ class ConfigGenModule(
             val hmaData = File("/data/data/com.tsng.hidemyapplist/files/config.json")
             if (hmaData.parentFile?.exists() == true) {
                 hmaData.writeText(jsonText)
-                Logger.i(name, "HMA config written to ${hmaData.path}")
+                Logger.i(name, "HMA 配置已写入 ${hmaData.path}")
             }
             val moduleCopy = File(ctx.modDir, "ZhangSetting/隐藏应用列表全隐藏.json")
             moduleCopy.parentFile?.mkdirs()
@@ -136,9 +136,9 @@ class ConfigGenModule(
             downloadDir.mkdirs()
             FileUtils.copyFile(moduleCopy, File(downloadDir, moduleCopy.name))
             FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
-            Logger.i(name, "HMA config generated (white=${whiteMode.size}, black=${blackMode.size}, blackPool=${blackPool.size})")
+            Logger.i(name, "HMA 配置已生成（白名单模式=${whiteMode.size}，黑名单模式=${blackMode.size}，黑名单池=${blackPool.size}）")
         } catch (t: Throwable) {
-            Logger.e(name, "generateHma failed", t)
+            Logger.e(name, "生成 HMA 配置失败", t)
         }
     }
 
@@ -161,9 +161,9 @@ class ConfigGenModule(
             downloadDir.mkdirs()
             FileUtils.copyFile(xmlFile, File(downloadDir, xmlFile.name))
             FileUtils.syncDir(File(ctx.modDir, "ZhangSetting"), downloadDir)
-            Logger.i(name, "DoNotTryAccessibility XML generated (${packages.size} apps)")
+            Logger.i(name, "已生成 DoNotTryAccessibility 规则（${packages.size} 个应用）")
         } catch (t: Throwable) {
-            Logger.w(name, "DoNotTryAccessibility failed: ${t.message}")
+            Logger.w(name, "生成 DoNotTryAccessibility 失败: ${t.message}")
         }
     }
 
@@ -174,7 +174,7 @@ class ConfigGenModule(
                 "hmspush" -> updateHmspush()
             }
         } catch (t: Throwable) {
-            Logger.w(name, "target list $kind failed: ${t.message}")
+            Logger.w(name, "生成 $kind 目标列表失败: ${t.message}")
         }
     }
 
@@ -187,7 +187,7 @@ class ConfigGenModule(
         if (newPackages.isNotEmpty()) {
             target.appendText(newPackages.sorted().joinToString("\n") + "\n")
             known.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            Logger.i(name, "tricky_store target +${newPackages.size} packages")
+            Logger.i(name, "tricky_store 目标新增 ${newPackages.size} 个包")
         }
     }
 
@@ -205,7 +205,7 @@ class ConfigGenModule(
         if (newPackages.isNotEmpty()) {
             target.appendText(newPackages.sorted().joinToString("\n") + "\n")
             known.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            Logger.i(name, "hmspush target +${newPackages.size} packages")
+            Logger.i(name, "hmspush 目标新增 ${newPackages.size} 个包")
         }
     }
 

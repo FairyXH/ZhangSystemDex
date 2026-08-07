@@ -16,8 +16,11 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
     private val packagesFile: File get() = File(ctx.config.rootDir, "asguard.conf")
     private val mappingFile: File get() = File(ctx.config.rootDir, "asguard.paths")
 
+    /** 每个包只提示一次“需手动开启”，避免每 10s 刷屏。 */
+    private val noPathWarned = HashSet<String>()
+
     override fun onStart() {
-        Logger.i(name, "config: ${packagesFile.path}")
+        Logger.i(name, "配置文件: ${packagesFile.path}")
     }
 
     override fun tick() {
@@ -37,18 +40,22 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
                 if (found != null && found != path) {
                     path = found
                     saveMapping(pkg, found)
-                    Logger.i(name, "learned path $pkg -> $found")
+                    Logger.i(name, "已学习 $pkg 的服务路径 -> $found")
                 }
                 if (path.isNullOrEmpty()) {
-                    Logger.i(name, "no path known yet for $pkg, enable the accessibility service once manually")
+                    synchronized(noPathWarned) {
+                        if (noPathWarned.add(pkg)) {
+                            Logger.i(name, "$pkg 的服务路径尚未学习，请手动开启一次无障碍服务（仅提示一次）")
+                        }
+                    }
                     continue
                 }
                 if (serviceList.contains(path)) continue
                 val updated = (serviceList + path).distinct().joinToString(":")
                 SettingsUtils.putSecure("enabled_accessibility_services", updated)
-                Logger.i(name, "re-enabled accessibility service $path")
+                Logger.i(name, "已重新启用无障碍服务 $path")
             } catch (t: Throwable) {
-                Logger.w(name, "guard $pkg failed: ${t.message}")
+                Logger.w(name, "守护 $pkg 失败: ${t.message}")
             }
         }
     }
@@ -76,7 +83,7 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
             }
             mappingFile.writeText((lines + "$pkg=$path").joinToString("\n") + "\n")
         } catch (t: Throwable) {
-            Logger.w(name, "save mapping failed: ${t.message}")
+            Logger.w(name, "保存服务路径映射失败: ${t.message}")
         }
     }
 }

@@ -21,7 +21,7 @@ object ProcessUtils {
         }
         val rc = ShellExecutor.runExit("su -c 'echo $value > $path'")
         if (rc == 0) return true
-        Logger.w("ProcessUtils", "write failed (file+su rc=$rc): $path")
+        Logger.w("ProcessUtils", "写入失败（文件+su 返回码=$rc）: $path")
         return false
     }
 
@@ -76,7 +76,7 @@ object ProcessUtils {
         } catch (t: Throwable) {
             if (!setpriorityWarned) {
                 setpriorityWarned = true
-                Logger.w("ProcessUtils", "setpriority failed, fallback shell (logged once): ${t.message}")
+                Logger.w("ProcessUtils", "setpriority 失败，降级 shell（仅记录一次）: ${t.message}")
             }
         }
         ShellExecutor.run("renice -n $niceness -p $pid")
@@ -104,7 +104,7 @@ object ProcessUtils {
             try {
                 return pm.isInteractive
             } catch (t: Throwable) {
-                Logger.w("ProcessUtils", "PowerManager.isInteractive failed: ${t.message}")
+                Logger.w("ProcessUtils", "PowerManager.isInteractive 失败: ${t.message}")
             }
         }
         return ShellExecutor.run("dumpsys deviceidle get screen")?.trim() == "true"

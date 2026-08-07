@@ -54,16 +54,18 @@ class SystemTuningModule(
     override fun onStart() {
         Logger.i(
             name,
-            "module started, interval=${intervalMs}ms, regular=${ctx.config.switch("system_tuning_enable")}, heavy=${ctx.config.switch("heavy_task_enable")}"
+            "模块启动，周期=${intervalMs}ms，常规任务=${ctx.config.switch("system_tuning_enable")}，高占用=${ctx.config.switch("heavy_task_enable")}"
         )
         Logger.i(
             name,
             "周期配置: tuning_interval_seconds=${ctx.config.getString("tuning_interval_seconds", "").ifBlank { "默认" }} -> 生效 ${intervalMs / 1000}s, " +
                 "heavy_interval_cycles=${ctx.config.getString("heavy_interval_cycles", "").ifBlank { "默认" }} -> 生效 ${taskInterval} 周期"
         )
+        // 首次启动立即执行一次高占用任务（若开启且熄屏）；亮屏则输出跳过提示，下一周期立即重试。
+        maybeRunHeavy()
         if (!ctx.config.switch("system_tuning_enable")) return
         if (ctx.config.switch("dexopt_everything_enable")) {
-            Logger.i(name, "dex2oat everything compile started")
+            Logger.i(name, "开始执行 dex2oat everything 编译")
             ShellExecutor.runBackground("cmd package compile -m everything -a")
         }
         if (ctx.config.switch("appops_allow_enable")) {
@@ -72,7 +74,7 @@ class SystemTuningModule(
         if (ctx.config.switch("selinux_disable_enable")) {
             ShellExecutor.run("setenforce 0")
             ProcessUtils.writeFile("/sys/fs/selinux/enforce", "0")
-            Logger.i(name, "selinux disabled")
+            Logger.i(name, "已关闭 SELinux")
         }
     }
 
@@ -94,6 +96,17 @@ class SystemTuningModule(
             }
         } else {
             cycle = 0
+        }
+    }
+
+    /** 启动时立即检查高占用：熄屏执行，亮屏输出跳过提示（保持周期计数，下一周期重试）。 */
+    private fun maybeRunHeavy() {
+        if (!ctx.config.switch("heavy_task_enable")) return
+        if (ProcessUtils.isScreenOn()) {
+            Logger.i(name, "启动时高占用任务就绪但未息屏，跳过执行，下一周期立即重试 (cycle=$cycle)")
+        } else {
+            cycle = 0
+            heavyTick()
         }
     }
 
@@ -145,11 +158,11 @@ class SystemTuningModule(
         FileUtils.mkdirs("/data/media/0/Download/Files")
         FileUtils.mkdirs("/data/media/0/Download/Important")
         FileUtils.mkdirs("/data/media/0/Download/Music")
-        Logger.i(name, "regular tick finished")
+        Logger.i(name, "常规周期任务执行完毕")
     }
 
     private fun heavyTick() {
-        Logger.i(name, "heavy maintenance started")
+        Logger.i(name, "高占用维护开始")
         try {
             antiErrorDialogs()
             if (ctx.config.switch("boost_process_enable")) {
@@ -186,13 +199,13 @@ class SystemTuningModule(
             syncZhangSetting()
             if (ctx.config.switch("run_once_enable") && !runOnceDone) {
                 runOnceDone = true
-                Logger.i(name, "run_once=true, stopping after first heavy tick")
+                Logger.i(name, "run_once=true，首轮高占用执行完成后停止")
                 stop()
             }
         } catch (t: Throwable) {
-            Logger.e(name, "heavy tick failed", t)
+            Logger.e(name, "高占用任务执行失败", t)
         }
-        Logger.i(name, "heavy maintenance finished")
+        Logger.i(name, "高占用维护完成")
     }
 
     private fun antiErrorDialogs() {
@@ -203,7 +216,7 @@ class SystemTuningModule(
         SettingsUtils.putGlobal("cached_apps_freezer", "enabled")
         ShellExecutor.run("device_config set_sync_disabled_for_tests persistent")
         ShellExecutor.run("device_config put activity_manager max_phantom_processes 2147483647")
-        Logger.i(name, "anti error-dialog rules applied")
+        Logger.i(name, "防错误弹窗规则已应用")
     }
 
     private fun fakeBattery() {
@@ -220,7 +233,7 @@ class SystemTuningModule(
             ProcessUtils.writeFile(path, value)
             FileUtils.chmod(path, "0444")
         }
-        Logger.i(name, "battery fake values locked")
+        Logger.i(name, "假电池值已锁定")
     }
 
     private fun lowProc(pattern: String) {
@@ -272,7 +285,7 @@ class SystemTuningModule(
                 count++
             }
         }
-        if (count > 0) Logger.i(name, "deleted $count base.odex")
+        if (count > 0) Logger.i(name, "已删除 $count 个 base.odex")
     }
 
     private fun cleanTencentTmfs() {

@@ -38,7 +38,7 @@ object PropUtils {
             } catch (t: Throwable) {
                 if (!spSetWarned) {
                     spSetWarned = true
-                    Logger.w("PropUtils", "SystemProperties.set failed, fallback resetprop (logged once): ${t.message}")
+                    Logger.w("PropUtils", "SystemProperties.set 失败，降级 resetprop（仅记录一次）: ${t.message}")
                 }
             }
         }
@@ -51,7 +51,7 @@ object PropUtils {
         val cur = get(name)
         if (cur.isNullOrEmpty() || cur != expected) {
             set(name, expected)
-            Logger.i("PropUtils", "set $name=$expected")
+            Logger.i("PropUtils", "设置属性 $name=$expected")
         }
     }
 
@@ -60,7 +60,7 @@ object PropUtils {
         val cur = get(name)
         if (cur != null && cur.contains(contains)) {
             set(name, newValue)
-            Logger.i("PropUtils", "replace $name -> $newValue")
+            Logger.i("PropUtils", "替换属性 $name -> $newValue")
         }
     }
 
@@ -81,7 +81,7 @@ object PropUtils {
             .toList()
         for (name in names) {
             delete(name, persistent = true)
-            Logger.i("PropUtils", "deleted matching prop $name")
+            Logger.i("PropUtils", "已删除匹配属性 $name")
         }
     }
 }

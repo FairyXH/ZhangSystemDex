@@ -23,7 +23,7 @@ object FrameworkOps {
 
     private fun warnOnce(key: String, msg: String) {
         synchronized(warned) {
-            if (warned.add(key)) Logger.w("FrameworkOps", "$msg (logged once)")
+            if (warned.add(key)) Logger.w("FrameworkOps", "$msg（仅记录一次）")
         }
     }
 

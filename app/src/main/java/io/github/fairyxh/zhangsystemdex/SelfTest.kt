@@ -79,7 +79,7 @@ object SelfTest {
         toolChecks(s, ctx)
         moduleChecks(s, ctx)
         s.print()
-        Logger.i("SelfTest", "finished: pass=${s.pass} fail=${s.fail} warn=${s.warn} skip=${s.skip}")
+        Logger.i("SelfTest", "自测完成: 通过=${s.pass} 失败=${s.fail} 警告=${s.warn} 跳过=${s.skip}")
         return s
     }
 

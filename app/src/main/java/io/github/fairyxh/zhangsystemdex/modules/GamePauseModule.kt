@@ -21,7 +21,7 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
 
     override fun onStart() {
         games = GameListProvider.refresh(ctx.config.switch("read_game_list_enable")).toSet()
-        Logger.i(name, "loaded ${games.size} game packages")
+        Logger.i(name, "已加载 ${games.size} 个游戏包")
     }
 
     override fun tick() {
@@ -31,7 +31,7 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
 
         if (games.contains(focus) && screenOn) {
             if (activeGame != focus) {
-                Logger.i(name, "game detected: $focus, pausing module loops")
+                Logger.i(name, "检测到游戏前台: $focus，暂停模块循环")
             }
             activeGame = focus
             timeoutCount = 0
@@ -50,9 +50,9 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
             }
             if (activeGame != null && focus != activeGame) {
                 timeoutCount++
-                Logger.i(name, "focus moved away from game ($focus), timeout=$timeoutCount")
+                Logger.i(name, "焦点已离开游戏 ($focus)，超时计数=$timeoutCount")
                 if (timeoutCount >= 10) {
-                    Logger.i(name, "game left foreground, resuming modules")
+                    Logger.i(name, "游戏离开前台，恢复模块")
                     activeGame = null
                     timeoutCount = 0
                     ctx.gamePause.setPaused(false)
@@ -73,6 +73,6 @@ class GamePauseModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = 
             ProcessUtils.appendCgroup(pid, "/dev/cpuset/top-app/cgroup.procs")
             ProcessUtils.appendCgroup(pid, "/dev/stune/top-app/cgroup.procs")
         }
-        Logger.i(name, "game process boosted: $pkg")
+        Logger.i(name, "已提升游戏进程: $pkg")
     }
 }

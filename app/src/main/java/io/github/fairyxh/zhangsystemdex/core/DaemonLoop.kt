@@ -24,18 +24,18 @@ abstract class DaemonLoop(
     }
 
     final override fun run() {
-        Logger.i(name, "功能已启动: $name 开始运行 (interval=${intervalMs}ms, pauseAware=$pauseAware)")
+        Logger.i(name, "功能已启动: $name（周期=${intervalMs}ms，游戏暂停感知=$pauseAware）")
         try {
             onStart()
         } catch (t: Throwable) {
-            Logger.e(name, "onStart failed", t)
+            Logger.e(name, "启动回调失败", t)
         }
         var pausedLogged = false
         while (running.get()) {
             try {
                 if (pauseAware && ctx.gamePause.isPaused()) {
                     if (!pausedLogged) {
-                        Logger.i(name, "game in foreground, loop paused")
+                        Logger.i(name, "游戏在前台，循环已暂停")
                         pausedLogged = true
                     }
                     sleepSafe(10000)
@@ -44,7 +44,7 @@ abstract class DaemonLoop(
                 pausedLogged = false
                 tick()
             } catch (t: Throwable) {
-                Logger.e(name, "tick failed", t)
+                Logger.e(name, "周期任务失败", t)
                 sleepSafe(10000)
             }
             if (running.get()) sleepLoop()
@@ -52,9 +52,9 @@ abstract class DaemonLoop(
         try {
             onStop()
         } catch (t: Throwable) {
-            Logger.e(name, "onStop failed", t)
+            Logger.e(name, "停止回调失败", t)
         }
-        Logger.i(name, "module stopped")
+        Logger.i(name, "模块已停止")
     }
 
     private fun sleepLoop() {

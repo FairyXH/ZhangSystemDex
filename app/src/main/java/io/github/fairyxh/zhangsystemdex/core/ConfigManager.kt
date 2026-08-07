@@ -51,7 +51,7 @@ class ConfigManager(private val modDir: String) {
                     }
                 }
             } catch (t: Throwable) {
-                Logger.w("ConfigManager", "config.conf parse error, using defaults: ${t.message}")
+                Logger.w("ConfigManager", "解析 config.conf 失败，使用默认值: ${t.message}")
             }
         } else {
             writeDefaultConfigConf()
@@ -111,10 +111,10 @@ class ConfigManager(private val modDir: String) {
                 }
             }
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "switches.conf parse error: ${t.message}")
+            Logger.w("ConfigManager", "解析 switches.conf 失败: ${t.message}")
         }
         ensureParamLines()
-        Logger.i("ConfigManager", "switches loaded (${switches.size} entries)")
+        Logger.i("ConfigManager", "已加载开关（${switches.size} 项）")
     }
 
     /**
@@ -140,9 +140,9 @@ class ConfigManager(private val modDir: String) {
                 switches[k] = ""
             }
             switchesFile.appendText(sb.toString())
-            Logger.i("ConfigManager", "switches.conf appended missing params: ${missing.map { it.substringBefore('=') }}")
+            Logger.i("ConfigManager", "switches.conf 已追加缺失参数: ${missing.map { it.substringBefore('=') }}")
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "failed to append switches.conf params: ${t.message}")
+            Logger.w("ConfigManager", "追加 switches.conf 参数失败: ${t.message}")
         }
     }
 
@@ -170,9 +170,9 @@ class ConfigManager(private val modDir: String) {
             sb.append("tuning_interval_seconds=\t# 主调优循环周期（秒），留空=600（服务器模式 300）\n")
             sb.append("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）\n")
             switchesFile.writeText(sb.toString())
-            Logger.i("ConfigManager", "switches.conf initialized")
+            Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "failed to write switches.conf: ${t.message}")
+            Logger.w("ConfigManager", "写入 switches.conf 失败: ${t.message}")
         }
     }
 
@@ -187,7 +187,7 @@ class ConfigManager(private val modDir: String) {
                     "log_enabled=true\n"
             )
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "failed to write default config.conf: ${t.message}")
+            Logger.w("ConfigManager", "写入默认 config.conf 失败: ${t.message}")
         }
     }
 
@@ -210,9 +210,9 @@ class ConfigManager(private val modDir: String) {
         try {
             target.parentFile?.mkdirs()
             target.writeText(defaultContent)
-            Logger.i("ConfigManager", "initialized $rel")
+            Logger.i("ConfigManager", "已初始化 $rel")
         } catch (t: Throwable) {
-            Logger.w("ConfigManager", "failed to init $rel: ${t.message}")
+            Logger.w("ConfigManager", "初始化 $rel 失败: ${t.message}")
         }
     }
 
@@ -228,7 +228,7 @@ class ConfigManager(private val modDir: String) {
                     if (f.isFile) FileUtils.copyFile(f, File(dst, f.name))
                 }
             } catch (t: Throwable) {
-                Logger.w("ConfigManager", "sqlite_lib sync failed: ${t.message}")
+                Logger.w("ConfigManager", "同步 sqlite_lib 失败: ${t.message}")
             }
         }
         // Fix permissions every start: a module update or manual copy can
@@ -238,7 +238,7 @@ class ConfigManager(private val modDir: String) {
         dst.listFiles()?.forEach { f ->
             if (f.name.startsWith("lib")) FileUtils.chmod(f.path, "0644")
         }
-        Logger.i("ConfigManager", "sqlite_lib ready at ${dst.path}")
+        Logger.i("ConfigManager", "sqlite_lib 就绪: ${dst.path}")
     }
 
     companion object {

@@ -43,9 +43,9 @@ class ThermalModule(private val ctx: DexContext) {
                     }
                 }
             }
-            Logger.i("Thermal", "thermal mask applied ($count files, stdltm=$stdltm)")
+            Logger.i("Thermal", "温控遮蔽已应用（$count 个文件，stdltm=$stdltm）")
         } catch (t: Throwable) {
-            Logger.w("Thermal", "thermal mask failed: ${t.message}")
+            Logger.w("Thermal", "温控遮蔽失败: ${t.message}")
         }
     }
 

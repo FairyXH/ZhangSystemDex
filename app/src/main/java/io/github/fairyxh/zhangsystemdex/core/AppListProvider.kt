@@ -14,7 +14,7 @@ object AppListProvider {
             try {
                 return ctx.packageManager.getInstalledApplications(0).map { it.packageName }
             } catch (t: Throwable) {
-                Logger.w("AppListProvider", "PackageManager enumeration failed: ${t.message}")
+                Logger.w("AppListProvider", "PackageManager 枚举失败: ${t.message}")
             }
         }
         return shellPackages("pm list packages")
@@ -28,7 +28,7 @@ object AppListProvider {
                     .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
                     .map { it.packageName }
             } catch (t: Throwable) {
-                Logger.w("AppListProvider", "PackageManager third-party enumeration failed: ${t.message}")
+                Logger.w("AppListProvider", "PackageManager 第三方应用枚举失败: ${t.message}")
             }
         }
         return shellPackages("pm list packages -3")
@@ -101,7 +101,7 @@ object AppListProvider {
                     return imm.inputMethodList.map { it.packageName }.distinct()
                 }
             } catch (t: Throwable) {
-                Logger.w("AppListProvider", "InputMethodManager enumeration failed: ${t.message}")
+                Logger.w("AppListProvider", "InputMethodManager 枚举失败: ${t.message}")
             }
         }
         val out = ShellExecutor.run("ime list -s") ?: return emptyList()

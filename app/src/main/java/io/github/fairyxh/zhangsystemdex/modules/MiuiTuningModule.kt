@@ -18,7 +18,7 @@ class MiuiTuningModule(private val ctx: DexContext) {
 
     fun applyAll() {
         if (!ctx.config.switch("miui_tuning_enable")) {
-            Logger.i("MiuiTuning", "disabled by switch, skip")
+            Logger.i("MiuiTuning", "已被开关禁用，跳过")
             return
         }
         try {
@@ -33,9 +33,9 @@ class MiuiTuningModule(private val ctx: DexContext) {
                     .writeText(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
             } catch (_: Throwable) {
             }
-            Logger.i("MiuiTuning", "applyAll finished")
+            Logger.i("MiuiTuning", "MIUI 调优执行完毕")
         } catch (t: Throwable) {
-            Logger.e("MiuiTuning", "applyAll failed", t)
+            Logger.e("MiuiTuning", "MIUI 调优执行失败", t)
         }
     }
 
@@ -100,7 +100,7 @@ class MiuiTuningModule(private val ctx: DexContext) {
 
         SqliteUtils.exec(thermalDb, "DELETE FROM thermal_duration;")
         SqliteUtils.exec(thermalDb, "DELETE FROM ThermalInfo;")
-        Logger.i("MiuiTuning", "databases rewritten")
+        Logger.i("MiuiTuning", "数据库已重写")
     }
 
     private fun applyPersistentProps() {
@@ -173,6 +173,6 @@ class MiuiTuningModule(private val ctx: DexContext) {
         for ((name, value) in props) {
             PropUtils.set(name, value, persistent = true)
         }
-        Logger.i("MiuiTuning", "persistent props applied (${props.size})")
+        Logger.i("MiuiTuning", "已应用持久属性（${props.size} 个）")
     }
 }

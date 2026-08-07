@@ -25,7 +25,7 @@ object SettingsUtils {
     private fun frameworkFailed(op: String, t: Throwable) {
         if (!frameworkBroken) {
             frameworkBroken = true
-            Logger.w("SettingsUtils", "$op failed, fallback shell (logged once): ${t.message}")
+            Logger.w("SettingsUtils", "$op 失败，降级 shell（仅记录一次）: ${t.message}")
         }
     }
 

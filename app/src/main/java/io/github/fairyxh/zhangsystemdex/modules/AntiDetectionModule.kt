@@ -50,7 +50,7 @@ class AntiDetectionModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L) {
     }
 
     fun runOnce() {
-        Logger.i(name, "applying anti-detection property rules")
+        Logger.i(name, "正在应用防检测属性规则")
         applyRules()
         PropUtils.delete("persist.sys.vold_app_data_isolation_enabled")
         PropUtils.delete("persist.zygote.app_data_isolation")
@@ -69,14 +69,14 @@ class AntiDetectionModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L) {
             try {
                 PropUtils.check(rule.name, rule.expected)
             } catch (t: Throwable) {
-                Logger.w(name, "rule ${rule.name} failed: ${t.message}")
+                Logger.w(name, "规则 ${rule.name} 失败: ${t.message}")
             }
         }
         for (rule in containsRules) {
             try {
                 PropUtils.containsReplace(rule.name, rule.contains, rule.newValue)
             } catch (t: Throwable) {
-                Logger.w(name, "contains rule ${rule.name} failed: ${t.message}")
+                Logger.w(name, "包含规则 ${rule.name} 失败: ${t.message}")
             }
         }
     }
@@ -91,7 +91,7 @@ class AntiDetectionModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L) {
                 )
         } ?: return
         for (dir in dirs) {
-            Logger.i(name, "removing HMA residue: ${dir.path}")
+            Logger.i(name, "正在清理 HMA 残留: ${dir.path}")
             FileUtils.deleteRecursive(dir)
         }
     }

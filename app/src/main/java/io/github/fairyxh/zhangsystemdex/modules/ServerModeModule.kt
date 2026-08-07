@@ -19,11 +19,11 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
 
     override fun onStart() {
         if (!ctx.config.switch("server_mode_enable")) {
-            Logger.i(name, "server mode disabled by switch, exiting")
+            Logger.i(name, "服务器模式已被开关禁用，退出")
             stop()
             return
         }
-        Logger.i(name, "server mode active")
+        Logger.i(name, "服务器模式已激活")
     }
 
     override fun tick() {

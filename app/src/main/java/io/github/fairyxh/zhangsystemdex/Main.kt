@@ -49,10 +49,10 @@ object Main {
         ctx.load()
 
         Logger.i("Main", "========================================")
-        Logger.i("Main", "ZhangSystemDex starting")
-        Logger.i("Main", "uid=${Process.myUid()} moddir=$modDir root=${ctx.config.rootDir} logEnabled=${ctx.config.logEnabled}")
+        Logger.i("Main", "ZhangSystemDex 启动中")
+        Logger.i("Main", "uid=${Process.myUid()} 模块目录=$modDir 配置根=${ctx.config.rootDir} 日志开关=${ctx.config.logEnabled}")
         if (!RootUtils.isRoot()) {
-            Logger.e("Main", "not running as root, exiting")
+            Logger.e("Main", "非 root 运行，退出", null)
             return
         }
         HiddenApiBypass.enable()
@@ -63,20 +63,20 @@ object Main {
         // Self-test mode: run every module directly (ignoring switches) with
         // verification, then exit. Triggered by the `selftest` startup arg.
         if (args.contains("selftest")) {
-            Logger.i("Main", "self-test mode")
+            Logger.i("Main", "自测模式")
             SelfTest.run(ctx)
-            Logger.i("Main", "self-test finished, exiting")
+            Logger.i("Main", "自测完成，退出")
             return
         }
 
         // Debug menu mode: run a single feature once by number, then exit.
         if (args.contains("menu")) {
-            Logger.i("Main", "debug menu mode")
+            Logger.i("Main", "调试菜单模式")
             if (!DebugMenu.run(ctx)) {
-                Logger.i("Main", "debug action finished, exiting")
+                Logger.i("Main", "调试操作完成，退出")
                 return
             }
-            Logger.i("Main", "normal start after debug menu")
+            Logger.i("Main", "调试菜单结束后正常启动")
         }
 
         val sw = ctx.config
@@ -140,7 +140,7 @@ object Main {
         }
 
         syncModules()
-        Logger.i("Main", "daemon ready, watching switches.conf every 60s")
+        Logger.i("Main", "守护进程就绪，每 60s 监听 switches.conf")
         val bootTuning = ctx.config.getString("tuning_interval_seconds", "")
         val bootHeavy = ctx.config.getString("heavy_interval_cycles", "")
         Logger.i(
@@ -149,7 +149,7 @@ object Main {
         )
 
         Runtime.getRuntime().addShutdownHook(Thread {
-            Logger.i("Main", "shutdown hook, stopping modules")
+            Logger.i("Main", "关机钩子，正在停止模块")
             running.values.forEach { it.stop() }
         })
 
@@ -170,7 +170,7 @@ object Main {
                 }
                 Thread.sleep(60000)
             } catch (t: Throwable) {
-                Logger.e("Main", "watch loop error", t)
+                Logger.e("Main", "监听循环错误", t)
                 try {
                     Thread.sleep(60000)
                 } catch (_: InterruptedException) {
@@ -178,6 +178,6 @@ object Main {
                 }
             }
         }
-        Logger.i("Main", "daemon exiting")
+        Logger.i("Main", "守护进程退出")
     }
 }

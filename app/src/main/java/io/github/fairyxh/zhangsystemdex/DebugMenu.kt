@@ -13,6 +13,7 @@ import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServerModeModule
 import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
 import java.io.BufferedReader
@@ -49,6 +50,7 @@ object DebugMenu {
         println("18. LSPosed 数据库诊断")
         println("19. SystemContext 诊断")
         println("20. 自测工具（无视开关全量自测 + 验证）")
+        println("21. 模块目录防护检查（删除 skip_mount 等残留）")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -104,6 +106,10 @@ object DebugMenu {
                 18 -> diagnoseLsposedDb()
                 19 -> diagnoseSystemContext()
                 20 -> SelfTest.run(ctx)
+                21 -> {
+                    val removed = SkipMountGuardModule(ctx).runOnce()
+                    Logger.i("DebugMenu", "模块目录防护检查完成，删除残留文件 $removed 个")
+                }
                 else -> Logger.w("DebugMenu", "未识别输入: $line")
             }
         } catch (t: Throwable) {

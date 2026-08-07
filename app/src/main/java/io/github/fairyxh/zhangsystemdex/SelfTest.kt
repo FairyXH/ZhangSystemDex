@@ -21,6 +21,7 @@ import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
 import java.io.File
@@ -349,6 +350,21 @@ object SelfTest {
             s.add("模块.Thermal.applyMask", Status.PASS, "no exception")
         } catch (t: Throwable) {
             s.add("模块.Thermal.applyMask", Status.FAIL, t.message ?: "")
+        }
+
+        // SkipMountGuard: residual module-dir files (skip_mount etc.) must be removed.
+        try {
+            val before = File(ctx.modDir, "skip_mount").exists()
+            val removed = SkipMountGuardModule(ctx).runOnce()
+            val after = File(ctx.modDir, "skip_mount").exists()
+            val ok = !after && removed == (if (before) 1 else 0)
+            s.add(
+                "模块.SkipMountGuard.runOnce",
+                if (ok) Status.PASS else Status.FAIL,
+                "before=$before removed=$removed after=$after"
+            )
+        } catch (t: Throwable) {
+            s.add("模块.SkipMountGuard.runOnce", Status.FAIL, t.message ?: "")
         }
 
         // Storage isolation: SAFETY-GATED (moves/deletes user data).

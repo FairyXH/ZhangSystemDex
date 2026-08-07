@@ -21,6 +21,7 @@ import io.github.fairyxh.zhangsystemdex.modules.PerformanceModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServerModeModule
 import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.SystemTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
@@ -116,6 +117,8 @@ object Main {
             },
             ModuleEntry("hma_config", { enabled("hma_config_enable") }) { ConfigGenModule(ctx, scanner) },
             ModuleEntry("network_ipv6", { enabled("network_ipv6_disable_enable") }) { NetworkModule(ctx) },
+            // 防护类功能：不受 powersave_enable 影响（省电模式不关闭防护）
+            ModuleEntry("skip_mount_guard", { sw.switch("skip_mount_guard_enable") }) { SkipMountGuardModule(ctx) },
         )
 
         val running = mutableMapOf<String, DaemonLoop>()

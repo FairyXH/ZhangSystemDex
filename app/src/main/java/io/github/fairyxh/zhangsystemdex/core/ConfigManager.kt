@@ -137,6 +137,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["hma_config_enable"] == null) {
             missing.add("hma_config_enable=true\t# HideMyAppList 模板列表自动写入（含 Xposed 模块扫描）")
         }
+        if (switches["skip_mount_guard_enable"] == null) {
+            missing.add("skip_mount_guard_enable=true\t# 模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）")
+        }
         if (missing.isEmpty()) return
         try {
             val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
@@ -262,7 +265,8 @@ class ConfigManager(private val modDir: String) {
             "disable_apps_enable",
             "service_guard_enable",
             "read_game_list_enable",
-            "miui_tuning_enable"
+            "miui_tuning_enable",
+            "skip_mount_guard_enable"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
@@ -299,6 +303,7 @@ class ConfigManager(private val modDir: String) {
             "network_ipv6_disable_enable" to "禁用 IPv6",
             "only_base_enable" to "Doze 白名单使用内置规则（false=读取 doze.conf）",
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
+            "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
         )
 
         /** Defaults: false for everything except the six special features. */

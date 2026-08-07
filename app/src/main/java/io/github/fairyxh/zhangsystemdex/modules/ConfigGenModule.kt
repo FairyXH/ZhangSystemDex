@@ -76,7 +76,9 @@ class ConfigGenModule(
             val blackMode = mutableListOf<String>()
             for (pkg in thirdParty) {
                 if (pkg.startsWith("com.android.") || pkg.startsWith("com.google.")) continue
-                if (pkg in xposedPackages) continue
+                // 黑名单池应用（Xposed 模块/额外黑名单/用户黑名单/检测器）只作为被隐藏目标，
+                // 本身不应进入 scope 被启用隐藏。
+                if (pkg in blackPool) continue
                 when {
                     matchesAny(pkg, extBlacklistPattern) -> blackMode.add(pkg)
                     pkg in moreWhiteList -> whiteMode.add(pkg)

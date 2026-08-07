@@ -134,6 +134,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["heavy_screen_off_only"] == null) {
             missing.add("heavy_screen_off_only=false\t# 高占用任务是否仅在息屏时执行（false=亮屏也允许执行）")
         }
+        if (switches["hma_config_enable"] == null) {
+            missing.add("hma_config_enable=true\t# HideMyAppList 模板列表自动写入（含 Xposed 模块扫描）")
+        }
         if (missing.isEmpty()) return
         try {
             val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
@@ -265,6 +268,7 @@ class ConfigManager(private val modDir: String) {
         /** Ordered switch descriptions (key -> Chinese description). */
         val SWITCH_DESCRIPTIONS: Map<String, String> = linkedMapOf(
             "doze_enable" to "Doze 处理：电池优化白名单维护与夜间强制 Doze",
+            "hma_config_enable" to "HideMyAppList 模板列表自动写入（含 Xposed 模块扫描）",
             "game_pause_enable" to "游戏在前台时暂停其他功能",
             "accessibility_guard_enable" to "无障碍服务守护",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",

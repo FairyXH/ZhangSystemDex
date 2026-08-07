@@ -132,6 +132,13 @@ class ConfigGenModule(
             val moduleCopy = File(ctx.modDir, "ZhangSetting/隐藏应用列表全隐藏.json")
             moduleCopy.parentFile?.mkdirs()
             moduleCopy.writeText(jsonText)
+            // 另外生成一份 config.json 同名副本（HMA 可直接读取/恢复，与 HMA 数据目录同构）
+            val moduleConfigCopy = File(ctx.modDir, "ZhangSetting/config.json")
+            try {
+                moduleConfigCopy.writeText(jsonText)
+            } catch (t: Throwable) {
+                Logger.w(name, "写入 ZhangSetting/config.json 副本失败: ${t.message}")
+            }
             val downloadDir = File("/data/media/0/Download/ZhangSetting")
             downloadDir.mkdirs()
             FileUtils.copyFile(moduleCopy, File(downloadDir, moduleCopy.name))

@@ -315,7 +315,6 @@ class ConfigManager(private val modDir: String) {
             "+bin.mt.plus\n" +
                 "+meow.helper\n" +
                 "+rikka.appops\n" +
-                "+rikka.appops\n" +
                 "+bin.mt.termex\n" +
                 "+com.mi.health\n" +
                 "+com.miui.home\n" +
@@ -326,6 +325,7 @@ class ConfigManager(private val modDir: String) {
                 "+com.tplink.tool\n" +
                 "+io.github.qauxv\n" +
                 "+top.hookvip.pro\n" +
+                "+com.bitchat.droid\n" +
                 "+com.zidongdianji\n" +
                 "+com.zidongdianji\n" +
                 "+com.gotokeep.keep\n" +
@@ -389,9 +389,7 @@ class ConfigManager(private val modDir: String) {
         /** Original AsGuard.conf package list. */
         const val DEFAULT_ASGUARD_CONF =
             "li.songe.gkd\n" +
-                "com.zidongdianji\n" +
                 "com.omarea.vtools\n" +
-                "org.autojs.autojspro\n" +
                 "top.bogey.touch_tool\n"
 
         /** Original autorun.conf service list. */

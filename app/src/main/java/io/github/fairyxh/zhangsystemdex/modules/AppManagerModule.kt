@@ -6,6 +6,7 @@ import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import java.io.File
 import java.nio.file.Files
@@ -111,6 +112,7 @@ class AppManagerModule(private val ctx: DexContext) {
                         Logger.w("AppOps", "OP 授权失败: package=$pkg op=$op")
                     }
                 }
+                applyVendorPermissionDatabases(pkg)
                 Logger.i("AppOps", "包处理完成: $pkg")
             } catch (t: Throwable) {
                 Logger.w("AppOps", "包处理异常，继续下一个: $pkg (${t.message})")
@@ -123,6 +125,57 @@ class AppManagerModule(private val ctx: DexContext) {
     }
 
     private enum class OpState { ALLOW, OTHER, UNKNOWN }
+
+    /** Update Oplus SecurityPermission's package permission rows for every user database. */
+    private fun applyVendorPermissionDatabases(pkg: String) {
+        val dbs = linkedSetOf<File>()
+        val userRoot = File("/data/user")
+        userRoot.listFiles()?.forEach { user ->
+            if (user.isDirectory) dbs += File(user, "com.oplus.securitypermission/databases/permission.db")
+        }
+        dbs += File("/data/data/com.oplus.securitypermission/databases/permission.db")
+        var touched = 0
+        for (db in dbs) {
+            if (!db.isFile) continue
+            try {
+                val columns = SqliteUtils.queryPairs(
+                    db.path,
+                    "PRAGMA table_info('pp_permission')"
+                ).map { it.second }.filter { it.matches(SQL_IDENTIFIER) }
+                if (columns.isEmpty() || !columns.contains("pkg_name")) continue
+                val setColumns = columns.filter { it != "_id" && it != "pkg_name" && it !in VENDOR_META_COLUMNS }
+                if (setColumns.isEmpty()) continue
+                val assignments = (setColumns + "state").distinct()
+                    .filter { it in columns || it == "state" }
+                    .joinToString(",") { "$it=1" }
+                val quotedPkg = sqlQuote(pkg)
+                val exists = SqliteUtils.queryFirst(
+                    db.path,
+                    "SELECT pkg_name FROM pp_permission WHERE pkg_name='$quotedPkg' LIMIT 1"
+                ).isNotEmpty()
+                if (!exists && !SqliteUtils.exec(
+                        db.path,
+                        "INSERT INTO pp_permission (pkg_name) VALUES ('$quotedPkg')"
+                    )) {
+                    Logger.w("AppOps", "厂商权限数据库新增包失败: ${db.path} package=$pkg")
+                    continue
+                }
+                val sql = "UPDATE pp_permission SET $assignments WHERE pkg_name='$quotedPkg'"
+                if (SqliteUtils.exec(db.path, sql)) {
+                    touched++
+                    Logger.i("AppOps", "厂商权限数据库已更新: ${db.path} package=$pkg")
+                } else {
+                    Logger.w("AppOps", "厂商权限数据库更新失败: ${db.path} package=$pkg")
+                }
+            } catch (t: Throwable) {
+                Logger.w("AppOps", "厂商权限数据库处理异常，继续: ${db.path} (${t.message})")
+            }
+        }
+        if (touched == 0) Logger.w("AppOps", "未找到可更新的厂商权限数据库: package=$pkg")
+    }
+
+    private fun sqlQuote(value: String): String = value.replace("'", "''")
+
 
     private fun packageExists(pkg: String): Boolean {
         val out = ShellExecutor.runWithCode("pm path '$pkg'", 10000)
@@ -274,5 +327,8 @@ class AppManagerModule(private val ctx: DexContext) {
     companion object {
         const val MODULE_APPOPS_CONF = "appops_packages.conf"
         val PACKAGE_PATTERN = Regex("[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+")
+        val VENDOR_META_COLUMNS = setOf("accept", "reject", "prompt", "trust")
+        val SQL_IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
     }
 }

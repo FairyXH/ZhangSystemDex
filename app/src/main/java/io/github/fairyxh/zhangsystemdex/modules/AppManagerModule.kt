@@ -167,13 +167,11 @@ class AppManagerModule(private val ctx: DexContext) {
     }
 
     private fun parseApkPackage(apk: File): String? {
+        AppListProvider.packageNameFromApk(apk.path)?.let { return it }
         val aapt = File(ctx.modDir, "aapt")
+        if (!aapt.isFile) return null
         val escaped = apk.path.replace("'", "'\\\"'\\\"'")
-        val output = if (aapt.isFile && aapt.canExecute()) {
-            ShellExecutor.run("'${aapt.path}' dump badging '$escaped'", 15000)
-        } else {
-            ShellExecutor.run("pm install -l --dry-run '$escaped'", 15000)
-        } ?: return null
+        val output = ShellExecutor.run("'${aapt.path}' dump badging '$escaped'", 15000) ?: return null
         return Regex("package: name='([a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+)'")
             .find(output)?.groupValues?.getOrNull(1)
             ?.takeIf { it.matches(PACKAGE_PATTERN) }

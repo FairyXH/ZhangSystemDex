@@ -56,6 +56,7 @@ Magisk 模块目录                       运行时数据目录
 | `notification.conf` / `autorun.conf` | 通知监听服务 / 开机自启动服务列表 |
 | `app_manager/*.conf` | 停用与遮蔽应用列表 |
 | `appops_packages.conf` | 模块目录 APK 解析出的 AppOps 历史目标包名（仅新增，原子替换） |
+| 厂商权限数据库 | 启用模块 AppOps 功能时更新 `/data/user/<user>/com.oplus.securitypermission/databases/permission.db` 及 `/data/data/...` 中的 `pp_permission` |
 | `cache/xposed_modules.json` | Xposed 模块扫描缓存（按包签名增量） |
 | `log/zhang.log` | 统一日志（1MB 滚动） |
 | `cache/sqlite_lib/` | 内置 sqlite3 CLI（framework SQLite 不可用时数据库操作兜底） |
@@ -109,6 +110,8 @@ Magisk 模块目录                       运行时数据目录
 | `dnt_accessibility_enable` | DoNotTryAccessibility 规则 XML 生成 |
 | `network_ipv6_disable_enable` | 禁用 IPv6 |
 | `only_base_enable` | Doze 白名单使用内置规则（false=读取 doze.conf） |
+
+启用 `module_appops_auth_enable` 后，同时维护 Oplus `com.oplus.securitypermission` 的 `permission.db`：遍历所有 `/data/user/<user>/` 用户并额外检查 `/data/data/`，为目标包创建/更新 `pp_permission` 行。
 
 另有字符串配置项：`frpc_command`、`automusic_command`（服务器模式外部命令，留空跳过）。
 

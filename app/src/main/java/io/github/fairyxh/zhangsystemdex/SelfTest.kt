@@ -391,8 +391,8 @@ object SelfTest {
         try {
             val result = AppManagerModule(ctx).testAppOpsWriteRead()
             s.add("模块.AppOps.write/read", when {
-                result.startsWith("PASS") -> Status.PASS
-                result.startsWith("SKIP") -> Status.SKIP
+                result.contains("结论=通过") -> Status.PASS
+                result.startsWith("跳过") -> Status.SKIP
                 else -> Status.FAIL
             }, result)
         } catch (t: Throwable) {

@@ -126,25 +126,78 @@ class AppManagerModule(private val ctx: DexContext) {
 
     private enum class OpState { ALLOW, OTHER, UNKNOWN }
 
-    /** Run a real AppOps write/read round trip for one installed target package. */
+    /**
+     * Select multiple installed third-party module targets, write several OPs
+     * reported by each package, then read the same shell OP names back.
+     */
     fun testAppOpsWriteRead(): String {
-        val pkg = readPackageHistory(File(ctx.config.rootDir, MODULE_APPOPS_CONF))
-            .firstOrNull { packageExists(it) }
-            ?: return "SKIP: appops_packages.conf 中没有当前已安装目标包"
-        val op = "camera"
-        Logger.i("AppOpsTest", "开始 AppOps 写入/读取测试: package=$pkg op=$op")
-        val before = ShellExecutor.run("cmd appops get '$pkg' '$op'", 10000)?.trim().orEmpty()
-        Logger.i("AppOpsTest", "写入前: ${before.ifBlank { "<empty>" }}")
-        val writeOk = FrameworkOps.appOpsSetAllow(pkg, op)
-        val after = ShellExecutor.run("cmd appops get '$pkg' '$op'", 10000)?.trim().orEmpty()
-        val readAllow = after.lineSequence().any { line ->
-            line.contains(op, ignoreCase = true) &&
-                Regex("\\ballow\\b", RegexOption.IGNORE_CASE).containsMatchIn(line)
+        val history = readPackageHistory(File(ctx.config.rootDir, MODULE_APPOPS_CONF))
+        val thirdParty = AppListProvider.thirdPartyPackages().toSet()
+        val thirdPartyTargets = history.filter { it in thirdParty && packageExists(it) }
+        val targets = if (thirdPartyTargets.isNotEmpty()) {
+            thirdPartyTargets.shuffled().take(APPOPS_TEST_PACKAGE_LIMIT)
+        } else {
+            history.filter { packageExists(it) }.shuffled().take(APPOPS_TEST_PACKAGE_LIMIT)
         }
-        val result = if (writeOk && readAllow) "PASS" else "FAIL"
-        Logger.i("AppOpsTest", "$result: writeOk=$writeOk readAllow=$readAllow package=$pkg op=$op")
-        Logger.i("AppOpsTest", "写入后读取结果: ${after.ifBlank { "<empty>" }}")
-        return "$result: package=$pkg op=$op writeOk=$writeOk readAllow=$readAllow"
+        if (targets.isEmpty()) return "跳过：appops_packages.conf 中没有当前已安装目标包"
+
+        val frameworkOps = availableOps()
+        val frameworkByShellName = frameworkOps.associateBy { shellOpName(it) }
+        val details = mutableListOf<String>()
+        var passed = 0
+        var failed = 0
+        var skipped = 0
+        Logger.i("AppOpsTest", "开始多包写入/读取测试：目标=${targets.joinToString(",")}，每包最多 $APPOPS_TEST_OP_LIMIT 个 OP")
+
+        for (pkg in targets) {
+            val output = ShellExecutor.run("cmd appops get '$pkg'", 15000).orEmpty()
+            val shellOps = output.lineSequence()
+                .mapNotNull { APP_OP_LINE.find(it)?.groupValues?.getOrNull(1) }
+                .distinct()
+                .shuffled()
+                .take(APPOPS_TEST_OP_LIMIT)
+                .toList()
+            if (shellOps.isEmpty()) {
+                skipped++
+                details += "$pkg：跳过（cmd appops get 未返回可测试 OP）"
+                Logger.w("AppOpsTest", "跳过 $pkg：cmd appops get 未返回可测试 OP，输出=${output.ifBlank { "<empty>" }}")
+                continue
+            }
+
+            for (shellOp in shellOps) {
+                val frameworkOp = frameworkByShellName[shellOp]
+                if (frameworkOp == null) {
+                    skipped++
+                    details += "$pkg/$shellOp：跳过（当前 Framework 无对应 OP 字符串）"
+                    Logger.w("AppOpsTest", "跳过 $pkg/$shellOp：未映射到 Framework OP 字符串")
+                    continue
+                }
+                val before = ShellExecutor.run("cmd appops get '$pkg' '$shellOp'", 10000)?.trim().orEmpty()
+                val writeOk = FrameworkOps.appOpsSetAllow(pkg, frameworkOp)
+                val after = ShellExecutor.run("cmd appops get '$pkg' '$shellOp'", 10000)?.trim().orEmpty()
+                val readAllow = after.lineSequence().any { line ->
+                    line.contains(shellOp, ignoreCase = true) &&
+                        Regex("\\ballow\\b", RegexOption.IGNORE_CASE).containsMatchIn(line)
+                }
+                if (writeOk && readAllow) {
+                    passed++
+                    details += "$pkg/$shellOp：通过"
+                    Logger.i("AppOpsTest", "通过：package=$pkg shellOp=$shellOp frameworkOp=$frameworkOp；写入前=$before；写入后=$after")
+                } else {
+                    failed++
+                    details += "$pkg/$shellOp：失败（writeOk=$writeOk, readAllow=$readAllow）"
+                    Logger.w("AppOpsTest", "失败：package=$pkg shellOp=$shellOp frameworkOp=$frameworkOp writeOk=$writeOk readAllow=$readAllow；写入前=$before；写入后=$after")
+                }
+            }
+        }
+        val conclusion = when {
+            failed == 0 && passed > 0 -> "通过"
+            passed > 0 -> "部分通过"
+            else -> "失败"
+        }
+        val report = "AppOps 写入/读取测试报告：结论=$conclusion；目标包=${targets.size}；通过=$passed；失败=$failed；跳过=$skipped；明细=${details.joinToString("；")}" 
+        Logger.i("AppOpsTest", report)
+        return report
     }
 
     /** Run vendor permission DB write/read tests across every user and /data/data. */
@@ -325,9 +378,14 @@ class AppManagerModule(private val ctx: DexContext) {
             .toList()
     }
 
+    private fun shellOpName(frameworkOp: String): String =
+        frameworkOp.substringAfterLast(':').uppercase(Locale.US).replace(Regex("[^A-Z0-9]+"), "_")
+
     private fun currentOpState(pkg: String, op: String): OpState {
-        val out = ShellExecutor.run("cmd appops get '$pkg' '$op'") ?: return OpState.UNKNOWN
-        val line = out.lineSequence().firstOrNull { it.contains(op, ignoreCase = true) } ?: return OpState.UNKNOWN
+        val shellOp = shellOpName(op)
+        val out = ShellExecutor.run("cmd appops get '$pkg' '$shellOp'") ?: return OpState.UNKNOWN
+        val line = out.lineSequence().firstOrNull { it.contains(shellOp, ignoreCase = true) }
+            ?: return OpState.UNKNOWN
         return when {
             Regex("\\ballow\\b", RegexOption.IGNORE_CASE).containsMatchIn(line) -> OpState.ALLOW
             Regex("\\b(default|deny|ignore|foreground|errored)\\b", RegexOption.IGNORE_CASE).containsMatchIn(line) -> OpState.OTHER
@@ -443,6 +501,10 @@ class AppManagerModule(private val ctx: DexContext) {
     companion object {
         const val MODULE_APPOPS_CONF = "appops_packages.conf"
         val PACKAGE_PATTERN = Regex("[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+")
+        const val APPOPS_TEST_PACKAGE_LIMIT = 3
+        const val APPOPS_TEST_OP_LIMIT = 3
+        val APP_OP_LINE = Regex("^\\s*([A-Z][A-Z0-9_]+):")
+
         val VENDOR_META_COLUMNS = setOf("accept", "reject", "prompt", "trust")
         val SQL_IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
 

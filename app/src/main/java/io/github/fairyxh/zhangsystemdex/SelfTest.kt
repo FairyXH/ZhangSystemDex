@@ -387,6 +387,28 @@ object SelfTest {
             }
         }
 
+        // AppOps/vendor permission write-read round trips.
+        try {
+            val result = AppManagerModule(ctx).testAppOpsWriteRead()
+            s.add("模块.AppOps.write/read", when {
+                result.startsWith("PASS") -> Status.PASS
+                result.startsWith("SKIP") -> Status.SKIP
+                else -> Status.FAIL
+            }, result)
+        } catch (t: Throwable) {
+            s.add("模块.AppOps.write/read", Status.FAIL, t.message ?: "")
+        }
+        try {
+            val result = AppManagerModule(ctx).testVendorPermissionDatabaseWriteRead()
+            s.add("模块.VendorPermissionDb.write/read", when {
+                result.contains("dbResult=PASS") -> Status.PASS
+                result.contains("SKIP") -> Status.SKIP
+                else -> Status.WARN
+            }, result)
+        } catch (t: Throwable) {
+            s.add("模块.VendorPermissionDb.write/read", Status.FAIL, t.message ?: "")
+        }
+
         // AppManager appops: gated (grants permissions).
         if (!ctx.config.switch("appops_allow_enable")) {
             s.add("模块.AppManager.applyAppOps", Status.SKIP, "appops_allow_enable=false（会授权权限）")

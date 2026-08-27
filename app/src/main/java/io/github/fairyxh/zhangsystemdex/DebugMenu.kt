@@ -5,6 +5,7 @@ import io.github.fairyxh.zhangsystemdex.core.GameListProvider
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
@@ -51,6 +52,8 @@ object DebugMenu {
         println("19. SystemContext 诊断")
         println("20. 自测工具（无视开关全量自测 + 验证）")
         println("21. 模块目录防护检查（删除 skip_mount 等残留）")
+        println("22. AppOps 写入/读取测试")
+        println("23. 厂商权限数据库写入/读取测试")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -106,6 +109,14 @@ object DebugMenu {
                 18 -> diagnoseLsposedDb()
                 19 -> diagnoseSystemContext()
                 20 -> SelfTest.run(ctx)
+                22 -> {
+                    val result = AppManagerModule(ctx).testAppOpsWriteRead()
+                    Logger.i("DebugMenu", "AppOps 写入/读取测试结果: $result")
+                }
+                23 -> {
+                    val result = AppManagerModule(ctx).testVendorPermissionDatabaseWriteRead()
+                    Logger.i("DebugMenu", "厂商权限数据库写入/读取测试结果: $result")
+                }
                 21 -> {
                     val removed = SkipMountGuardModule(ctx).runOnce()
                     Logger.i("DebugMenu", "模块目录防护检查完成，删除残留文件 $removed 个")

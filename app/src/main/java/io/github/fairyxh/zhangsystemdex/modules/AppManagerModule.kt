@@ -126,25 +126,141 @@ class AppManagerModule(private val ctx: DexContext) {
 
     private enum class OpState { ALLOW, OTHER, UNKNOWN }
 
-    /** Update Oplus SecurityPermission's package permission rows for every user database. */
-    private fun applyVendorPermissionDatabases(pkg: String) {
+    /** Run a real AppOps write/read round trip for one installed target package. */
+    fun testAppOpsWriteRead(): String {
+        val pkg = readPackageHistory(File(ctx.config.rootDir, MODULE_APPOPS_CONF))
+            .firstOrNull { packageExists(it) }
+            ?: return "SKIP: appops_packages.conf 中没有当前已安装目标包"
+        val op = "camera"
+        Logger.i("AppOpsTest", "开始 AppOps 写入/读取测试: package=$pkg op=$op")
+        val before = ShellExecutor.run("cmd appops get '$pkg' '$op'", 10000)?.trim().orEmpty()
+        Logger.i("AppOpsTest", "写入前: ${before.ifBlank { "<empty>" }}")
+        val writeOk = FrameworkOps.appOpsSetAllow(pkg, op)
+        val after = ShellExecutor.run("cmd appops get '$pkg' '$op'", 10000)?.trim().orEmpty()
+        val readAllow = after.lineSequence().any { line ->
+            line.contains(op, ignoreCase = true) &&
+                Regex("\\ballow\\b", RegexOption.IGNORE_CASE).containsMatchIn(line)
+        }
+        val result = if (writeOk && readAllow) "PASS" else "FAIL"
+        Logger.i("AppOpsTest", "$result: writeOk=$writeOk readAllow=$readAllow package=$pkg op=$op")
+        Logger.i("AppOpsTest", "写入后读取结果: ${after.ifBlank { "<empty>" }}")
+        return "$result: package=$pkg op=$op writeOk=$writeOk readAllow=$readAllow"
+    }
+
+    /** Run vendor permission DB write/read tests across every user and /data/data. */
+    fun testVendorPermissionDatabaseWriteRead(): String {
+        val pkg = readPackageHistory(File(ctx.config.rootDir, MODULE_APPOPS_CONF))
+            .firstOrNull { packageExists(it) }
+            ?: return "SKIP: appops_packages.conf 中没有当前已安装目标包"
+        val packageBefore = File(ctx.config.rootDir, MODULE_APPOPS_CONF).readText()
+        val result = testVendorPermissionDatabaseWriteRead(pkg)
+        val packageAfter = File(ctx.config.rootDir, MODULE_APPOPS_CONF).readText()
+        if (packageBefore != packageAfter) {
+            Logger.w("VendorDbTest", "测试警告: AppOps 目标数据库内容发生变化")
+        }
+        return "package=$pkg dbResult=$result"
+    }
+
+    private fun testVendorPermissionDatabaseWriteRead(pkg: String): String {
+        val dbs = vendorPermissionDatabases()
+        Logger.i("VendorDbTest", "发现数据库数量=${dbs.size}: ${dbs.map { it.path }}")
+        if (dbs.isEmpty()) return "SKIP: 未发现 permission.db"
+        var passed = 0
+        var failed = 0
+        var skipped = 0
+        for (db in dbs) {
+            try {
+                val columns = vendorPermissionColumns(db)
+                Logger.i("VendorDbTest", "数据库结构: db=${db.path} columns=$columns")
+                val controls = columns.filter {
+                    it != "_id" && it != "pkg_name" && it != "state" && it !in VENDOR_META_COLUMNS
+                }
+                if (!columns.contains("pkg_name") || controls.isEmpty()) {
+                    skipped++
+                    Logger.w("VendorDbTest", "SKIP: 表结构不支持测试: $db columns=$columns")
+                    continue
+                }
+                val quotedPkg = sqlQuote(pkg)
+                val existsBefore = SqliteUtils.queryFirst(
+                    db.path,
+                    "SELECT pkg_name FROM pp_permission WHERE pkg_name='$quotedPkg' LIMIT 1"
+                ).isNotEmpty()
+                Logger.i("VendorDbTest", "写入前: db=$db package=$pkg exists=$existsBefore")
+                if (!existsBefore && !SqliteUtils.exec(
+                        db.path,
+                        "INSERT INTO pp_permission (pkg_name) VALUES ('$quotedPkg')"
+                    )) {
+                    failed++
+                    Logger.e("VendorDbTest", "FAIL: 插入测试包失败: $db package=$pkg", null)
+                    continue
+                }
+                val assignments = controls.joinToString(",") { "$it=1" }
+                val writeSql = "UPDATE pp_permission SET state=1${if (assignments.isNotEmpty()) ",$assignments" else ""} WHERE pkg_name='$quotedPkg'"
+                val writeOk = SqliteUtils.exec(db.path, writeSql)
+                Logger.i("VendorDbTest", "写入: db=$db package=$pkg writeOk=$writeOk columns=${controls.size + 1}")
+                val verified = if (writeOk) {
+                    val row = SqliteUtils.queryFirst(
+                        db.path,
+                        "SELECT pkg_name FROM pp_permission WHERE pkg_name='$quotedPkg' AND state=1 LIMIT 1"
+                    )
+                    val controlChecks = controls.map { column ->
+                        val value = SqliteUtils.queryFirst(
+                            db.path,
+                            "SELECT $column FROM pp_permission WHERE pkg_name='$quotedPkg' LIMIT 1"
+                        ).firstOrNull()
+                        column to value
+                    }
+                    Logger.i("VendorDbTest", "读取: db=$db packageRow=$row controls=$controlChecks")
+                    row.isNotEmpty() && controlChecks.all { it.second == "1" }
+                } else false
+                if (verified) {
+                    passed++
+                    Logger.i("VendorDbTest", "PASS: 写入后读取成功: $db package=$pkg columns=${controls.size}")
+                } else {
+                    failed++
+                    Logger.w("VendorDbTest", "FAIL: 写入后读取不一致: $db package=$pkg writeOk=$writeOk")
+                }
+            } catch (t: Throwable) {
+                failed++
+                Logger.e("VendorDbTest", "FAIL: 数据库测试异常: $db package=$pkg", t)
+            }
+        }
+        val result = if (failed == 0 && passed > 0 && skipped == 0) "PASS" else if (passed > 0) "PARTIAL" else if (skipped > 0 && failed == 0) "SKIP" else "FAIL"
+        Logger.i("VendorDbTest", "完成: result=$result dbPass=$passed dbFail=$failed dbSkip=$skipped total=${dbs.size}")
+        return "$result dbPass=$passed dbFail=$failed dbSkip=$skipped total=${dbs.size}"
+    }
+
+    private fun vendorPermissionDatabases(): List<File> {
         val dbs = linkedSetOf<File>()
-        val userRoot = File("/data/user")
-        userRoot.listFiles()?.forEach { user ->
+        File("/data/user").listFiles()?.forEach { user ->
             if (user.isDirectory) dbs += File(user, "com.oplus.securitypermission/databases/permission.db")
         }
         dbs += File("/data/data/com.oplus.securitypermission/databases/permission.db")
+        return dbs.filter { it.isFile }
+    }
+
+    private fun vendorPermissionColumns(db: File): List<String> =
+        SqliteUtils.queryFirst(db.path, "SELECT name FROM pragma_table_info('pp_permission')")
+            .map { it.trim() }
+            .filter { it.matches(SQL_IDENTIFIER) }
+
+    private fun applyVendorPermissionDatabases(pkg: String) {
+
+        val dbs = vendorPermissionDatabases()
+
         var touched = 0
         for (db in dbs) {
             if (!db.isFile) continue
             try {
-                val columns = SqliteUtils.queryPairs(
+                val columns = SqliteUtils.queryFirst(
                     db.path,
-                    "PRAGMA table_info('pp_permission')"
-                ).map { it.second }.filter { it.matches(SQL_IDENTIFIER) }
+                    "SELECT name FROM pragma_table_info('pp_permission')"
+                ).filter { it.matches(SQL_IDENTIFIER) }
                 if (columns.isEmpty() || !columns.contains("pkg_name")) continue
-                val setColumns = columns.filter { it != "_id" && it != "pkg_name" && it !in VENDOR_META_COLUMNS }
-                if (setColumns.isEmpty()) continue
+                val setColumns = columns.filter {
+                    it != "_id" && it != "pkg_name" && it != "state" && it !in VENDOR_META_COLUMNS
+                }
+                if (setColumns.isEmpty() && "state" !in columns) continue
                 val assignments = (setColumns + "state").distinct()
                     .filter { it in columns || it == "state" }
                     .joinToString(",") { "$it=1" }

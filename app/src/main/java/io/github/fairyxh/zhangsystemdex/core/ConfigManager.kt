@@ -113,6 +113,11 @@ class ConfigManager(private val modDir: String) {
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "解析 switches.conf 失败: ${t.message}")
         }
+        val packageConf = File(rootDir, MODULE_APPOPS_CONF)
+        if (!packageConf.exists()) {
+            packageConf.parentFile?.mkdirs()
+            packageConf.writeText("# 模块 APK AppOps 历史授权目标\n")
+        }
         ensureParamLines()
         Logger.i("ConfigManager", "已加载开关（${switches.size} 项）")
     }
@@ -252,6 +257,8 @@ class ConfigManager(private val modDir: String) {
     }
 
     companion object {
+        const val MODULE_APPOPS_CONF = "appops_packages.conf"
+
         /** Features that default to ON. */
         val SPECIAL_DEFAULT_TRUE: Set<String> = setOf(
             "doze_enable",
@@ -286,6 +293,7 @@ class ConfigManager(private val modDir: String) {
             "server_mode_enable" to "服务器模式（保持 WiFi/蓝牙/常亮/性能调度）",
             "thermal_mask_enable" to "温控配置文件遮蔽",
             "appops_allow_enable" to "白名单应用 AppOps 全允许与权限组授权",
+            "module_appops_auth_enable" to "为模块挂载 App 授权 AppOps（仅处理模块目录 APK）",
             "dexopt_everything_enable" to "开机执行 everything 编译",
             "selinux_disable_enable" to "关闭 SELinux",
             "powersave_enable" to "省电模式（开启后其余调优类功能全部无效）",

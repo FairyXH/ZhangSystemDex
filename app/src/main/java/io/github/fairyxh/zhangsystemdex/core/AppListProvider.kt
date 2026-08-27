@@ -63,6 +63,18 @@ object AppListProvider {
             ?.removePrefix("package:")
     }
 
+    fun packageNameFromApk(path: String): String? {
+        val pm = SystemContext.get()?.packageManager
+        if (pm != null) {
+            try {
+                return pm.getPackageArchiveInfo(path, 0)?.packageName
+                    ?.takeIf { it.matches(PACKAGE_NAME_PATTERN) }
+            } catch (t: Throwable) {
+                Logger.w("AppListProvider", "Framework APK 解析失败: ${t.message}")
+            }
+        }
+        return null
+    }
     fun appInfo(pkg: String): ApplicationInfo? {
         val ctx = SystemContext.get() ?: return null
         return try {
@@ -107,6 +119,8 @@ object AppListProvider {
         val out = ShellExecutor.run("ime list -s") ?: return emptyList()
         return out.lineSequence().map { it.trim().substringBefore('/') }.filter { it.isNotEmpty() }.toList()
     }
+
+    private val PACKAGE_NAME_PATTERN = Regex("[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+")
 
     private fun shellPackages(cmd: String): List<String> {
         val out = ShellExecutor.run(cmd) ?: return emptyList()

@@ -124,9 +124,13 @@ object Main {
             return sw.switch(key)
         }
 
+        val appManager = AppManagerModule(ctx)
+
+        // Keep module APK package history up to date only at startup.
+        appManager.refreshModuleAppOpsPackages()
+
         // Non-thread support objects shared by module factories.
         val scanner = LSPosedScannerModule(ctx)
-        val appManager = AppManagerModule(ctx)
         val storage = StorageIsolationModule(ctx)
         val thermal = ThermalModule(ctx)
         val miui = MiuiTuningModule(ctx)
@@ -136,6 +140,15 @@ object Main {
         val serviceGuard = ServiceGuardModule(ctx)
 
         val entries = listOf(
+            ModuleEntry("module_appops_auth", { enabled("module_appops_auth_enable") }) {
+                object : DaemonLoop(ctx, 60000L, pauseAware = false) {
+                    override val name: String = "ModuleAppOps"
+                    override fun tick() {
+                        if (!ctx.config.switch("module_appops_auth_enable")) return
+                        appManager.applyModuleAppOps()
+                    }
+                }
+            },
             ModuleEntry("prop_tuning", { enabled("prop_tuning_enable") }) { AntiDetectionModule(ctx) },
             ModuleEntry("system_tuning", { enabled("system_tuning_enable") || enabled("heavy_task_enable") }) {
                 SystemTuningModule(ctx, performance, power, configGen, appManager, serviceGuard, storage, thermal, miui)

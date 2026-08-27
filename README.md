@@ -55,6 +55,7 @@ Magisk 模块目录                       运行时数据目录
 | `asguard.conf` | 无障碍守护包列表 |
 | `notification.conf` / `autorun.conf` | 通知监听服务 / 开机自启动服务列表 |
 | `app_manager/*.conf` | 停用与遮蔽应用列表 |
+| `appops_packages.conf` | 模块目录 APK 解析出的 AppOps 历史目标包名（仅新增，原子替换） |
 | `cache/xposed_modules.json` | Xposed 模块扫描缓存（按包签名增量） |
 | `log/zhang.log` | 统一日志（1MB 滚动） |
 | `cache/sqlite_lib/` | 内置 sqlite3 CLI（framework SQLite 不可用时数据库操作兜底） |
@@ -94,6 +95,7 @@ Magisk 模块目录                       运行时数据目录
 | `server_mode_enable` | 服务器模式：保持 WiFi/蓝牙/常亮/性能调度 |
 | `thermal_mask_enable` | 温控配置文件遮蔽 |
 | `appops_allow_enable` | 白名单应用 AppOps 全允许与权限组授权 |
+| `module_appops_auth_enable` | 为模块挂载 App 授权 AppOps（启动扫描模块目录 APK，之后每 60 秒只读取数据库处理） |
 | `dexopt_everything_enable` | 开机执行 everything 编译 |
 | `selinux_disable_enable` | 关闭 SELinux |
 | `powersave_enable` | 省电模式（开启后其余调优类功能全部无效） |

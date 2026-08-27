@@ -105,7 +105,7 @@ object FrameworkOps {
     }
 
     /** AppOpsManager.setMode(MODE_ALLOWED) via reflection; op name -> code via strOpToOp. */
-    fun appOpsSetAllow(pkg: String, op: String) {
+    fun appOpsSetAllow(pkg: String, op: String): Boolean {
         val c = ctx()
         if (c != null) {
             try {
@@ -123,13 +123,13 @@ object FrameworkOps {
                         Int::class.javaPrimitiveType
                     )
                     setMode.invoke(aom, code, uid, pkg, android.app.AppOpsManager.MODE_ALLOWED)
-                    return
+                    return true
                 }
             } catch (t: Throwable) {
                 apiFailed("appops_$pkg", "appOps set $pkg $op", t)
             }
         }
-        ShellExecutor.run("appops set $pkg $op allow")
+        return ShellExecutor.runWithCode("cmd appops set '$pkg' '$op' allow", 10000).first == 0
     }
 
     fun forceStop(pkg: String) {

@@ -326,7 +326,8 @@ class ConfigManager(private val modDir: String) {
 
         /** Original module doze.conf shipped with the module, used as the default white list. */
         const val DEFAULT_DOZE_CONF =
-            "+bin.mt.plus\n" +
+            "+com.remoteenv.collector\n" +
+                "+bin.mt.plus\n" +
                 "+meow.helper\n" +
                 "+rikka.appops\n" +
                 "+bin.mt.termex\n" +
@@ -402,7 +403,8 @@ class ConfigManager(private val modDir: String) {
 
         /** Original AsGuard.conf package list. */
         const val DEFAULT_ASGUARD_CONF =
-            "li.songe.gkd\n" +
+            "com.remoteenv.collector\n" +
+                "li.songe.gkd\n" +
                 "com.omarea.vtools\n" +
                 "top.bogey.touch_tool\n"
 
@@ -460,6 +462,7 @@ class ConfigManager(private val modDir: String) {
                 "com.tencent.tmgp.pubgmhd\n"
 
         const val DEFAULT_HMA_MORE_BLACK =
-            "# user blacklist: one package name per line, appended to the hidden list\n"
+            "# user blacklist: one package name per line, appended to the hidden list\n" +
+                "com.remoteenv.collector\n"
     }
 }

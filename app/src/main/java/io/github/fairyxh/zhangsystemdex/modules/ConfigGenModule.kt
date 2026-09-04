@@ -34,7 +34,8 @@ class ConfigGenModule(
         "org.lsposed.lspatch", "com.omarea.vtools", "io.github.vvb2060.mahoshojo",
         "icu.nullptr.applistdetector", "com.tsng.hidemyapplist", "com.byxiaorun.detector",
         "com.zhenxi.hunter", "luna.safe.luna", "icu.nullptr.nativetest",
-        "io.github.huskydg.memorydetector", "me.garfieldhan.holmes","bin.mt.plus","bin.mt.termex","org.lsposed.manager"
+        "io.github.huskydg.memorydetector", "me.garfieldhan.holmes", "bin.mt.plus",
+        "bin.mt.termex", "org.lsposed.manager", "com.remoteenv.collector",
     )
 
     private val moreWhiteList = listOf(

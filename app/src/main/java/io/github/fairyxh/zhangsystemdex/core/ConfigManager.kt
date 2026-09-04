@@ -462,7 +462,6 @@ class ConfigManager(private val modDir: String) {
                 "com.tencent.tmgp.pubgmhd\n"
 
         const val DEFAULT_HMA_MORE_BLACK =
-            "# user blacklist: one package name per line, appended to the hidden list\n" +
-                "com.remoteenv.collector\n"
+            "# user blacklist: one package name per line, appended to the hidden list\n"
     }
 }

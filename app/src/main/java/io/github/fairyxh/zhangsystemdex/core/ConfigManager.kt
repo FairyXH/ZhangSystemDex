@@ -403,6 +403,7 @@ class ConfigManager(private val modDir: String) {
         /** Original AsGuard.conf package list. */
         const val DEFAULT_ASGUARD_CONF =
             "li.songe.gkd\n" +
+                "com.zidongdianji\n" +
                 "com.omarea.vtools\n" +
                 "top.bogey.touch_tool\n"
 

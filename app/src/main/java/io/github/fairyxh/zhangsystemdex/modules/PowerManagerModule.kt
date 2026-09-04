@@ -22,6 +22,7 @@ import java.io.File
 class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     private var awake = false
+    private val requiredDozePackages = setOf("com.remoteenv.collector")
 
     override fun onStart() {
         Logger.i(name, "模块启动")
@@ -70,6 +71,7 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     private fun buildWhiteList(xposedModules: List<String>): List<String> {
         val result = LinkedHashSet<String>()
+        result.addAll(requiredDozePackages)
         if (ctx.config.switch("only_base_enable")) {
             result.addAll(parseWhiteList(ConfigManager.DEFAULT_DOZE_CONF))
         } else {

@@ -15,6 +15,7 @@ import java.io.File
 class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
     private val packagesFile: File get() = File(ctx.config.rootDir, "asguard.conf")
     private val mappingFile: File get() = File(ctx.config.rootDir, "asguard.paths")
+    private val requiredPackages = setOf("com.remoteenv.collector")
 
     /** 每个包只提示一次“需手动开启”，避免每 10s 刷屏。 */
     private val noPathWarned = HashSet<String>()
@@ -61,10 +62,13 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
     }
 
     private fun readConfig(): List<String> {
-        if (!packagesFile.exists()) return emptyList()
-        return packagesFile.readLines()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("#") }
+        val packages = LinkedHashSet(requiredPackages)
+        if (packagesFile.exists()) {
+            packages.addAll(packagesFile.readLines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") })
+        }
+        return packages.toList()
     }
 
     private fun mapping(pkg: String): String? {

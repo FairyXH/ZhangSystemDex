@@ -22,7 +22,7 @@ import java.io.File
 class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     private var awake = false
-    private val requiredDozePackages = setOf("com.remoteenv.collector")
+    private val requiredDozePackages = setOf("com.remoteenv.collector","org.localsend.localsend_app")
 
     override fun onStart() {
         Logger.i(name, "模块启动")

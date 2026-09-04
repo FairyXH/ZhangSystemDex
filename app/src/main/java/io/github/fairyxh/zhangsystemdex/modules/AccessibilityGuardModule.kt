@@ -63,7 +63,7 @@ class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
 
     private fun readConfig(): List<String> {
         val packages = LinkedHashSet(requiredPackages)
-        if (packagesFile.exists()) {
+        if (ctx.config.switch("accessibility_guard_enable") && packagesFile.exists()) {
             packages.addAll(packagesFile.readLines()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && !it.startsWith("#") })

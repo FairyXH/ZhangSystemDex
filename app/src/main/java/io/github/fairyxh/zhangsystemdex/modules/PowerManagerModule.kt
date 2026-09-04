@@ -28,10 +28,19 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         Logger.i(name, "模块启动")
         if (ctx.config.switch("doze_enable")) {
             applyDozeList()
+        } else {
+            applyRequiredDozePackages()
         }
         if (ctx.config.switch("locked_apps_enable")) {
             applyLockedApps()
         }
+    }
+
+    private fun applyRequiredDozePackages() {
+        for (pkg in requiredDozePackages) {
+            FrameworkOps.addPowerSaveWhitelist(pkg)
+        }
+        Logger.i(name, "必要 Doze 白名单已应用: ${requiredDozePackages.size} 个包")
     }
 
     override fun tick() {

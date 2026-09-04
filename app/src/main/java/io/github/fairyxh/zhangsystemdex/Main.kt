@@ -160,12 +160,12 @@ object Main {
             ) {
                 GameOomProtectModule(ctx)
             },
-            ModuleEntry("accessibility_guard", { enabled("accessibility_guard_enable") }) { AccessibilityGuardModule(ctx) },
+            ModuleEntry("accessibility_guard", { true }) { AccessibilityGuardModule(ctx) },
             ModuleEntry("service_guard", { enabled("service_guard_enable") || enabled("extra_features_enable") }) {
                 ServiceGuardModule(ctx)
             },
             ModuleEntry("server_mode", { enabled("server_mode_enable") }) { ServerModeModule(ctx) },
-            ModuleEntry("power", { enabled("doze_enable") || enabled("locked_apps_enable") }) {
+            ModuleEntry("power", { true }) {
                 PowerManagerModule(ctx)
             },
             ModuleEntry("memory_clean", { enabled("memory_clean_enable") }) { MemoryModule(ctx) },

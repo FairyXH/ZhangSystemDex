@@ -117,6 +117,7 @@ class SystemTuningModule(
         SettingsUtils.putGlobal("thermal_warning_threshold", "48000")
         SettingsUtils.putSecure("miui_thermal_limit", "48")
         SettingsUtils.putSystem("perf_profile", "4")
+        SettingsUtils.putSystem("accelerometer_rotation", "0")
         SettingsUtils.putGlobal("game_thermal_optimized", "0")
         SettingsUtils.putGlobal("render_thread_thermal_throttle", "0")
         SettingsUtils.putGlobal("gpu_render_thread_thermal_limit", "95")

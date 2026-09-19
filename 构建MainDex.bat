@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 setlocal
 cd /d "%~dp0"
 
@@ -26,3 +26,4 @@ if errorlevel 1 (
 echo === done: Main.dex generated at %~dp0 ===
 echo push: git add Main.dex ^&^& git push (or run push.bat)
 endlocal
+pause

@@ -318,7 +318,8 @@ class ConfigManager(private val modDir: String) {
             "only_base_enable" to "Doze 白名单使用内置规则（false=读取 doze.conf）",
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
-            "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死"
+            "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
+            "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转"
         )
 
         /** Defaults: false for everything except the six special features. */

@@ -2,12 +2,17 @@
 setlocal
 cd /d "%~dp0"
 
+set "BUILD_LOG=build.log"
+set "JDK_JAVA_OPTIONS=-Djava.net.preferIPv4Stack=true -Djdk.net.unixdomain.tmpdir=NUL %JDK_JAVA_OPTIONS%"
+
 echo === ZhangSystemDex: building release APK ===
-call gradlew.bat :app:assembleRelease --console=plain
+call gradlew.bat :app:assembleRelease --console=plain --no-daemon > "%BUILD_LOG%" 2>&1
 if errorlevel 1 (
     echo [ERROR] build failed
+    powershell -NoProfile -Command "Get-Content -LiteralPath '%BUILD_LOG%' -Tail 100"
     exit /b 1
 )
+powershell -NoProfile -Command "Get-Content -LiteralPath '%BUILD_LOG%' -Tail 40"
 
 set "APK=app\build\outputs\apk\release\app-release-unsigned.apk"
 if not exist "%APK%" set "APK=app\build\outputs\apk\release\app-release.apk"
@@ -26,4 +31,3 @@ if errorlevel 1 (
 echo === done: Main.dex generated at %~dp0 ===
 echo push: git add Main.dex ^&^& git push (or run push.bat)
 endlocal
-pause

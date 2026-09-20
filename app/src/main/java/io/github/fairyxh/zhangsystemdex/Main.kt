@@ -10,6 +10,7 @@ import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.RootUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.AccelerometerRotationModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
@@ -169,6 +170,9 @@ object Main {
                 PowerManagerModule(ctx)
             },
             ModuleEntry("memory_clean", { enabled("memory_clean_enable") }) { MemoryModule(ctx) },
+            ModuleEntry("accelerometer_rotation", { enabled("accelerometer_rotation_enable") }) {
+                AccelerometerRotationModule(ctx)
+            },
             ModuleEntry("storage_isolation", { enabled("storage_isolation_enable") }) {
                 StorageIsolationModule(ctx)
             },

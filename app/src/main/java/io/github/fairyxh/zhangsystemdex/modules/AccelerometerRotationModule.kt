@@ -4,6 +4,7 @@ import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
+import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 
 /****
  * Accelerometer rotation disable module.
@@ -47,12 +48,12 @@ class AccelerometerRotationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L) {
         if (enabled) {
             // Disable auto-rotation: 0 = off, based on Android system setting
             SettingsUtils.putSystem("accelerometer_rotation", "0")
-            Logger.d(name, "强制禁用加速计自动旋转 (accelerometer_rotation=0)")
+            Logger.i(name, "强制禁用加速计自动旋转 (accelerometer_rotation=0)")
         } else {
             // Remove/clear the forced value — restores user's system preference
             // shell command: settings put system accelerometer_rotation user
             ShellExecutor.run("settings put system accelerometer_rotation user")
-            Logger.d(name, "恢复加速计自动旋转用户首选项")
+            Logger.i(name, "恢复加速计自动旋转用户首选项")
         }
     }
 

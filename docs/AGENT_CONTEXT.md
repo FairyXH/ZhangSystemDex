@@ -340,10 +340,45 @@ SelfTest.rubbishChecks()  10 项只读回归
 - `uninstalled_leftover` 准确返回 1 个真残留（`com.android64bit.web`），
   而非修复前的 360 个
 
-### 10.10 待办 / 可选增强
+### 10.10 打包链改造：pack.sh 模块自包含（2026-10-03）
+
+**需求**：模块目录内直接运行（MT 管理器）即可打包，依赖工具随模块分发（同 aapt/shfmt）。
+
+**问题**：旧 `pack.sh` 依赖 `zip` 命令，但 Android 普遍没有——
+`/system/bin` 无 zip，toybox/busybox 均无 zip applet；Ubuntu 的 zip 是
+动态链接（glibc），拷入 Android 无法运行。
+
+**方案**：新增 `tools/`（纯 Python，随模块分发）：
+
+| 文件 | 作用 |
+|---|---|
+| `tools/zippack.py` | 打包。`zipfile` + `ZipInfo.from_file` **保留 Unix 权限位**（755/644 写入 external_attr，是 `post-fs-data.sh`/`service.sh` 可执行的前提）；支持符号链接、目录条目（含空目录）、流式 1MB 写入；自动排除 `__pycache__`；`--list` 可查条目权限 |
+| `tools/zipcheck.py` | 校验。解压（保留权限）+ 源目录↔解压目录 SHA256 逐文件比对；`--manifest`/`--sha256` 辅助子命令 |
+
+**`pack.sh` v3**（262→161 行）：
+- 运行时探测顺序：`tools/python3` → `/system/bin/python3` → PATH → 其它常见路径
+- 打包/校验全部调用 `tools/` 自带工具，**彻底摆脱 zip 与 unzip 二进制**
+- 保留 v1 安全行为：前置检查（webroot + 含 `HttpBackend` 的 Main.dex）、
+  临时文件落盘后再 `mv`（避免半成品）、最多 3 次重试、SHA256 逐文件比对
+- 退出码：0=成功 1=校验失败 2=缺 python3
+
+**真机验证**：`sh pack.sh` 一次通过 —— 90 文件、471,311,706 → 345,646,110 字节、
+耗时 29s、SHA256 全部一致；产物 `unzip -t` 零错误、解压后权限正确还原；
+zip 内无 `__pycache__`。
+
+**MT 管理器用法**：进入母版目录，对 `pack.sh` 选择「执行」即可；
+产物固定输出到**上层目录** `ZhangProtect-Android.zip`。
+
+**打包链现状**：
+- 母版 `/data/media/0/Download/Files/ZhangProtect-Android/`（88 文件 + tools/2 = 90）
+- 产物 `/data/media/0/Download/Files/ZhangProtect-Android.zip`（约 330 MB，含 system/ 内 APK）
+- 工程 `/home/projects/ZhangSystemDex` 的 `pack.sh` + `tools/` 与母版**保持一致**（进 Git）
+
+### 10.11 待办 / 可选增强
 
 - [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
 - [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为
       「按大小阈值列出」，当前仅作占位。
-- [ ] `uninstalled_leftover` 规则未接 `findUninstalledLeftovers()`（该方法已实现但未接线）。
 - [ ] WebUI 清理 Tab 的真机可视化确认（本机无 WebView 环境，仅做了无头校验）。
+- [ ] 母版 `webroot/index.html`（54611 字节，含 rubbish UI）比工程内旧副本新，
+      工程侧 `webroot/` 已废弃（.gitignore 忽略），正式资源以母版为准。

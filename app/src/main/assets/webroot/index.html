@@ -220,18 +220,38 @@
   <!-- ============ TAB 3: 电源 ============ -->
   <section class="pane" id="pane-power">
     <div class="section">
-      <div class="stitle">实时状态</div>
+      <div class="stitle">电池与实时状态</div>
       <div class="list"><div class="panel">
-        <div class="hint">以下为前端即时读数（需启用 <span class="mono">power_optimize_enable</span> 后 daemon 才会给出统计数据）。</div>
+        <div class="hint">电池读数来自系统 BatteryService（<span class="mono">dumpsys battery</span>）；
+          daemon 统计数据仅在启用 <span class="mono">power_optimize_enable</span> 后产生。</div>
         <div class="grid">
           <div class="stat"><div class="k">电量</div><div class="v" id="stBatt">—</div></div>
           <div class="stat"><div class="k">充电状态</div><div class="v" id="stCharging">—</div></div>
+          <div class="stat"><div class="k">供电来源</div><div class="v" id="stPlugged">—</div></div>
           <div class="stat"><div class="k">屏幕状态</div><div class="v" id="stScreen">—</div></div>
-          <div class="stat"><div class="k">当前等级</div><div class="v" id="stLevel">—</div></div>
-          <div class="stat"><div class="k">策略应用</div><div class="v" id="stApplied">—</div></div>
-          <div class="stat"><div class="k">fail-open</div><div class="v" id="stFail">—</div></div>
+          <div class="stat"><div class="k">电池温度</div><div class="v" id="stTemp">—</div></div>
+          <div class="stat"><div class="k">电池电压</div><div class="v" id="stVolt">—</div></div>
+          <div class="stat"><div class="k">电池健康</div><div class="v" id="stHealth">—</div></div>
+          <div class="stat"><div class="k">瞬时电流</div><div class="v" id="stCurrent">—</div></div>
         </div>
-        <div class="pbtns"><button class="btn sm" id="btnPowerRefresh">读取电池状态</button></div>
+        <div class="pbtns"><button class="btn sm" id="btnPowerRefresh">刷新状态（读取电池）</button></div>
+      </div></div>
+    </div>
+    <div class="section">
+      <div class="stitle">省电策略运行状态</div>
+      <div class="list"><div class="panel">
+        <div class="hint">由 daemon 的电源子系统实时统计；关闭 <span class="mono">power_optimize_enable</span> 后该子系统不运行，下列策略项均为“—”。</div>
+        <div class="grid">
+          <div class="stat"><div class="k">子系统</div><div class="v" id="stSubsys">—</div></div>
+          <div class="stat"><div class="k">当前策略</div><div class="v" id="stLevel">—</div></div>
+          <div class="stat"><div class="k">触发方式</div><div class="v" id="stEventDriven">—</div></div>
+          <div class="stat"><div class="k">内核降频</div><div class="v" id="stKernel">—</div></div>
+          <div class="stat"><div class="k">策略应用次数</div><div class="v" id="stApplied">—</div></div>
+          <div class="stat"><div class="k">策略还原次数</div><div class="v" id="stRevert">—</div></div>
+          <div class="stat"><div class="k">后台限制次数</div><div class="v" id="stBgRestrict">—</div></div>
+          <div class="stat"><div class="k">fail-open 次数</div><div class="v" id="stFail">—</div></div>
+        </div>
+        <div class="hint" id="stLastAction" style="margin-top:12px">最近动作：—</div>
       </div></div>
     </div>
     <div class="section"><div class="stitle">省电策略</div>
@@ -295,11 +315,11 @@
           <div class="val"><label class="sw"><input type="checkbox" id="swCleanScreenOff"><i></i></label></div></div>
         <div class="cell"><div class="ic" style="background:#8e8e93">⚠</div>
           <div class="body"><div class="k">目标应用运行中强制清理</div>
-            <div class="d">默认关闭：微信/QQ 运行中则跳过其私有目录，避免删文件异常</div></div>
+            <div class="d">默认关闭：目标应用运行时跳过其私有目录，避免删除正在被占用的文件</div></div>
           <div class="val"><label class="sw"><input type="checkbox" id="swCleanForce"><i></i></label></div></div>
       </div>
-      <div class="sfoot">所有删除都经过中心化审查（<span class="mono">RubbishGuard</span>），
-        拒绝规则可在「审查规则」中自定义。</div>
+      <div class="sfoot">所有删除均经过中心化安全审查（路径规范化、白名单与违禁规则校验），
+        违禁规则可在「审查规则」中自定义。</div>
     </div>
     <div id="cleanGroups"></div>
   </section>
@@ -493,6 +513,7 @@ let lines    = [];      // switches.conf 原始行（逐行保留）
 let original = "";      // 原始全文
 let dirtyKeys = new Set();
 let loaded = false;
+let busy = false;          // 是否正在执行异步操作（加载/保存）
 
 const $  = (s)=>document.querySelector(s);
 const $$ = (s)=>Array.from(document.querySelectorAll(s));
@@ -588,16 +609,17 @@ async function detectPaths(){
  * 加载
  * ------------------------------------------------------------------ */
 async function load(){
-  setNavBusy(true);
+  setBusy(true);
   setStatus("加载中…");
   loaded = false;
+  refreshNav();
   let pathResp = null;
   try{
     pathResp = await detectPaths();
   }catch(e){
     setStatus("后端连接失败：" + esc(e.message), true);
     renderEmptyHome();
-    setNavBusy(false);
+    setBusy(false);
     return;
   }
   const file = ROOT_DIR + "/switches.conf";
@@ -609,12 +631,12 @@ async function load(){
     out = (r && r.ok === false) ? "" : ((r && r.content) || "");
   }catch(e){
     setStatus("无法读取配置：" + esc(String(e && e.message || e)), true);
-    setNavBusy(false);
+    setBusy(false);
     return;
   }
   if (!out || !out.trim()){
     setStatus("未找到配置文件：" + esc(file) + "<br/>请先启动一次 daemon（它会自动生成 switches.conf）。", true);
-    setNavBusy(false);
+    setBusy(false);
     return;
   }
   original = out;
@@ -624,7 +646,7 @@ async function load(){
   loaded = true;
   setStatus("");
   renderAll();
-  setNavBusy(false);
+  setBusy(false);
 }
 
 function setStatus(html, isErr){
@@ -635,13 +657,35 @@ function setStatus(html, isErr){
   el.className = "navstatus" + (isErr ? " err" : "");
   el.innerHTML = html;
 }
-function setNavBusy(busy){
-  const b = loaded ? !busy : true;
-  ["#btnSave","#btnReload"].forEach(s=>{ const e=$(s); if(e) e.disabled = b; });
-  const rv = $("#btnRevert"); if (rv) rv.disabled = (busy || dirtyKeys.size===0);
-  const r2 = $("#btnReload2"); if (r2) r2.disabled = busy;
-  const rv2 = $("#btnRevert2"); if (rv2) rv2.disabled = (busy || dirtyKeys.size===0);
+
+/**
+ * 设置“忙碌”状态（加载/保存进行中）：忙碌时禁用导航按钮。
+ * 注意：参数语义为 busy（true=忙），与函数名一致。
+ */
+function setBusy(b){
+  busy = !!b;
+  refreshNav();
 }
+
+/**
+ * 导航按钮的统一真源：根据 loaded / busy / dirtyKeys 计算每个按钮是否可用。
+ *   - 保存 / 撤销：已加载 且 非忙碌 且 有改动
+ *   - 重新加载：已加载 且 非忙碌
+ * 之前 markDirty 末尾调用 setNavBusy(false) 会把刚启用的“保存”又禁用，
+ * 导致改完设置后保存按钮始终不可点（表现为灰/黑），这是本次修复的核心。
+ */
+function refreshNav(){
+  const dis = !loaded || busy;
+  const hasDirty = dirtyKeys.size > 0;
+  const save = $("#btnSave");   if (save)  save.disabled  = dis || !hasDirty;
+  const rel  = $("#btnReload"); if (rel)   rel.disabled   = dis;
+  const rv   = $("#btnRevert"); if (rv)    rv.disabled    = dis || !hasDirty;
+  const r2   = $("#btnReload2");if (r2)    r2.disabled    = dis;
+  const rv2  = $("#btnRevert2");if (rv2)   rv2.disabled   = dis || !hasDirty;
+}
+
+/* 兼容旧调用名：setNavBusy(true) 表示忙碌。 */
+function setNavBusy(b){ setBusy(b); }
 function updatePortPid(r){
   const el = $("#ovPortPid");
   if (!el) return;
@@ -807,26 +851,25 @@ function markDirty(key, cell){
   const orig = originalValue(key);
   const now  = readValue(key);
   const changed = (orig === undefined ? false : (orig || "").trim()) !== ((now || "").trim());
+  if (changed){ dirtyKeys.add(key); }
+  else { dirtyKeys.delete(key); }
   cell.classList.toggle("modified", changed);
   updateDirtyCount();
-  if (loaded) setNavBusy(false);
 }
 function updateDirtyCount(){
   const n = dirtyKeys.size;
   const el = $("#ovDirty");
   if (el) el.textContent = n + " 项";
-  const b = $("#btnSave");
-  if (b) b.disabled = (n === 0) || !loaded;
-  const rv = $("#btnRevert"); if (rv) rv.disabled = (n === 0) || !loaded;
-  const rv2 = $("#btnRevert2"); if (rv2) rv2.disabled = (n === 0) || !loaded;
+  refreshNav();   // 统一真源：保存/撤销可用性随 dirty 数变化
 }
 
 /* ------------------------------------------------------------------ *
  * 保存 / 撤销
  * ------------------------------------------------------------------ */
 async function save(){
-  const btn = $("#btnSave");
-  if (btn) btn.disabled = true;
+  if (!loaded){ toast("配置尚未加载完成", "err"); return; }
+  if (dirtyKeys.size === 0){ toast("没有需要保存的改动", "err"); return; }
+  setBusy(true);
   const text = lines.join("\n") + "\n";
   const file = ROOT_DIR + "/switches.conf";
   try{
@@ -835,17 +878,19 @@ async function save(){
     const r = await api("/api/write", { path: file, content: text });
     if (r && (r.ok === true || r.success === true || r.written === true)){
       try { await api("/api/reload"); } catch(_){}
-      toast("已保存，daemon 将在 60 秒内自动生效", "ok");
       dirtyKeys = new Set();
       $$(".cell.modified").forEach(c=> c.classList.remove("modified"));
+      toast("已保存，daemon 将在 60 秒内自动生效", "ok");
+      setBusy(false);
+      // 重新加载以确认磁盘真实内容（load 会重置 dirty 并刷新导航按钮）
       await load();
     } else {
       toast("保存失败：后端未确认写入", "err");
-      if (btn) btn.disabled = false;
+      setBusy(false);
     }
   }catch(e){
     toast("保存失败：" + (e && e.message ? e.message : e), "err");
-    if (btn) btn.disabled = false;
+    setBusy(false);
   }
 }
 async function revert(){
@@ -858,17 +903,48 @@ async function revert(){
  * ------------------------------------------------------------------ */
 async function refreshPowerStatus(){
   try{
-    // 后端直接回传解析好的字段（level/status/plugged），比抓 dumpsys 文本更稳。
+    // 后端已聚合系统电池读数与电源子系统实时快照，前端只负责渲染。
     const r = await api("/api/powerstatus");
-    const lvl = (r && r.level != null) ? String(r.level) : "";
-    const st  = (r && r.status != null) ? String(r.status) : "";
-    const set = (sel, txt)=>{ const e = $(sel); if (e) e.textContent = txt; };
-    set("#stBatt", lvl ? lvl + "%" : "\u2014");
-    set("#stCharging", (st === "2" || st === "5") ? "充电中" : "\u672a\u5145\u7535");
-    set("#stScreen", "\u2014");
-    set("#stLevel", "\u2014");
-    set("#stApplied", "\u2014");
-    set("#stFail", "\u2014");
+    if (!r || r.ok === false){ toast("读取失败：后端未返回电池数据", "err"); return; }
+    const DASH = "\u2014";
+    const set = (sel, txt)=>{ const e = $(sel); if (e) e.textContent = (txt === null || txt === undefined || txt === "") ? DASH : String(txt); };
+    const num = (v)=> (typeof v === "number" && isFinite(v)) ? v : null;
+
+    // ---- 电池读数 ----
+    const lvl = num(r.levelPercent != null ? r.levelPercent : r.level);
+    set("#stBatt", (lvl != null && lvl >= 0) ? lvl + "%" : DASH);
+    set("#stCharging", r.statusText && r.statusText !== "未知" ? r.statusText : (r.charging ? "充电中" : "放电中"));
+    set("#stPlugged", r.pluggedText || DASH);
+    set("#stScreen", r.screenOn ? "亮屏" : "息屏");
+
+    const t = num(r.temperature);
+    set("#stTemp", (t != null && t > -100) ? (t / 10).toFixed(1) + " °C" : DASH);
+
+    const v = num(r.voltage);
+    set("#stVolt", (v != null && v > 0) ? (v / 1000).toFixed(3) + " V" : DASH);
+
+    set("#stHealth", r.healthText || DASH);
+
+    const cur = num(r.currentNow);
+    set("#stCurrent", (cur != null && cur > -1000000) ? (cur / 1000).toFixed(1) + " mA" : DASH);
+
+    // ---- 省电策略运行状态 ----
+    const running = !!r.running;
+    set("#stSubsys", r.subsystemEnabled ? (running ? "运行中" : "已启用（未运行）") : "已关闭");
+    set("#stLevel", running ? (r.policyLevelText || DASH) : DASH);
+    set("#stEventDriven", running ? (r.eventDriven ? "事件驱动" : "周期兜底") : DASH);
+    set("#stKernel", running ? (r.kernelApplied ? "已降频" : "未降频") : DASH);
+    set("#stApplied", running ? (num(r.policyAppliedCount) || 0) : DASH);
+    set("#stRevert", running ? (num(r.policyRevertCount) || 0) : DASH);
+    set("#stBgRestrict", running ? (num(r.backgroundRestrictCount) || 0) : DASH);
+    set("#stFail", running ? (num(r.failOpenCount) || 0) : DASH);
+
+    const la = $("#stLastAction");
+    if (la){
+      if (running && r.lastAction){ la.textContent = "最近动作：" + r.lastAction; }
+      else if (running){ la.textContent = "最近动作：暂无（尚未触发策略切换）"; }
+      else { la.textContent = "最近动作：子系统未运行"; }
+    }
     toast("已刷新电池状态", "ok");
   }catch(e){
     toast("读取失败：" + (e && e.message ? e.message : e), "err");

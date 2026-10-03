@@ -35,3 +35,6 @@ __pycache__/
 # 内置 Python 运行时包（87MB，随模块分发但不入源码仓库；
 # 由 母版目录 持有并在 pack.sh 打包时包含）
 /Python.zip
+
+# Agent 临时工作区（不提交）
+/.tmp_work/

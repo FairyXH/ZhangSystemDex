@@ -3,8 +3,9 @@ package io.github.fairyxh.zhangsystemdex.core.rubbish
 /**
  * 全量清理规则表。规则驱动 `RubbishCleaner` 的扫描与清理。
  *
- * 数据依据：2026-10-03 真机实测占用（见 `docs/RUBBISH_CLEAN_DESIGN.md` §2）。
  * 每条规则必须有唯一 [CleanRule.id] 与 [CleanRule.switchKey]。
+ * [CleanRule.note] 为面向用户的说明文案，须保持专业、简洁、面向功能，
+ * 不得包含开发/测试阶段措辞（如“实测”“真机事故”等）。
  *
  * 红线：
  *  - 只使用真实路径（`/data/media/<u>`、`/data/user/<u>/<pkg>`），
@@ -158,7 +159,7 @@ object RubbishRuleSet {
             mode = MatchMode.UNINSTALLED_SCAN,
             roots = listOf("/data/media/<u>/Android/data"),
             switchKey = "rubbish_rule_uninstalled_leftover",
-            note = "已卸载应用的外部数据目录（**运行时逐个校验包是否仍安装**，仅清理确认已卸载的）",
+            note = "已卸载应用的外部数据目录（运行时逐个校验包是否仍安装，仅清理确认已卸载的）",
         ),
         CleanRule(
             id = "big_files_list",
@@ -214,7 +215,7 @@ object RubbishRuleSet {
                 "plugin", "plugins", "skin", "theme",
             ),
             switchKey = "rubbish_rule_apk_scan_private",
-            note = "扫描常见应用**缓存目录**中的安装包（含无后缀/改名，靠文件头识别）",
+            note = "扫描常见应用缓存目录中的安装包（含无后缀或改名，按文件头识别）",
         ),
         CleanRule(
             id = "big_files_private",
@@ -262,7 +263,7 @@ object RubbishRuleSet {
             minBytes = 1024 * 1024L,
             keepNewest = true,
             switchKey = "rubbish_rule_dup_wechat_tpc",
-            note = "微信临时目录中同名同尺寸的重复下载文件（实测 59 个相同 20MB 文件 = 1.1GB），保留最新一份",
+            note = "微信临时目录中同名同尺寸的重复下载文件，仅保留最新一份",
             targetPackage = WX,
         ),
         // ===== 泛化垃圾扫描（覆盖全部 App + 整个 /data）=====
@@ -276,7 +277,7 @@ object RubbishRuleSet {
             roots = listOf("/data/user/<u>"),
             maxDepth = 12,
             switchKey = "rubbish_rule_junk_all_apps",
-            note = "按特征（cache/logs/tmp/crash/零字节/hprof 等）扫描**全部应用**私有目录的垃圾，不限微信QQ",
+            note = "按特征（cache/logs/tmp/crash/零字节/hprof 等）扫描全部应用私有目录的垃圾，不限微信与 QQ",
         ),
         CleanRule(
             id = "junk_media_apps",
@@ -316,8 +317,7 @@ object RubbishRuleSet {
             ageDays = 7,
             maxDepth = 6,
             switchKey = "rubbish_rule_system_junk_data",
-            note = "只读扫描 /data 下**静态**日志（/data/log、dropbox、anr、tombstones 等）。" +
-                "已移除 /data/vendor/camera、/data/misc 等活系统目录（真机事故教训）",
+            note = "只读扫描 /data 下的静态日志目录（/data/log、anr、tombstones 等），不包含活系统运行时目录",
         ),
         CleanRule(
             id = "system_bcc_csv",
@@ -330,7 +330,7 @@ object RubbishRuleSet {
             pattern = "*_bcc.csv",
             maxDepth = 1,
             switchKey = "rubbish_rule_system_bcc_csv",
-            note = "内核 BCC 追踪生成的 CSV（散落在 /data 根，实测 74 个 45MB）",
+            note = "内核 BCC 追踪生成的 CSV 文件（散落在 /data 根目录）",
         ),
     )
 
@@ -353,7 +353,7 @@ object RubbishRuleSet {
                 "/data/user/<u>/com.tencent.mm/MicroMsg/xlog",
             ),
             switchKey = "rubbish_rule_wx_logs",
-            note = "微信运行日志，实测占 1GB+，可安全清理",
+            note = "微信运行日志（xlog），可安全清理",
             targetPackage = WX,
         ),
         CleanRule(
@@ -368,7 +368,7 @@ object RubbishRuleSet {
                 "/data/user/<u>/com.tencent.mm/cache/*/c2c_temp",
             ),
             switchKey = "rubbish_rule_wx_temp",
-            note = "微信临时目录，实测占 2.5GB，可安全清理",
+            note = "微信临时目录（cache/temp），可安全清理",
             targetPackage = WX,
         ),
         CleanRule(
@@ -425,7 +425,7 @@ object RubbishRuleSet {
                 "/data/user/<u>/com.tencent.mm/files/liteapp",
             ),
             switchKey = "rubbish_rule_wx_rebuildable",
-            note = "模板/资源缓存（约 1GB），清理后首次使用会重新下载",
+            note = "微信模板与资源缓存，清理后首次使用会重新下载",
             targetPackage = WX,
         ),
         CleanRule(
@@ -484,7 +484,7 @@ object RubbishRuleSet {
                 "$QQ_EXT/cache",
             ),
             switchKey = "rubbish_rule_qq_cache",
-            note = "QQ 缓存与内置浏览器缓存（XWalk 约 180MB），会自动重建",
+            note = "QQ 缓存与内置浏览器缓存（XWalk/WebView），会自动重建",
             targetPackage = QQ,
         ),
         CleanRule(
@@ -500,7 +500,7 @@ object RubbishRuleSet {
                 "$QQ_EXT/files/flash_transfer_cache",
             ),
             switchKey = "rubbish_rule_qq_media_cache",
-            note = "短视频与磁盘缓存，实测约 80MB",
+            note = "QQ 短视频与磁盘缓存，会自动重建",
             targetPackage = QQ,
         ),
         CleanRule(
@@ -530,7 +530,7 @@ object RubbishRuleSet {
                 "$QQ_EXT/Tencent/QQfile_recv",
             ),
             switchKey = "rubbish_rule_qq_file_recv",
-            note = "通过 QQ 接收的文件（约 33MB），删除后不可恢复",
+            note = "通过 QQ 接收的文件（QQfile_recv），删除后不可恢复",
             targetPackage = QQ,
         ),
         CleanRule(
@@ -545,7 +545,7 @@ object RubbishRuleSet {
                 "$QQ_EXT/Tencent/MobileQQ/photo",
             ),
             switchKey = "rubbish_rule_qq_chatpic",
-            note = "聊天图片临时文件（约 55MB）",
+            note = "QQ 聊天图片与照片临时文件",
             targetPackage = QQ,
         ),
     )

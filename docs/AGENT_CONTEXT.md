@@ -26,10 +26,11 @@
 | --- | --- | --- | --- |
 | `Main.dex`（新）| 模块目录/打包目录/仓库 | `8224b53e578ddda00bb08df900c28829` | 含 `HttpBackend`(7处)、`26437`(1处)，2358752B |
 | `Main.dex`（旧，禁用）| 备份名 `Main.dex.bak.1791001188` | `7460aaa69e082d3c8084854bbf269655` | 0处 HttpBackend，2306316B |
-| `webroot/index.html` | 打包目录/模块目录 | `a8cb7f03f947151a9247b25aea16d032` | 30475B，KernelSU WebUI 入口 |
+| `webroot/index.html`（新版 iOS 重构）| 打包目录/模块目录/仓库 | `e91f05a8fb2f280d1fefa4e422869f44` | 41302B，四 Tab iOS 底栏 UI，KernelSU WebUI 入口 |
+| `webroot/index.html`（旧版，已废弃）| 备份 `/tmp/zsd_new/index.old.bak.html` | `a8cb7f03f947151a9247b25aea16d032` | 30475B，单页滚动分组列表 |
 | `webroot/config.json` | 打包目录/模块目录 | `d01d5fc7f95f27ed10a33d1a16c1c255` | 449B，WebUI X 宿主清单 |
 
-> 切勿用旧值：`Main.dex` 若为 `7460aaa6...`、或 webroot 用 `4643...` 系列即坏包。
+> 切勿用旧值：`Main.dex` 若为 `7460aaa6...`、或 webroot 用 `4643...` / `a8cb7f03...` 系列即旧包。
 
 ## 4. 服务与部署机制
 
@@ -53,18 +54,46 @@
 - `构建WebUI.bat`：**同时**抽取并校验 `assets/webroot/index.html` + `assets/webroot/config.json`。
 - `pack.sh`：`precheck()` 要求存在 `webroot/index.html` + `webroot/config.json` + `Main.dex` 且 dex 含 `HttpBackend`，否则拒绝打包；打包后解压并逐文件 SHA256 自检比对（最多 3 次重试）。
 
+## 6.1 WebUI 重构（iOS 风格四 Tab 底栏，已完成）
+
+- 需求：重构 `webroot/index.html` → ①按功能大类分类；②加底栏；③iOS 页面设计。
+- 信息架构：四个底栏 Tab — **概览(home) / 开关(switch) / 电源(power) / 设置(settings)**。
+- 功能大类 `GROUPS`（展示层分组，重划为）：
+  - `special`（特殊默认开启，源自 `SPECIAL_DEFAULT_TRUE`）
+  - `core`（核心与系统调优）、`perf`（性能与加速）
+  - `privacy`（隐私与应用管控）、`misc`（其它与开机行为）
+- 兼容性硬保证：**48 个配置 key 逐字保留（零增删）**；全部既有 API 继续调用
+  （`/api/read|write|powerstatus|paths|reload|bglist/read|bglist/write`）；
+  `parseLine/readValue/setValue/originalValue` 的 **last-wins** 语义与 daemon `ConfigManager.loadSwitches` 一致。
+- 视觉：大标题导航栏、圆角分组列表、iOS 开关(.sw)、毛玻璃底栏(backdrop-filter blur)、
+  `env(safe-area-inset-*)` 安全区、`color-scheme:light dark` 亮暗自适应、Toast、底栏徽标。
+- 构建硬约束（新 UI 必须满足）：含 `KSU` 串（保留 `const KSU="webui-x://http-backend"`，实测 4 处）、
+  以 `</html>` 结尾、>1000B（实测 41302B）、`config.json` 含 `title`。
+- 源码分片位置：`/tmp/zsd_new/part1..6c`（合并脚本：`cat part1.html part2.html part3.html
+  part4.html part5.html part6a.js part6b.js part6c.js > index.html`）。
+- 静态校验全绿：`node --check`(SYNTAX OK)、key 覆盖 48=48 零差异、38 个 HTML id × 24 个 JS 引用零缺失、
+  32 个函数定义/调用自洽。
+- commit：`d6a9530`（feat(webui)，已完成，待 push）。
+
 ## 7. 已完成与验证结论
 
 - [x] 根因① webroot 缺失 → 已补齐（打包目录 + 模块目录，md5 一致）。
 - [x] 根因② 设备运行旧 dex → 已部署新 dex（`8224b53e...`）并重启守护进程（PID 4726→4802）。
 - [x] HTTP 后端端到端验证通过：`ss` 显示 `[::ffff:127.0.0.1]:26437` LISTEN(pid=4802)；`/api/ping`→`{"ok":true,"code":0,"result":"pong"}`；`/api/powerstatus` 实时数据；`/`→HTTP 200；`/api/paths`→`port:26437,pid:4802`。
 - [x] 三脚本加固并提交：commit `284518f`（已 push）。
-- [x] Ubuntu 重打包成功：`/sdcard/Download/Files/ZhangProtect-Android.zip`（345,762,753 字节，136 条目/88 文件），含正确 `webroot/*` 与新 `Main.dex`；`pack.sh` 内部 SHA256 自检通过。zip SHA256：`5e802df0505823f80502defc5ed029c5a0f4dc75c61ed449283dca33ddc62a60`。
+- [x] Ubuntu 重打包成功（**旧版 UI**）：zip SHA256 `5e802df0...`（对照用，已被下述新版取代）。
+- [x] **WebUI iOS 重构完成并落地两处**（仓库 assets + `/sdcard` 打包目录），md5 均为 `e91f05a8fb2f280d1fefa4e422869f44`；commit `d6a9530`。
+- [x] **Ubuntu 重打包成功（新版 UI）**：`/sdcard/Download/Files/ZhangProtect-Android.zip`
+  （**345,764,874 字节**），含新 `webroot/index.html`(41302B) + `config.json` + 新 `Main.dex`。
+  - `unzip -t` 无错误；zip 内 `webroot/index.html` md5 = 源 md5 = `e91f05a8...`；
+  - **逐文件 SHA256 全量比对（88/88 文件）IDENTICAL**（等价于 `pack.sh` 自检通过）；
+  - **zip SHA256：`e30d649dd71c461e2dd6de5796492a18a975c5b966b1a808f49e4ca919336183`**。
 
 ## 8. 待办 / 下一步
 
-- [ ] 用上述 zip 重刷设备，做 KernelSU/WebUI 最终端到端确认。
-- [ ] 回滚：用 `Main.dex.bak.1791001188` 恢复旧 dex。
+- [ ] 用新 zip（SHA256 `e30d649d...`）重刷设备，做 KernelSU/WebUI 最终端到端确认（四 Tab 渲染 + 数据写入）。
+- [ ] push commit `d6a9530` 到 origin/main。
+- [ ] 回滚：用 `Main.dex.bak.1791001188` 恢复旧 dex；UI 回滚用 `/tmp/zsd_new/index.old.bak.html`。
 - [ ] 可选：`pack.sh` 目前“打包当前目录所有文件，无忽略”→ 产物含 README/shfmt/aapt 等，体积偏大；如需精简可加排除清单（注意与全量 SHA256 校验逻辑相互影响）。
 
 ## 9. 注意事项 / 易踩的坑

@@ -374,7 +374,51 @@ zip 内无 `__pycache__`。
 - 产物 `/data/media/0/Download/Files/ZhangProtect-Android.zip`（约 330 MB，含 system/ 内 APK）
 - 工程 `/home/projects/ZhangSystemDex` 的 `pack.sh` + `tools/` 与母版**保持一致**（进 Git）
 
-### 10.11 待办 / 可选增强
+### 10.11 内置 Python 运行时整合（2026-10-03，来自 Python_for_Android-3.13.5）
+
+**背景纠正**：`/system/bin/python3` **不是系统自带**，而是 `PythonforAndroid`
+模块挂载的包装脚本（本体 `/data/Python`）。因此上一版 `pack.sh` 仍**隐式依赖**
+该模块存在。本轮回合把它整合进 Zhang 模块。
+
+**整合内容**：
+
+1. **运行时包** `Python.zip`（母版目录，随 zip 分发，**不入 Git**）
+   - 真实内层运行时：87 MB / 8751 文件 / 解压 **270 MB**
+   - 含 `Python/bin/python3.13` + `Python/lib/libpython3.13.so`
+   - md5 `921bc3c63b36919de907f80d374c9a7c`
+   - 来源说明见 `tools/README-Python.md`
+
+2. **`service.sh` 新增 `ensure_python()`**：开机检查 `/data/Python`，
+   缺失则 `unzip Python.zip -d /data` + `chmod -R 755`；已存在则零开销跳过。
+
+3. **`tools/python3`**（模块自带入口）：设 `PYTHONHOME` + `LD_LIBRARY_PATH`
+   后 exec `python3.13`。
+
+4. **`pack.sh` 探测链**：`tools/python3` → 动态包装 `/data/Python` →
+   `/system/bin/python3` → PATH → 其它；新增运行时自检。
+
+**⚠️ 三个关键坑（勿踩）**：
+
+| 坑 | 现象 | 正解 |
+|---|---|---|
+| 用错包 | `Python_for_Android-*.zip` 是**模块外壳**，解压得 `module.prop`/`META-INF` | 必须用其**内层** `Python.zip`；判别 `unzip -l X \| grep bin/python3.13` |
+| 缺 LD_LIBRARY_PATH | 直接调 `/data/Python/bin/python3.13` → `CANNOT LINK EXECUTABLE: libpython3.13.so not found` | 必须 `LD_LIBRARY_PATH=/data/Python/lib`（`tools/python3` 已处理） |
+| FUSE 无执行位 | `/data/media` 下 `[ -x file ]` 恒为假 | 探测用 `-f`，执行用 `sh <脚本>` |
+
+**与独立 Python 模块共存**：两者释放位置相同（`/data/Python`）、内容同源，
+无冲突——`PythonforAndroid` 已解压时 Zhang 的 `ensure_python()` 直接跳过。
+
+**真机验证**：
+- 隔离测试：从模块 `Python.zip` 解压 8751 文件 / 270 MB（2s），
+  隔离运行时跑 `zippack.py` 成功（权限 0755/0644 正确）
+- 端到端：`sh pack.sh` 走 `tools/python3` 分支一次通过，92 文件、
+  558,559,253 → 430,108,449 字节、33s、SHA256 全部一致
+- 产物含 `Python.zip`(87MB) + `tools/` 三件套 + `Main.dex` + `webroot`；`unzip -t` 零错误
+
+**当前产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+（430,108,449 字节 ≈ 410 MB，92 文件 + 目录条目）
+
+### 10.12 待办 / 可选增强
 
 - [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
 - [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为

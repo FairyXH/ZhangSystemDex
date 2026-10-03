@@ -160,8 +160,10 @@ core/rubbish/
   UserGuardRules.kt    用户违禁词/违禁路径（rubbish_guard.conf，只增拒绝）
   AuditLog.kt          审计日志 log/rubbish_clean.log（不受 log_enabled 影响）
   CleanRule.kt         规则数据结构（RiskLevel / MatchMode / RuleGroup）
-  RubbishRuleSet.kt    全量规则表（通用 10 + 微信 7 + QQ 6 = 23 条）
-  RubbishCleaner.kt    只读扫描 + 规则驱动删除 + JSON 序列化
+  RubbishRuleSet.kt    全量规则表（通用 10 + 深度 4 + 微信 7 + QQ 6 = 27 条）
+  RubbishCleaner.kt    只读扫描 + 规则驱动删除 + 深度扫描 + JSON 序列化
+  FileIdentifier.kt    ★ 文件头识别（APK/ZIP 魔数 + 中央目录）+ SHA-256
+  ScanCache.kt         ★ 深度扫描索引（首次全扫，之后仅扫变动）
   JsonBuilder.kt       嵌套 JSON 构建（HttpBackend MiniJson 不支持嵌套）
 modules/SystemTuningModule.heavyTick()  定时清理入口
 DebugMenu 27/28/29    只读扫描 / 按开关清理 / 审查自检
@@ -216,7 +218,49 @@ SelfTest.rubbishChecks()  10 项只读回归
 3. **normalize 逃逸**：`/data/media/0/Download/../../adb` → `/data/media/adb` 曾被接受。
    修复：`/data/media`、`/data/user` 之下必须紧跟数字用户目录。
 
-### 10.7 待办 / 可选增强
+### 10.7 深度扫描（2026-10-03 新增，已真机验证）
+
+针对「软件偷偷下载 APK」的需求，新增 4 种扫描模式 + 5 条规则。
+
+**核心组件**
+
+| 组件 | 职责 |
+|---|---|
+| `FileIdentifier` | 文件头识别：ZIP 魔数 `PK\x03\x04` + 中央目录含 `AndroidManifest.xml` → 判定 APK。**不看扩展名**，可发现 `.tmp`/无后缀/改名的安装包。另有 SHA-256 内容哈希 |
+| `ScanCache` | 扫描索引存 `<rootDir>/rubbish_index/<ruleId>.idx`，格式 `kind\tpath\tsize\tmtime`。命中（size+mtime 未变）即复用，不重读文件头 |
+| `RubbishCleaner.scanDeep/cleanDeep` | 深度模式扫描与删除；删除后 `cache.invalidate(ruleId)` 强制重扫 |
+
+**规则表（DEEP 分组）**
+
+| 规则 | 模式 | 风险 | 默认 | 说明 |
+|---|---|---|---|---|
+| `apk_scan_media` | APK_SCAN | MEDIUM | 关 | 全 media 递归，文件头识别 APK，已排除模块自身与资源包目录 |
+| `apk_scan_private` | APK_SCAN | MEDIUM | **开** | 常见应用**缓存目录**中的安装包 |
+| `big_files_private` | BIG_FILE_SCAN | LOW | 关 | 私有目录 >50MB 文件**仅列出不删**（`listOnly=true`） |
+| `dup_files_media` | DUP_CONTENT | HIGH | 关 | 尺寸+哈希去重，每组保留最新 |
+| `dup_wechat_tpc` | DUP_SAME_SIZE | LOW | **开** | 微信 `cache/temp/TPCFile` 重复下载（实测 59 个相同 20MB = 1.1GB） |
+
+**安全加固（本轮）**
+
+1. `RubbishGuard.isForbiddenPath()`：**扫描阶段预筛**，避免模块自身 APK/系统目录计入候选
+   （原 `apk_scan_media` 误报 41 个含 37 个模块自身 APK → 修复后 1 个）
+2. 模块自身路径加入默认违禁：`ZhangProtect-Android`、`ZhangSetting`、`appsearch.apk`
+3. `FORBIDDEN_PREFIX` 改为**前缀匹配**（原仅精确匹配，拦不住子路径）
+4. `ALLOWED_ROOTS` 豁免：`/data/anr`、`/data/tombstones`、`/data/system/dropbox` 的
+   **内容**可清理，但 `/data/adb`、`/data/system` 其他部分仍拒绝
+5. 移除 `.nomedia` 违禁词（媒体扫描标记，删除无害；曾误拒 32 次）
+
+**真机实测（2026-10-03）**
+
+- 审查自检 **17/17 PASS**（安全边界未回归）
+- 文件头识别：手造 `_zhang_test_disguised.tmp`（10,627,230B，无 .apk 后缀）→ 正确识别为 APK
+- **真实清理**：该伪装 APK 被删除，审计日志 `apk_scan_media 1/10627230 rejected=0`
+- 增量缓存：索引 11,312 条目；全量扫描 2005ms，缓存命中即时
+- 精准过滤：`apk_scan_media` 41 → 1 个（排除模块自身 37 个 + 资源包 3 个）
+- 揪出的真实伪装文件样本：`点击助手_xxx.APK`（真 APK）、酷狗 `skin_*.ks`、
+  百度网盘 `dark_theme.skin`、网易 `mpay.pkg`（后三者为应用资源包，已加入 keep 排除）
+
+### 10.8 待办 / 可选增强
 
 - [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
 - [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为

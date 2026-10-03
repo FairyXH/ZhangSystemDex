@@ -105,6 +105,7 @@ class HttpBackend(
         if (parts.size < 2) return
         val method = parts[0].uppercase()
         val rawTarget = parts[1]
+        Logger.i(name, "请求 $method $rawTarget")
 
         // Read headers, tracking Content-Length for POST bodies.
         var contentLength = 0
@@ -136,7 +137,13 @@ class HttpBackend(
         val query = if (qIdx >= 0) parseQuery(rawTarget.substring(qIdx + 1)) else emptyMap()
 
         val result: String = try {
-            route(method, path, query, body)
+            // CORS preflight: Chromium sends OPTIONS before a POST that carries
+            // Content-Type: application/json. Answer it directly with 2xx and the
+            // full CORS header set (no JSON error body) so the follow-up POST is
+            // allowed. Previously OPTIONS fell through to route() -> jsonError,
+            // which still returned HTTP 200 and looked fine in curl, but some
+            // WebView builds reject a preflight whose body/headers look wrong.
+            if (method == "OPTIONS") "" else route(method, path, query, body)
         } catch (t: Throwable) {
             Logger.e(name, "路由异常 $path", t)
             jsonError("内部错误: ${t.message}")
@@ -679,6 +686,13 @@ class HttpBackend(
             append("Access-Control-Allow-Origin: *\r\n")
             append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
             append("Access-Control-Allow-Headers: Content-Type\r\n")
+            // Chrome Private Network Access: a page served from a public / opaque
+            // origin (file://, webui-x://) that calls a loopback address must be
+            // granted this header on BOTH the preflight and the real response,
+            // otherwise Chromium silently blocks the request. This is the reason
+            // GET /api/paths worked while POST /api/write never reached the daemon.
+            append("Access-Control-Allow-Private-Network: true\r\n")
+            append("Vary: Origin\r\n")
             append("Cache-Control: no-store\r\n")
             append("Connection: close\r\n\r\n")
         }

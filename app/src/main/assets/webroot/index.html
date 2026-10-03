@@ -677,11 +677,13 @@ function setBusy(b){
 function refreshNav(){
   const dis = !loaded || busy;
   const hasDirty = dirtyKeys.size > 0;
-  const save = $("#btnSave");   if (save)  save.disabled  = dis || !hasDirty;
+  // 「保存」永远可点：用户明确要求保存按钮不要因无改动/忙而被禁用（此前会被
+  // 置灰/变黑导致误以为无法保存）。点击时若确实无改动会给出提示。
+  const save = $("#btnSave");   if (save)  save.disabled  = false;
   const rel  = $("#btnReload"); if (rel)   rel.disabled   = dis;
-  const rv   = $("#btnRevert"); if (rv)    rv.disabled    = dis || !hasDirty;
+  const rv   = $("#btnRevert"); if (rv)    rv.disabled    = false;
   const r2   = $("#btnReload2");if (r2)    r2.disabled    = dis;
-  const rv2  = $("#btnRevert2");if (rv2)   rv2.disabled   = dis || !hasDirty;
+  const rv2  = $("#btnRevert2");if (rv2)   rv2.disabled   = false;
 }
 
 /* 兼容旧调用名：setNavBusy(true) 表示忙碌。 */
@@ -855,6 +857,27 @@ function markDirty(key, cell){
   else { dirtyKeys.delete(key); }
   cell.classList.toggle("modified", changed);
   updateDirtyCount();
+  scheduleAutoSave();
+}
+/* ------------------------------------------------------------------ *
+ * 自动保存：开关/数值改动后 2 秒自动落盘（去抖），保存按钮同时保留。
+ * ------------------------------------------------------------------ *
+ * 用户明确要求：切换开关后 2 秒自动保存，同时保留“保存”按钮且按钮永远可点。
+ * 实现要点：
+ *   - 每次 markDirty 重新计时（去抖），连续操作只在停止 2 秒后保存一次；
+ *   - 无改动时不触发；正在加载/保存中则顺延；
+ *   - 保存成功后由 save() 内部重新 load()，dirty 复位并刷新界面。
+ */
+let autoSaveTimer = null;
+function scheduleAutoSave(){
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(()=>{
+    autoSaveTimer = null;
+    if (!loaded) return;
+    if (busy){ scheduleAutoSave(); return; }
+    if (dirtyKeys.size === 0) return;
+    save({ auto:true });
+  }, 2000);
 }
 function updateDirtyCount(){
   const n = dirtyKeys.size;
@@ -866,9 +889,10 @@ function updateDirtyCount(){
 /* ------------------------------------------------------------------ *
  * 保存 / 撤销
  * ------------------------------------------------------------------ */
-async function save(){
-  if (!loaded){ toast("配置尚未加载完成", "err"); return; }
-  if (dirtyKeys.size === 0){ toast("没有需要保存的改动", "err"); return; }
+async function save(opts){
+  opts = opts || {};
+  if (!loaded){ if (!opts.auto) toast("配置尚未加载完成", "err"); return; }
+  if (dirtyKeys.size === 0){ if (!opts.auto) toast("没有需要保存的改动", "err"); return; }
   setBusy(true);
   const text = lines.join("\n") + "\n";
   const file = ROOT_DIR + "/switches.conf";
@@ -880,7 +904,7 @@ async function save(){
       try { await api("/api/reload"); } catch(_){}
       dirtyKeys = new Set();
       $$(".cell.modified").forEach(c=> c.classList.remove("modified"));
-      toast("已保存，daemon 将在 60 秒内自动生效", "ok");
+      toast(opts.auto ? "已自动保存" : "已保存，daemon 将在 60 秒内自动生效", "ok");
       setBusy(false);
       // 重新加载以确认磁盘真实内容（load 会重置 dirty 并刷新导航按钮）
       await load();

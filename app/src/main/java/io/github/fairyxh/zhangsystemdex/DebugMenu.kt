@@ -19,6 +19,9 @@ import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
 import io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer
 import io.github.fairyxh.zhangsystemdex.core.power.PowerPolicyEngine
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishRuleSet
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -59,6 +62,9 @@ object DebugMenu {
         println("24. 电源优化：立即评估一次（真实施加/回滚，输出统计）")
         println("25. 电源优化：查看状态快照（只读，不施加）")
         println("26. 电源优化：查看决策表（纯计算，不产生副作用）")
+        println("27. 垃圾清理：只读扫描（统计各类可清理空间）")
+        println("28. 垃圾清理：按当前开关执行一次清理（真删）")
+        println("29. 垃圾审查：自检路径审查（验证 RubbishGuard 拒绝逻辑）")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -156,6 +162,48 @@ object DebugMenu {
                 21 -> {
                     val removed = SkipMountGuardModule(ctx).runOnce()
                     Logger.i("DebugMenu", "模块目录防护检查完成，删除残留文件 $removed 个")
+                }
+                27 -> {
+                    val cleaner = RubbishCleaner(ctx.config)
+                    Logger.i("DebugMenu", "垃圾清理规则数: ${RubbishRuleSet.ALL.size}")
+                    val s = cleaner.scan()
+                    Logger.i("DebugMenu", "垃圾扫描: 文件=${s.totalFiles} 字节=${s.totalBytes}")
+                    s.results.forEach { r ->
+                        Logger.i(
+                            "DebugMenu",
+                            "  [${r.risk}] ${r.ruleId} ${r.name}: ${r.files} 文件 / ${r.bytes} B" +
+                                (if (r.skipped) "（跳过: ${r.skipReason}）" else "")
+                        )
+                    }
+                }
+                28 -> {
+                    if (!ctx.config.switch("rubbish_clean_enable")) {
+                        Logger.w("DebugMenu", "rubbish_clean_enable=false，已拦截（请在 WebUI 或 switches.conf 开启）")
+                    } else {
+                        val s = RubbishCleaner(ctx.config).clean()
+                        Logger.i("DebugMenu", "垃圾清理执行: 文件=${s.totalFiles} 字节=${s.totalBytes}")
+                        s.results.forEach { r ->
+                            Logger.i("DebugMenu", "  ${r.ruleId}: 删除 ${r.files} 文件 / ${r.bytes} B，拒绝 ${r.rejected.size}")
+                        }
+                    }
+                }
+                29 -> {
+                    Logger.i("DebugMenu", "垃圾审查自检:")
+                    val cases = listOf(
+                        "/" to false, "/data" to false, "/data/media" to false,
+                        "/data/adb" to false, "/data/system/dropbox" to false,
+                        "/data/media/0/../.." to false,
+                        "/data/user/0/com.tencent.mm/cache/temp" to true,
+                        "/data/media/0/Android/data/com.tencent.mm/cache/Cache" to true,
+                        "/data/media/0/Download/../../adb" to false,
+                    )
+                    for ((p, expect) in cases) {
+                        val v = RubbishGuard.check(p, "selftest")
+                        val accepted = v is RubbishGuard.Verdict.Accept
+                        val ok = accepted == expect
+                        val reason = if (v is RubbishGuard.Verdict.Reject) v.reason else "放行"
+                        Logger.i("DebugMenu", "  ${if (ok) "PASS" else "FAIL"} $p -> ${if (accepted) "接受" else "拒绝"}（$reason）")
+                    }
                 }
                 else -> Logger.w("DebugMenu", "未识别输入: $line")
             }

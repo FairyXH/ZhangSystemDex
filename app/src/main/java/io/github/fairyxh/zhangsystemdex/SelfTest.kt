@@ -24,6 +24,10 @@ import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RiskLevel
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishRuleSet
 import java.io.File
 
 /**
@@ -80,6 +84,7 @@ object SelfTest {
         toolChecks(s, ctx)
         moduleChecks(s, ctx)
         powerChecks(s, ctx)
+        rubbishChecks(s, ctx)
         s.print()
         Logger.i("SelfTest", "自测完成: 通过=${s.pass} 失败=${s.fail} 警告=${s.warn} 跳过=${s.skip}")
         return s
@@ -593,6 +598,158 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("电源.停名单文件存在", Status.FAIL, t.message ?: "")
+        }
+    }
+
+    // ---------- rubbish cleaning subsystem ----------
+    //
+    // Safety: everything here is read-only or uses the pure audit API. No file
+    // is ever deleted: we only assert the guard REJECTS dangerous paths and
+    // ACCEPTS legitimate ones. The scanning API is exercised but scan() never
+    // deletes by design.
+    private fun rubbishChecks(s: Summary, ctx: DexContext) {
+        // 1) Rule table integrity: ids unique, switch keys present.
+        try {
+            val all = RubbishRuleSet.ALL
+            val ids = all.map { it.id }
+            val dup = ids.groupingBy { it }.eachCount().filter { it.value > 1 }.keys
+            val noSwitch = all.filter { it.switchKey.isEmpty() }
+            s.add(
+                "清理.规则表完整性",
+                if (dup.isEmpty() && noSwitch.isEmpty() && all.size >= 20) Status.PASS else Status.FAIL,
+                "规则数=${all.size} 重复id=$dup 缺开关=${noSwitch.map { it.id }}"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.规则表完整性", Status.FAIL, t.message ?: "")
+        }
+
+        // 2) 风险分级：低风险默认开、中高风险默认关。
+        try {
+            val bad = RubbishRuleSet.ALL.filter { r ->
+                (r.risk == RiskLevel.LOW && !r.defaultOn) || (r.risk != RiskLevel.LOW && r.defaultOn)
+            }
+            s.add(
+                "清理.风险分级默认值",
+                if (bad.isEmpty()) Status.PASS else Status.FAIL,
+                if (bad.isEmpty()) "低风险全默认开、中高风险全默认关" else "异常: ${bad.map { it.id }}"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.风险分级默认值", Status.FAIL, t.message ?: "")
+        }
+
+        // 3) 审查链：危险路径必须被拒绝（这是安全核心，必须全 PASS）。
+        try {
+            val mustReject = listOf(
+                "/", "/data", "/data/media", "/data/user", "/data/data",
+                "/data/adb", "/data/system", "/data/system/dropbox",
+                "/system", "/vendor", "/sdcard", "/storage/emulated/0",
+                "/data/media/0/../..",
+                "/data/media/0/Download/../../adb",
+                "/data/user/0/com.tencent.mm/MicroMsg/x/EnMicroMsg.db",
+                "/data/user/0/com.tencent.mm/shared_prefs/x.xml",
+            )
+            val failed = mustReject.filter { RubbishGuard.check(it, "selftest") !is RubbishGuard.Verdict.Reject }
+            s.add(
+                "清理.审查拒绝危险路径",
+                if (failed.isEmpty()) Status.PASS else Status.FAIL,
+                if (failed.isEmpty()) "${mustReject.size}/${mustReject.size} 全部拒绝"
+                else "未拒绝: $failed"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.审查拒绝危险路径", Status.FAIL, t.message ?: "")
+        }
+
+        // 4) 审查链：合法清理路径必须被接受。
+        try {
+            val mustAccept = listOf(
+                "/data/user/0/com.tencent.mm/cache/temp",
+                "/data/user/0/com.tencent.mm/files/xlog",
+                "/data/media/0/Android/data/com.tencent.mm/cache/Cache",
+                "/data/media/0/Android/data/com.tencent.mobileqq/Tencent/MobileQQ/shortvideo",
+                "/data/media/0/Download",
+            )
+            val failed = mustAccept.filter { RubbishGuard.check(it, "selftest") !is RubbishGuard.Verdict.Accept }
+            s.add(
+                "清理.审查接受合法路径",
+                if (failed.isEmpty()) Status.PASS else Status.FAIL,
+                if (failed.isEmpty()) "${mustAccept.size}/${mustAccept.size} 全部接受"
+                else "被误拒: $failed"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.审查接受合法路径", Status.FAIL, t.message ?: "")
+        }
+
+        // 5) 用户自定义违禁词生效。
+        try {
+            RubbishGuard.loadUserRules(File(ctx.config.rootDir, "rubbish_guard.conf").path)
+            val rules = RubbishGuard.userRules()
+            val wordOk = rules.denyWords.any { it.contains("EnMicroMsg", ignoreCase = true) }
+            s.add(
+                "清理.用户审查规则加载",
+                if (rules.denyPaths.isNotEmpty() && rules.denyWords.isNotEmpty()) Status.PASS else Status.WARN,
+                "denyPath=${rules.denyPaths.size} denyWord=${rules.denyWords.size} 含EnMicroMsg=$wordOk"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.用户审查规则加载", Status.FAIL, t.message ?: "")
+        }
+
+        // 6) 只读扫描可用（不删除任何文件）。
+        try {
+            val c = RubbishCleaner(ctx.config)
+            val summary = c.scan(ruleIds = listOf("wx_logs", "qq_logs"))
+            s.add(
+                "清理.只读扫描",
+                Status.PASS,
+                "规则=${summary.results.size} 文件=${summary.totalFiles} 字节=${summary.totalBytes}（未删除）"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.只读扫描", Status.FAIL, t.message ?: "")
+        }
+
+        // 7) 配置键齐备（低风险规则 + 总开关）。
+        try {
+            val keys = listOf(
+                "rubbish_clean_enable", "rubbish_clean_screen_off_only",
+                "rubbish_rule_app_cache", "rubbish_rule_temp_files",
+                "rubbish_rule_wx_logs", "rubbish_rule_wx_temp",
+                "rubbish_rule_qq_logs", "rubbish_rule_qq_cache",
+                "rubbish_rule_wx_chat_media", "rubbish_rule_qq_file_recv",
+            )
+            val missing = keys.filter { ctx.config.getString(it, "").isNullOrEmpty() }
+            s.add(
+                "清理.配置键齐备",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                if (missing.isEmpty()) "${keys.size}/${keys.size} 已在 switches.conf" else "缺失: $missing"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.配置键齐备", Status.FAIL, t.message ?: "")
+        }
+
+        // 8) 审计日志目录可用。
+        try {
+            val p = RubbishGuard.auditLog().filePath()
+            s.add("清理.审计日志就绪", Status.PASS, p)
+        } catch (t: Throwable) {
+            s.add("清理.审计日志就绪", Status.FAIL, t.message ?: "")
+        }
+
+        // 9) 审查配置文件存在（用户可编辑）。
+        try {
+            val f = File(ctx.config.rootDir, "rubbish_guard.conf")
+            s.add(
+                "清理.审查配置文件存在",
+                if (f.exists()) Status.PASS else Status.WARN,
+                f.path
+            )
+        } catch (t: Throwable) {
+            s.add("清理.审查配置文件存在", Status.FAIL, t.message ?: "")
+        }
+
+        // 10) 真正的清理执行：安全门控（需显式开启总开关）。
+        if (!ctx.config.switch("rubbish_clean_enable")) {
+            s.add("清理.执行清理", Status.SKIP, "rubbish_clean_enable=false（安全门控，避免自测真删）")
+        } else {
+            s.add("清理.执行清理", Status.WARN, "总开关已开，自测不主动执行删除；请用调试菜单 28 单独验证")
         }
     }
 }

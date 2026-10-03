@@ -193,6 +193,8 @@ class ConfigManager(private val modDir: String) {
         if (switches["power_screen_off_restrict_bg"] == null) {
             missing.add("power_screen_off_restrict_bg=false\t# 灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）")
         }
+        // ===== 垃圾清理（新增，缺失键按默认值追加；低风险规则默认 true）=====
+        appendRubbishMissing(missing)
         if (missing.isEmpty()) return
         try {
             val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
@@ -206,6 +208,50 @@ class ConfigManager(private val modDir: String) {
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "追加 switches.conf 参数失败: ${t.message}")
         }
+    }
+
+    /**
+     * 垃圾清理相关键的 migration：只追加完全缺失的键，绝不覆盖已有值。
+     * 低风险规则默认 true（加入 SPECIAL_DEFAULT_TRUE），中高风险默认 false。
+     */
+    private fun appendRubbishMissing(missing: MutableList<String>) {
+        fun add(key: String, def: String, desc: String) {
+            if (switches[key] == null) missing.add("$key=$def\t# $desc")
+        }
+        // 总开关与参数
+        add("rubbish_clean_enable", "false", "垃圾清理总开关")
+        add("rubbish_clean_screen_off_only", "true", "定时清理仅在息屏时执行")
+        add("rubbish_force_when_running", "false", "目标应用运行中仍强制清理")
+        add("rubbish_big_file_mb", "100", "大文件扫描阈值（MB）")
+        add("rubbish_wx_chat_media_days", "30", "微信聊天媒体保留天数")
+        // 通用低风险（默认 true）
+        add("rubbish_rule_app_cache", "true", "清理应用缓存目录内容")
+        add("rubbish_rule_thumbnails", "true", "清理媒体缩略图缓存")
+        add("rubbish_rule_temp_files", "true", "清理临时/未完成文件")
+        add("rubbish_rule_empty_dirs", "true", "清理空目录与 0 字节文件")
+        add("rubbish_rule_system_crash_logs", "true", "清理系统崩溃日志")
+        add("rubbish_rule_app_logs", "true", "清理应用日志目录")
+        // 通用中风险（默认 false）
+        add("rubbish_rule_apk_leftover", "false", "清理 APK 安装包")
+        add("rubbish_rule_ad_cache", "false", "清理广告缓存")
+        add("rubbish_rule_uninstalled_leftover", "false", "清理卸载残留")
+        add("rubbish_rule_big_files_list", "false", "扫描大文件（仅列出）")
+        // 微信低风险（默认 true）
+        add("rubbish_rule_wx_logs", "true", "微信专清：日志 xlog")
+        add("rubbish_rule_wx_temp", "true", "微信专清：临时缓存 cache/temp")
+        add("rubbish_rule_wx_webview_cache", "true", "微信专清：WebView/小程序缓存")
+        add("rubbish_rule_wx_media_cache", "true", "微信专清：外置媒体缓存")
+        // 微信中高风险（默认 false）
+        add("rubbish_rule_wx_rebuildable", "false", "微信专清：模板与资源缓存（中风险）")
+        add("rubbish_rule_wx_chat_media", "false", "微信专清：聊天媒体按时间（高风险）")
+        // QQ 低风险（默认 true）
+        add("rubbish_rule_qq_logs", "true", "QQ 专清：日志")
+        add("rubbish_rule_qq_cache", "true", "QQ 专清：缓存与 XWalk/WebView")
+        add("rubbish_rule_qq_media_cache", "true", "QQ 专清：外置媒体缓存")
+        // QQ 中风险（默认 false）
+        add("rubbish_rule_qq_miniapp", "false", "QQ 专清：小程序与 TBS 缓存（中风险）")
+        add("rubbish_rule_qq_file_recv", "false", "QQ 专清：接收的文件（中风险）")
+        add("rubbish_rule_qq_chatpic", "false", "QQ 专清：聊天图片临时文件（中风险）")
     }
 
     private fun writeSwitches() {
@@ -240,6 +286,34 @@ class ConfigManager(private val modDir: String) {
             sb.append("power_screen_off_cpu_cap=false\t# 灭屏时限制 CPU 最高频率（true/false，默认 false，退出即还原）\n")
             sb.append("power_screen_off_cpu_cap_percent=70\t# 灭屏时 CPU 最高频率上限百分比（1-100，默认 70）\n")
             sb.append("power_screen_off_restrict_bg=false\t# 灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）\n")
+            sb.append("\n# ===== 垃圾清理 =====\n")
+            sb.append("rubbish_clean_enable=false\t# 垃圾清理总开关\n")
+            sb.append("rubbish_clean_screen_off_only=true\t# 定时清理仅在息屏时执行\n")
+            sb.append("rubbish_force_when_running=false\t# 目标应用运行中仍强制清理\n")
+            sb.append("rubbish_big_file_mb=100\t# 大文件扫描阈值（MB）\n")
+            sb.append("rubbish_wx_chat_media_days=30\t# 微信聊天媒体保留天数\n")
+            sb.append("rubbish_rule_app_cache=true\t# 清理应用缓存目录内容\n")
+            sb.append("rubbish_rule_thumbnails=true\t# 清理媒体缩略图缓存\n")
+            sb.append("rubbish_rule_temp_files=true\t# 清理临时/未完成文件\n")
+            sb.append("rubbish_rule_empty_dirs=true\t# 清理空目录与 0 字节文件\n")
+            sb.append("rubbish_rule_system_crash_logs=true\t# 清理系统崩溃日志\n")
+            sb.append("rubbish_rule_app_logs=true\t# 清理应用日志目录\n")
+            sb.append("rubbish_rule_apk_leftover=false\t# 清理 APK 安装包（中风险）\n")
+            sb.append("rubbish_rule_ad_cache=false\t# 清理广告缓存（中风险）\n")
+            sb.append("rubbish_rule_uninstalled_leftover=false\t# 清理卸载残留（中风险）\n")
+            sb.append("rubbish_rule_big_files_list=false\t# 扫描大文件（仅列出）\n")
+            sb.append("rubbish_rule_wx_logs=true\t# 微信专清：日志 xlog\n")
+            sb.append("rubbish_rule_wx_temp=true\t# 微信专清：临时缓存 cache/temp\n")
+            sb.append("rubbish_rule_wx_webview_cache=true\t# 微信专清：WebView/小程序缓存\n")
+            sb.append("rubbish_rule_wx_media_cache=true\t# 微信专清：外置媒体缓存\n")
+            sb.append("rubbish_rule_wx_rebuildable=false\t# 微信专清：模板与资源缓存（中风险）\n")
+            sb.append("rubbish_rule_wx_chat_media=false\t# 微信专清：聊天媒体按时间（高风险）\n")
+            sb.append("rubbish_rule_qq_logs=true\t# QQ 专清：日志\n")
+            sb.append("rubbish_rule_qq_cache=true\t# QQ 专清：缓存与 XWalk/WebView\n")
+            sb.append("rubbish_rule_qq_media_cache=true\t# QQ 专清：外置媒体缓存\n")
+            sb.append("rubbish_rule_qq_miniapp=false\t# QQ 专清：小程序与 TBS 缓存（中风险）\n")
+            sb.append("rubbish_rule_qq_file_recv=false\t# QQ 专清：接收的文件（中风险）\n")
+            sb.append("rubbish_rule_qq_chatpic=false\t# QQ 专清：聊天图片临时文件（中风险）\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
@@ -278,6 +352,14 @@ class ConfigManager(private val modDir: String) {
         copyOrInit("app_manager/disable_app_list.conf", DEFAULT_DISABLE_APP_LIST)
         copyOrInit("app_manager/disable_app_list_onlydisable.conf", DEFAULT_DISABLE_APP_LIST_ONLY)
         File(rootDir, "CleanedRubbish").mkdirs()
+        // 垃圾清理审查规则（用户可编辑：违禁词/违禁路径；只增拒绝）
+        io.github.fairyxh.zhangsystemdex.core.rubbish.UserGuardRules
+            .ensureFile(File(rootDir, "rubbish_guard.conf"))
+        // 加载到中心化审查（RubbishGuard）
+        io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
+            .loadUserRules(File(rootDir, "rubbish_guard.conf").path)
+        // 审计日志目录（复用统一日志目录）
+        io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard.auditLog().setDir(logDir)
     }
 
     private fun copyOrInit(rel: String, defaultContent: String) {
@@ -343,7 +425,22 @@ class ConfigManager(private val modDir: String) {
             "module_appops_auth_enable",
             "skip_mount_guard_enable",
             "game_oom_protect_enable",
-            "power_charging_release"
+            "power_charging_release",
+            // ===== 垃圾清理：低风险规则默认开启（用户要求） =====
+            "rubbish_rule_app_cache",
+            "rubbish_rule_thumbnails",
+            "rubbish_rule_temp_files",
+            "rubbish_rule_empty_dirs",
+            "rubbish_rule_system_crash_logs",
+            "rubbish_rule_app_logs",
+            "rubbish_rule_wx_logs",
+            "rubbish_rule_wx_temp",
+            "rubbish_rule_wx_webview_cache",
+            "rubbish_rule_wx_media_cache",
+            "rubbish_rule_qq_logs",
+            "rubbish_rule_qq_cache",
+            "rubbish_rule_qq_media_cache",
+            "rubbish_clean_screen_off_only"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
@@ -394,7 +491,42 @@ class ConfigManager(private val modDir: String) {
             "power_screen_off_cpu_cap" to "灭屏时限制 CPU 最高频率（true/false，默认 false，退出即还原）",
             "power_screen_off_cpu_cap_percent" to "灭屏时 CPU 最高频率上限百分比（1-100，默认 70）",
             "power_screen_off_restrict_bg" to "灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）",
-            "power_charging_release" to "充电时自动退出省电策略并还原临时调度状态（true/false，默认 true）"
+            "power_charging_release" to "充电时自动退出省电策略并还原临时调度状态（true/false，默认 true）",
+
+            // ===== 垃圾清理（新增） =====
+            "rubbish_clean_enable" to "垃圾清理总开关（开启后按下方各规则开关执行；关闭时完全不扫描不删除）",
+            "rubbish_clean_screen_off_only" to "定时清理仅在息屏时执行（true/false，默认 true）",
+            "rubbish_force_when_running" to "目标应用运行中仍强制清理（true/false，默认 false=跳过，避免微信/QQ 运行中删文件异常）",
+            "rubbish_big_file_mb" to "大文件扫描阈值（MB，默认 100）",
+            "rubbish_wx_chat_media_days" to "微信聊天媒体保留天数（超过该天数的才清理，默认 30）",
+            // 通用低风险
+            "rubbish_rule_app_cache" to "清理应用缓存目录内容（保留目录与配置）",
+            "rubbish_rule_thumbnails" to "清理媒体缩略图缓存",
+            "rubbish_rule_temp_files" to "清理下载目录中的临时/未完成文件",
+            "rubbish_rule_empty_dirs" to "清理下载目录中的空目录与 0 字节文件",
+            "rubbish_rule_system_crash_logs" to "清理系统崩溃日志（ANR/tombstone/dropbox）",
+            "rubbish_rule_app_logs" to "清理应用外部目录中的日志目录",
+            // 通用中风险
+            "rubbish_rule_apk_leftover" to "清理下载目录中的 APK 安装包（中风险）",
+            "rubbish_rule_ad_cache" to "清理应用缓存中的广告 SDK 缓存（中风险）",
+            "rubbish_rule_uninstalled_leftover" to "清理已卸载应用的外部数据目录（中风险）",
+            "rubbish_rule_big_files_list" to "扫描大文件（仅列出，不自动删除）",
+            // 微信低风险
+            "rubbish_rule_wx_logs" to "微信专清：日志 xlog（可安全清理，实测 1GB+）",
+            "rubbish_rule_wx_temp" to "微信专清：临时缓存 cache/temp（可安全清理，实测 2.5GB）",
+            "rubbish_rule_wx_webview_cache" to "微信专清：WebView/小程序缓存（自动重建）",
+            "rubbish_rule_wx_media_cache" to "微信专清：外置媒体缓存（缩略图等，自动重建）",
+            // 微信中高风险
+            "rubbish_rule_wx_rebuildable" to "微信专清：模板与资源缓存（约 1GB，清理后需重新下载，中风险）",
+            "rubbish_rule_wx_chat_media" to "微信专清：聊天图片/视频/语音（仅删超期，不可恢复，高风险）",
+            // QQ 低风险
+            "rubbish_rule_qq_logs" to "QQ 专清：日志（可安全清理）",
+            "rubbish_rule_qq_cache" to "QQ 专清：缓存与 XWalk/WebView 缓存（自动重建）",
+            "rubbish_rule_qq_media_cache" to "QQ 专清：外置媒体缓存（短视频/磁盘缓存）",
+            // QQ 中风险
+            "rubbish_rule_qq_miniapp" to "QQ 专清：小程序与 TBS 内核缓存（中风险，需重新下载）",
+            "rubbish_rule_qq_file_recv" to "QQ 专清：接收的文件（中风险，不可恢复）",
+            "rubbish_rule_qq_chatpic" to "QQ 专清：聊天图片临时文件（中风险）"
         )
 
         /** Defaults: false for everything except the six special features. */

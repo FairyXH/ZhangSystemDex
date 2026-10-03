@@ -167,6 +167,8 @@ class RubbishCleaner(private val config: ConfigManager) {
                 } else if (c.isFile) {
                     alive += c.path
                     val size = c.length()
+                    // ★ ageDays 过滤：只清理 N 天以上未修改的文件（防碰到活跃句柄）。
+                    if (rule.ageDays > 0 && !olderThan(c, rule.ageDays)) continue
                     // 增量：命中缓存则复用
                     val fresh = idx.isFresh(c.path, size, c.lastModified())
                     val junk = if (fresh) {
@@ -301,6 +303,14 @@ class RubbishCleaner(private val config: ConfigManager) {
         return sorted.filter { it.path != keep.path }
     }
 
+    /**
+     * 文件是否「超过 N 天未修改」。用于避免清理正在被写入的活跃文件。
+     */
+    private fun olderThan(f: File, days: Int): Boolean {
+        val cutoff = System.currentTimeMillis() - days.toLong() * 24 * 60 * 60 * 1000
+        return f.lastModified() in 1 until cutoff
+    }
+
     /** 从索引中剔除已不存在的路径（增量维护）。 */
     private fun pruneIndex(idx: ScanCache.Index, alive: Set<String>) {
         val dead = idx.entries.keys.filter { it !in alive }
@@ -332,6 +342,8 @@ class RubbishCleaner(private val config: ConfigManager) {
                 if (c.isDirectory) {
                     if (JunkPatterns.isEmptyDir(c)) out += c else stack.addLast(c)
                 } else if (c.isFile && JunkPatterns.isJunk(c.name, cur.name, c, c.length())) {
+                    // ★ ageDays 过滤：只清理 N 天以上未修改的文件。
+                    if (rule.ageDays > 0 && !olderThan(c, rule.ageDays)) continue
                     out += c
                 }
             }

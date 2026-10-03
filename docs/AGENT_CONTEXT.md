@@ -260,7 +260,50 @@ SelfTest.rubbishChecks()  10 项只读回归
 - 揪出的真实伪装文件样本：`点击助手_xxx.APK`（真 APK）、酷狗 `skin_*.ks`、
   百度网盘 `dark_theme.skin`、网易 `mpay.pkg`（后三者为应用资源包，已加入 keep 排除）
 
-### 10.8 待办 / 可选增强
+### 10.8 真机事故与安全收紧（2026-10-03，重要教训）
+
+**事故现象**：执行 `system_junk_data` 真实清理（336 文件 / 442 MB）后，用户报告**系统界面黑屏数秒**。
+
+**根因分析**（logcat 实证）：
+1. `14:48:00` 清理 daemon 的 `HttpBackend` 线程 `SIGSEGV` 崩溃（pid 26187）
+2. `14:49:31` Shizuku 服务进程 `FATAL EXCEPTION: UnsatisfiedLinkError`
+3. SurfaceFlinger 显示层重连 → **黑屏**
+
+**真正错误**：清理规则把**活系统运行时目录**当成了静态垃圾：
+- `/data/vendor/camera/dump`（281 文件）— 相机 HAL **持有句柄、边写边用**
+- `/data/misc/**` — WiFi/蓝牙/sensor/audio 运行时状态
+- `/data/vendor/tombstones`、`/data/cache`、`/data/ss`、`/data/ramdump`
+
+**三层防护（已实现，勿回退）**：
+
+1. **`RubbishGuard.check()` 第 2b 步 — 活系统路径硬拒绝**
+   ```
+   /data/vendor/ /data/misc/ /data/system_ce/ /data/system_de/
+   /data/ramdump /data/ss/ /data/dropbox/ /data/cache/
+   ```
+   命中即 `Reject("命中活系统运行时目录（真机事故防护）")`。
+   `isForbiddenPath()` 同步实现（扫描预筛）。
+
+2. **`JunkPatterns.PROTECT_PATH_CONTAINS` 扩展**
+   新增 `/vendor/camera`、`/vendor/audio`、`/vendor/modem`、`/data/misc/`、
+   `/system_ce/`、`/data/cache/` 等；并提供 `isLiveSystemPath()`。
+
+3. **`CleanRule.ageDays` 时效过滤**
+   - `system_junk_data`：`ageDays=7`（只清 7 天前的静态日志）
+   - `junk_media_apps`：`ageDays=3`（避免碰到活跃缓存）
+   - 实现于 `RubbishCleaner.olderThan()`，在 `scanJunk`/`collectJunkVictims` 生效。
+
+**`system_junk_data` 收紧结果**：
+- `listOnly = true`（**只读扫描，永不删除**）
+- roots 缩减为 7 个**真静态**目录：`/data/log`、`/data/bootchart`、
+  `/data/system/dropbox`、`/data/anr`、`/data/tombstones`、`/data/debugging`、
+  `/data/resource-cache`
+- 真机复测：候选从 **2362 文件 / 463 MB → 4 文件 / 698 KB**（`/data/vendor/camera`
+  的 6610 个文件已完全排除，目录内容完好）
+
+**结论**：**系统级目录默认只读**。用户如需清理，必须显式开启且仅限静态日志。
+
+### 10.9 待办 / 可选增强
 
 - [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
 - [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为

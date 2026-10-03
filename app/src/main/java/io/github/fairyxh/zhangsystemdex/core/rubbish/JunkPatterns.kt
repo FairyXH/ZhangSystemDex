@@ -81,6 +81,30 @@ object JunkPatterns {
         "/databases/", "/shared_prefs/", "/keystore/", "/keychain/",
         "/microMsg/", "/mmkv/", "/.git/", "/node_modules/",
         "/python", "/debian", "/termux", "/adb/",
+        // ★ 活系统运行时目录（2026-10-03 真机事故教训，永久禁止清理）：
+        //   这些目录被系统服务持有句柄、边写边用，删除会导致 HAL/服务崩溃、界面黑屏。
+        "/vendor/camera", "/vendor/camera_rus", "/vendor/qlog",
+        "/vendor/audio", "/vendor/modem", "/vendor/radio", "/vendor/firmware",
+        "/data/misc/",                     // WiFi/蓝牙/sensor/audio 运行时状态
+        "/system_ce/", "/system_de/",      // system_server 状态与快照
+        "/data/cache/", "/data/ss/",       // 系统 cache 哨兵与 subsystem ramdump
+        "/data/ramdump/", "/data/dropbox/",
+        "/lost+found", "/reserve", "/storage_area",
+    )
+
+    /**
+     * 活系统目录判定：命中即绝不可删除。
+     *
+     * 与 [PROTECT_PATH_CONTAINS] 分开，便于 `RubbishGuard` 与扫描阶段共用。
+     */
+    fun isLiveSystemPath(lowerPath: String): Boolean {
+        return LIVE_SYSTEM_MARKERS.any { lowerPath.contains(it) }
+    }
+
+    /** 活系统目录标记（小写包含匹配）。 */
+    private val LIVE_SYSTEM_MARKERS: List<String> = listOf(
+        "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
+        "/data/ramdump", "/data/ss/", "/data/dropbox",
     )
 
     /**

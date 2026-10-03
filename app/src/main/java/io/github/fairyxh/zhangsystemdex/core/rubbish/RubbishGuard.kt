@@ -155,6 +155,13 @@ object RubbishGuard {
             if (canonical == bad || canonical.startsWith(bad + "/")) return true
         }
         if (canonical in FORBIDDEN_EXACT) return true
+        // 活系统运行时目录（与 check() 的第 2b 步保持一致）。
+        val lower = canonical.lowercase()
+        val liveSystemPrefixes = listOf(
+            "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
+            "/data/ramdump", "/data/ss/", "/data/dropbox/", "/data/cache/",
+        )
+        if (liveSystemPrefixes.any { lower == it.trimEnd('/') || lower.startsWith(it) }) return true
         val rules = userRules
         for (deny in rules.denyPaths) {
             if (canonical == deny || canonical.startsWith(deny.trimEnd('/') + "/")) return true
@@ -190,6 +197,19 @@ object RubbishGuard {
             isKnownDataRootFile(segments[1])
         if (segments.size < MIN_SEGMENTS && !isDataTopLevelFile) {
             return Verdict.Reject("路径层级过浅（$canonical），疑似根/关键目录")
+        }
+
+        // 2b) 活系统目录硬拒绝（2026-10-03 真机事故后新增，最后一道防线）。
+        //     /data/vendor（相机/基带/音频 HAL）、/data/misc（传感器/蓝牙运行时）、
+        //     system_ce/de（system_server 状态快照）等目录被系统服务持有句柄，
+        //     删除会导致 HAL 崩溃、界面黑屏，因此在此**无条件拒绝**。
+        val lowerCanonical = canonical.lowercase()
+        val liveSystemPrefixes = listOf(
+            "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
+            "/data/ramdump", "/data/ss/", "/data/dropbox/", "/data/cache/",
+        )
+        if (liveSystemPrefixes.any { lowerCanonical == it.trimEnd('/') || lowerCanonical.startsWith(it) }) {
+            return Verdict.Reject("命中活系统运行时目录（真机事故防护）: $canonical")
         }
 
         // 4) 精确黑名单（允许根自身已在 ALLOWED_ROOTS 中显式豁免）。

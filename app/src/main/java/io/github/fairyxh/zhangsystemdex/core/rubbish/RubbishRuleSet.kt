@@ -285,38 +285,39 @@ object RubbishRuleSet {
             defaultOn = true,
             mode = MatchMode.JUNK_SCAN,
             roots = listOf("/data/media/<u>/Android/data"),
+            // ★ 仅清理 3 天以上未修改的文件：避免碰到应用正在写入的活跃缓存。
+            ageDays = 3,
             maxDepth = 10,
             switchKey = "rubbish_rule_junk_media_apps",
-            note = "扫描外部存储各应用目录中的缓存/日志/临时垃圾（全部 App）",
+            note = "扫描外部存储各应用目录中的缓存/日志/临时垃圾（仅 3 天以上未修改，全部 App）",
         ),
         CleanRule(
             id = "system_junk_data",
-            name = "系统级垃圾（整个 /data）",
+            name = "系统级垃圾（/data 静态日志）",
             group = RuleGroup.SYSTEM,
-            risk = RiskLevel.MEDIUM,
+            risk = RiskLevel.LOW,
             defaultOn = false,
+            // ★ 安全限制（2026-10-03 真机事故后收紧）：
+            //   1. 仅只读扫描（listOnly），永不自动删除
+            //   2. 严格限定为「静态日志目录」，移除所有活系统运行时目录
+            listOnly = true,
             mode = MatchMode.JUNK_SCAN,
             roots = listOf(
+                // 仅保留真正的静态日志/崩溃转储目录
                 "/data/log",
                 "/data/bootchart",
-                "/data/debugging",
-                "/data/dropbox",
-                "/data/ss",
-                "/data/resource-cache",
-                "/data/ramdump",
                 "/data/system/dropbox",
-                "/data/system_ce/0/recent_images",
-                "/data/system_ce/0/snapshots",
-                "/data/misc",
-                "/data/vendor/camera",
-                "/data/vendor/camera_rus",
-                "/data/vendor/qlog",
-                "/data/vendor/tombstones",
-                "/data/cache",
+                "/data/anr",
+                "/data/tombstones",
+                "/data/debugging",
+                "/data/resource-cache",
             ),
-            maxDepth = 8,
+            // ★ 关键：只清理 7 天以上未修改的文件，避免碰到正在写入的句柄。
+            ageDays = 7,
+            maxDepth = 6,
             switchKey = "rubbish_rule_system_junk_data",
-            note = "清理 /data 下系统级缓存/日志/崩溃转储（已排除 /data/adb、python 解释器、系统核心）",
+            note = "只读扫描 /data 下**静态**日志（/data/log、dropbox、anr、tombstones 等）。" +
+                "已移除 /data/vendor/camera、/data/misc 等活系统目录（真机事故教训）",
         ),
         CleanRule(
             id = "system_bcc_csv",

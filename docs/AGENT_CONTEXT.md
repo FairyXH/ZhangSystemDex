@@ -15,22 +15,27 @@
 ## 2. 仓库与远程
 
 - 远程：`https://github.com/FairyXH/ZhangSystemDex.git`（main 分支）。
-- 本地 git 仓（Linux 侧）：`/tmp/zsd_remote`（若重建，从此文与 README 恢复）。
-- 本地构建工程（非 git 仓，含工具链）：`/home/projects/ZhangSystemDex`。
+- **本地构建工程即 git 工作区**：`/home/projects/ZhangSystemDex`（2026-10-03 起已 `git init`
+  并绑定 origin；gh CLI 已登录 FairyXH，凭证存于 `~/.git-credentials`）。
+  - 提交身份：`git config user.name FairyXH` / `user.email fairyxh@users.noreply.github.com`。
+  - 直接 `git push origin main` 即可（credential.helper=store）。
 - 打包源目录（设备）：`/data/media/0/Download/Files/ZhangProtect-Android/`（= `/sdcard/Download/Files/ZhangProtect-Android/`）。
 - 安装后对应：`/data/adb/modules/Zhang/`；运行目录：`/data/adb/Zhang/`。
+- 注意：打包母版目录**不是** git 仓（也不应 init）；只有 Ubuntu 源码工程受版本控制。
 
 ## 3. 关键产物与正确校验值（务必使用带 HttpBackend 的新版）
 
 | 产物 | 位置 | md5 | 说明 |
 | --- | --- | --- | --- |
-| `Main.dex`（新）| 模块目录/打包目录/仓库 | `8224b53e578ddda00bb08df900c28829` | 含 `HttpBackend`(7处)、`26437`(1处)，2358752B |
+| `Main.dex`（**当前，含垃圾清理**）| 模块目录/运行目录/仓库 | `4669cac99679dc41475917edf973cdba` | 2442020B，含 RubbishGuard/Cleaner/RuleSet/AuditLog/JsonBuilder |
+| `Main.dex`（上版，含电源子系统）| 备份 `_backup_clean_*/Main.dex.mod` | `8224b53e578ddda00bb08df900c28829` | 2358752B，含 HttpBackend |
 | `Main.dex`（旧，禁用）| 备份名 `Main.dex.bak.1791001188` | `7460aaa69e082d3c8084854bbf269655` | 0处 HttpBackend，2306316B |
-| `webroot/index.html`（新版 iOS 重构）| 打包目录/模块目录/仓库 | `e91f05a8fb2f280d1fefa4e422869f44` | 41302B，四 Tab iOS 底栏 UI，KernelSU WebUI 入口 |
-| `webroot/index.html`（旧版，已废弃）| 备份 `/tmp/zsd_new/index.old.bak.html` | `a8cb7f03f947151a9247b25aea16d032` | 30475B，单页滚动分组列表 |
+| `webroot/index.html`（**当前，五 Tab + 清理**）| 打包目录/模块目录/仓库 | `802216c5a95d6efd242ca3a3178e7e49` | 54611B，五 Tab iOS 底栏 UI（概览/开关/电源/清理/设置） |
+| `webroot/index.html`（四 Tab，上一版）| 历史 | `e91f05a8fb2f280d1fefa4e422869f44` | 41302B |
 | `webroot/config.json` | 打包目录/模块目录 | `d01d5fc7f95f27ed10a33d1a16c1c255` | 449B，WebUI X 宿主清单 |
 
 > 切勿用旧值：`Main.dex` 若为 `7460aaa6...`、或 webroot 用 `4643...` / `a8cb7f03...` 系列即旧包。
+> 设备备份目录：`/data/adb/Zhang/_backup_clean_20261003-140001/`（含旧 dex/webroot/switches.conf）。
 
 ## 4. 服务与部署机制
 
@@ -142,3 +147,79 @@
 - 终端长命令仍会截断/被杀；`&`/`nohup` 后台任务随 session 死亡 → `pack.sh` 之类长任务须用 `setsid` 分离。
 - 含字面量 `"`/`&amp;` 的代码经文件工具传输会被写成裸 `"`（曾致 `esc` 语法错误）→
   用 `\x26` / `\u0022` 规避（现有 `esc()` 即为此写法）。
+
+---
+
+## 10. 垃圾清理子系统（2026-10-03 新增，已真机验证）
+
+### 10.1 代码布局
+
+```
+core/rubbish/
+  RubbishGuard.kt      ★ 中心化删除审查（唯一删除入口）
+  UserGuardRules.kt    用户违禁词/违禁路径（rubbish_guard.conf，只增拒绝）
+  AuditLog.kt          审计日志 log/rubbish_clean.log（不受 log_enabled 影响）
+  CleanRule.kt         规则数据结构（RiskLevel / MatchMode / RuleGroup）
+  RubbishRuleSet.kt    全量规则表（通用 10 + 微信 7 + QQ 6 = 23 条）
+  RubbishCleaner.kt    只读扫描 + 规则驱动删除 + JSON 序列化
+  JsonBuilder.kt       嵌套 JSON 构建（HttpBackend MiniJson 不支持嵌套）
+modules/SystemTuningModule.heavyTick()  定时清理入口
+DebugMenu 27/28/29    只读扫描 / 按开关清理 / 审查自检
+SelfTest.rubbishChecks()  10 项只读回归
+```
+
+### 10.2 安全设计（核心，改动勿破坏）
+
+- **唯一删除入口** `RubbishGuard.safeDelete()` / `safeCleanDirContents()`；
+  其它模块**不得**直接 `File.delete()` 或 `rm -rf` 清理垃圾。
+- 审查链（顺序）：空值 → `canonicalPath` 规范化 → 层级≥3 段 → 精确黑名单 →
+  前缀黑名单 → 白名单根（`/data/media`、`/data/user`、`/data/data`、`/data/anr`、
+  `/data/tombstones`、`/data/system/dropbox`）→ **`/data/media` 与 `/data/user` 之下
+  必须紧跟数字用户目录** → 用户违禁路径 → 用户违禁词 → 递归逐项复检 → 软链不跟随。
+- **路径策略**：一律用真实路径 `/data/media/<u>`、`/data/user/<u>/<pkg>`；
+  **严禁** `/sdcard`、`/storage/emulated`、`/mnt/user`。
+- 用户配置 `rubbish_guard.conf`：`deny_path=` 前缀匹配、`deny_word=` 子串匹配（忽略大小写）；
+  **只增加拒绝**。WebUI 保存后调 `RubbishGuard.loadUserRules()` 立即生效。
+
+### 10.3 配置键（switches.conf，经 appendRubbishMissing 只增不覆盖）
+
+总开关 `rubbish_clean_enable=false`；参数 `rubbish_clean_screen_off_only=true`、
+`rubbish_force_when_running=false`、`rubbish_big_file_mb=100`、`rubbish_wx_chat_media_days=30`；
+23 条规则各有 `rubbish_rule_*` 键；**低风险默认 true**（已加入 `SPECIAL_DEFAULT_TRUE`），
+中高风险默认 false。真机 migration 验证：switches.conf 65→95 行，纯追加、无新增重复键。
+
+### 10.4 HTTP 端点（HttpBackend）
+
+`/api/rubbish/rules|scan|clean|status|history|guard/read|guard/write`。
+**WebUI 只传规则 id，绝不传文件路径**；scan/clean 均受 `rubbish_clean_enable` 门控。
+
+### 10.5 真机实测结论（2026-10-03）
+
+- 审查自检 **17/17 PASS**：`/`、`/data`、`/data/adb`、`/data/system/dropbox`、
+  `/sdcard`、路径穿越（`/data/media/0/Download/../../adb` → 拒绝）、
+  `EnMicroMsg.db`/`shared_prefs`（默认违禁词）→ 拒绝；合法清理路径 → 接受。
+- **真实清理验证**：`qq_logs` 删除 29 文件 / 10,337,048 B，目录保留、拒绝 0，
+  审计日志写入完整（含每文件 DELETE 行 + SESSION 汇总）。
+- 多用户正确：设备有 userId `0` 与 `999`（工作资料），两处均被正确枚举。
+- 目标包运行中跳过生效：`com.tencent.mm` 运行时其全部微信规则返回
+  `跳过：目标应用运行中（com.tencent.mm，pid=731）`。
+- WebUI 无头校验 15/15 PASS（Node + linkedom，`/tmp/wuicheck/clean_harness.mjs`）。
+
+### 10.6 ⚠ 已修复的重大缺陷（真机发现，勿回归）
+
+1. **GLOB 模式越界**：`roots=/data/media/<u>/Android/data/*` + `pattern=log,logs...`
+   曾把「每个应用目录本身」当清理目标（app_logs 误报 93,260 文件 / 35GB），
+   清理会误删整个应用数据。修复：GLOB 模式展开结果**仅作搜索根**，再按 pattern
+   匹配其子项（`resolveTargets(rule, root)`）。
+2. **EMPTY_DIR 落入 else 分支**走 `safeDelete`（整目录删除）。修复：新增
+   `cleanEmpty()`（后序清理空目录与 0 字节文件）与对称的 `statEmpty()`。
+3. **normalize 逃逸**：`/data/media/0/Download/../../adb` → `/data/media/adb` 曾被接受。
+   修复：`/data/media`、`/data/user` 之下必须紧跟数字用户目录。
+
+### 10.7 待办 / 可选增强
+
+- [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
+- [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为
+      「按大小阈值列出」，当前仅作占位。
+- [ ] `uninstalled_leftover` 规则未接 `findUninstalledLeftovers()`（该方法已实现但未接线）。
+- [ ] WebUI 清理 Tab 的真机可视化确认（本机无 WebView 环境，仅做了无头校验）。

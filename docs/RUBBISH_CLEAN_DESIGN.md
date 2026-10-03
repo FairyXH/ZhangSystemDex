@@ -211,14 +211,31 @@ deny_word=shared_prefs
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | Git 仓库绑定 + docs 基线 | ✅ 完成 |
-| P1 | `RubbishGuard` + 规则表 + 只读扫描引擎 | 进行中 |
-| P2 | 删除执行 + 审计日志 | 待办 |
-| P3 | ConfigManager 配置接入 | 待办 |
-| P4 | HttpBackend 端点 | 待办 |
-| P5 | WebUI 清理 Tab | 待办 |
-| P6 | heavyTick 定时接入 | 待办 |
-| P7 | SelfTest / DebugMenu | 待办 |
-| P8 | 构建部署与同步 | 待办 |
+| P1 | `RubbishGuard` + 规则表 + 只读扫描引擎 | ✅ 完成（`1ebd77c`） |
+| P2 | 删除执行 + 审计日志 | ✅ 完成（含在 P1） |
+| P3 | ConfigManager 配置接入 | ✅ 完成（`81bdb5a`） |
+| P4 | HttpBackend 端点 | ✅ 完成（`57fdad6`） |
+| P5 | WebUI 清理 Tab | ✅ 完成（`5a53af9`，无头 15/15 PASS） |
+| P6 | heavyTick 定时接入 | ✅ 完成（`fbebd0a`） |
+| P7 | SelfTest / DebugMenu | ✅ 完成（`5384593`） |
+| P8 | 构建部署与同步 | ✅ 完成（`792bb24`，真机 17/17 审查 PASS + 真实清理验证） |
+| P9 | 安全加固（真机发现的 3 个缺陷） | ✅ 完成（`792bb24`） |
+
+### 真机验证结果（2026-10-03）
+
+- 审查自检 **17/17 PASS**（含 3 项路径穿越攻击向量全部拒绝）
+- 真实清理：`qq_logs` 删除 29 文件 / 10,337,048 B，目录保留、拒绝 0，审计日志完整
+- 多用户正确（userId 0 与 999）
+- 目标包运行中跳过生效（微信运行时全部微信规则跳过）
+- migration 纯追加：switches.conf 65→95 行，无新增重复键
+- 新 `Main.dex` md5 `4669cac99679dc41475917edf973cdba`（2442020B）
+- 新 `webroot/index.html` md5 `802216c5a95d6efd242ca3a3178e7e49`（54611B）
+
+### ⚠ 已修复的重大缺陷（详见 AGENT_CONTEXT.md §10.6）
+
+1. GLOB 模式把 root 展开结果本身当清理目标 → 会误删整个应用目录
+2. EMPTY_DIR 模式走 safeDelete → 会删掉整个目录
+3. normalize 后 `/data/media/adb` 之类非用户路径未被拦截
 
 ---
 

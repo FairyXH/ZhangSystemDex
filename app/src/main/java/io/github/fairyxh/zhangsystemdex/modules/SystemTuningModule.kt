@@ -11,6 +11,7 @@ import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.ServiceManagerUtils
 import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
 import java.io.File
 
 /**
@@ -212,6 +213,16 @@ class SystemTuningModule(
             if (ctx.config.switch("storage_isolation_enable")) {
                 storage.cleanCleanedRubbish()
                 done += "存储隔离清理"
+            }
+            // 垃圾清理（受总开关 + 各规则开关双重门控；默认仅息屏执行）
+            if (ctx.config.switch("rubbish_clean_enable")) {
+                if (ctx.config.switch("rubbish_clean_screen_off_only") && ProcessUtils.isScreenOn()) {
+                    done += "垃圾清理(未息屏跳过)"
+                    Logger.i(name, "垃圾清理到期但未息屏（rubbish_clean_screen_off_only=true），跳过")
+                } else {
+                    val s = RubbishCleaner(ctx.config).clean()
+                    done += "垃圾清理(${s.totalFiles} 文件/${s.totalBytes} B)"
+                }
             }
             val released = syncZhangSetting()
             done += if (released < 0) "ZhangSetting 释放(模块无该目录，跳过)" else "ZhangSetting 释放($released 个文件)"

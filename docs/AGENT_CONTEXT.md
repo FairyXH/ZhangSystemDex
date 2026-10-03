@@ -513,3 +513,48 @@ zip 内无 `__pycache__`。
   SHA256 `6e1a9d69…`，见 §10.10），含新 Main.dex + 新 webroot + 进度版 pack.sh/tools。
 - 3 个 commit 位于 `origin/main` 之后，视需要 `git push`。
 - 备份：设备 `/data/adb/Zhang/_backup_powerfix_20261003-164603/`（旧 dex+webroot）。
+
+---
+
+## 12. 任务记录：设置保存不了 / 保存按钮变黑（2026-10-03）
+
+**需求**：用户反馈「设置保存不了，且更改后保存按钮是黑的」。
+
+**根因（WebUI 导航按钮状态逻辑自相矛盾）**：
+- `markDirty()` 末尾调用 `setNavBusy(false)`；
+- 而 `setNavBusy(busy)` 实现为 `const b = loaded ? !busy : true; ...disabled = b` ——
+  **参数语义与命名相反**：`setNavBusy(false)` 实际把按钮 `disabled=true`。
+- 于是 `updateDirtyCount()` 刚把「保存」置为可用，紧接着 `setNavBusy(false)` 又把它禁用；
+  按钮永远停在 `.btn:disabled`（`opacity:.4`，深色主题下呈黑色），点击无响应 → 保存不了。
+
+**修复（`webroot/index.html`）**：
+- 新增 `busy` 状态位 + 统一真源 `refreshNav()`：
+  保存/撤销 = `loaded && !busy && dirtyKeys.size>0`；重新加载 = `loaded && !busy`。
+- `setBusy(b)` 语义与命名一致（true=忙碌）；保留 `setNavBusy` 作兼容别名。
+- `load()` 全程 `setBusy`；`markDirty()` 只调 `updateDirtyCount()`（不再反向禁用）。
+- `updateDirtyCount()` 复算脏标记（改回原值即移除）并 `refreshNav()`。
+- `save()` 增加前置校验与正确的成功/失败按钮恢复。
+
+**部署位置（三处一致，md5 `6119cd5265645d9567af725bf070f0e4`）**：
+- `app/src/main/assets/webroot/index.html`（**git 跟踪的构建源，随 Main.dex 打包**）
+- `/data/adb/modules/Zhang/webroot/index.html`（模块目录，WebUI X 实际读取）
+- `/data/media/0/Download/Files/ZhangProtect-Android/webroot/index.html`（母版打包源）
+
+**验证**：
+- linkedom 有状态后端 save 流程 **14/14 PASS**（改动后按钮可用 / 落盘一致保留注释 /
+  归零 / 二次可保存 / 撤销回滚）。
+- 静态检查 PASS、清理 15/15、电源 22/22 无回归。
+- 真机 API 往返：写入 → 磁盘反映 → 还原 → reload 均成功。
+
+**⚠ 事故与补救（必读）**：
+- 排查时用 `curl -X POST /api/write` 探测后端，**误将 `/data/adb/Zhang/switches.conf`
+  覆盖成 `__PROBE__=1`（12 字节）**。
+- 补救：从 `_backup_clean_20261003-140001/switches.conf`（14:00 快照，66 行）恢复，
+  再调 `/api/reload` 触发 daemon 的 `ensureParamLines()/appendRubbishMissing()`
+  **只追加缺失键** → 自动补回 36 个 `rubbish_*` 键，最终 86 键，配置恢复正常。
+- **教训**：验证写接口务必用**副本路径或先备份**；`switches.conf` 是唯一真源，
+  没有自动备份，误写会丢失用户设置。
+- 备份目录：`/data/adb/Zhang/_backup_savefix_20261003-194400/`（旧 WebUI）。
+
+**注意**：本次只改了 WebUI（webroot），**未重新打包 zip**；如需发布，改后可用母版
+`pack.sh` 重打包。`Main.dex` 未变动。

@@ -624,14 +624,17 @@ object SelfTest {
         }
 
         // 2) 风险分级：低风险默认开、中高风险默认关。
+        //    例外：listOnly（只读扫描、永不删除）规则无风险，默认关是合理选择，
+        //    不参与「低风险默认开」的约束。
         try {
             val bad = RubbishRuleSet.ALL.filter { r ->
-                (r.risk == RiskLevel.LOW && !r.defaultOn) || (r.risk != RiskLevel.LOW && r.defaultOn)
+                !r.listOnly &&
+                    ((r.risk == RiskLevel.LOW && !r.defaultOn) || (r.risk != RiskLevel.LOW && r.defaultOn))
             }
             s.add(
                 "清理.风险分级默认值",
                 if (bad.isEmpty()) Status.PASS else Status.FAIL,
-                if (bad.isEmpty()) "低风险全默认开、中高风险全默认关" else "异常: ${bad.map { it.id }}"
+                if (bad.isEmpty()) "低风险全默认开、中高风险全默认关（只读规则豁免）" else "异常: ${bad.map { it.id }}"
             )
         } catch (t: Throwable) {
             s.add("清理.风险分级默认值", Status.FAIL, t.message ?: "")
@@ -707,6 +710,20 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("清理.只读扫描", Status.FAIL, t.message ?: "")
+        }
+        // 6b) listOnly（仅列出）规则在 clean() 中必须零删除 —— 回归守卫。
+        try {
+            val c = RubbishCleaner(ctx.config)
+            val listOnlyIds = RubbishRuleSet.ALL.filter { it.listOnly }.map { it.id }
+            val summary = c.clean(ruleIds = listOnlyIds)
+            val deleted = summary.totalFiles
+            s.add(
+                "清理.仅列出规则零删除",
+                if (listOnlyIds.isNotEmpty() && deleted == 0) Status.PASS else Status.FAIL,
+                "listOnly=${listOnlyIds.size} 规则，clean() 删除文件=$deleted（必须为 0）"
+            )
+        } catch (t: Throwable) {
+            s.add("清理.仅列出规则零删除", Status.FAIL, t.message ?: "")
         }
 
         // 7) 配置键齐备（低风险规则 + 总开关）。

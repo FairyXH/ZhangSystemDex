@@ -434,12 +434,13 @@ class HttpBackend(
     }
 
     private fun intField(text: String, field: String, def: Int): Int {
-        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + ":\\s*(-?\\d+)").find(text) ?: return def
+        // Allow optional whitespace before the colon (`Battery current : -31`).
+        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + "\\s*:\\s*(-?\\d+)").find(text) ?: return def
         return m.groupValues[1].toIntOrNull() ?: def
     }
 
     private fun boolField(text: String, field: String, def: Boolean): Boolean {
-        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + ":\\s*(true|false)").find(text) ?: return def
+        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + "\\s*:\\s*(true|false)").find(text) ?: return def
         return m.groupValues[1].equals("true", ignoreCase = true)
     }
 

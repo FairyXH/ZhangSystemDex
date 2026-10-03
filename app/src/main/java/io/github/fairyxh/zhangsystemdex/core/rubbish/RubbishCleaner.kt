@@ -500,6 +500,13 @@ class RubbishCleaner(private val config: ConfigManager) {
                 results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList())
                 continue
             }
+            // 只读规则（listOnly）：clean() 绝不删除，直接以空结果返回。
+            // 这是所有模式（含 OLDER_THAN/GLOB/DIR_*）的统一兜底，避免仅靠
+            // cleanDeep 分支检查而遗漏普通模式。
+            if (rule.listOnly) {
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, "仅列出（不删除）", emptyList())
+                continue
+            }
             handledRules += rule.id
             val samples = ArrayList<String>()
             var files = 0

@@ -167,11 +167,13 @@ object RubbishRuleSet {
             group = RuleGroup.GENERAL,
             risk = RiskLevel.LOW,
             defaultOn = false,
+            // 仅列出不删除：与 mode 无关，listOnly 保证 clean() 不产生删除动作。
+            listOnly = true,
             mode = MatchMode.OLDER_THAN,
             roots = listOf("/data/media/<u>/Download"),
             ageDays = 0,
             switchKey = "rubbish_rule_big_files_list",
-            note = "扫描大文件用于人工判断，不自动删除",
+            note = "扫描下载目录中的大文件用于人工判断，不自动删除",
         ),
         // ===== 深度扫描（文件头识别 + 缓存增量） =====
         CleanRule(

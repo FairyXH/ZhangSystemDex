@@ -42,6 +42,7 @@ enum class MatchMode {
 /** 功能分组，用于 WebUI 分区展示。 */
 enum class RuleGroup(val key: String, val title: String) {
     GENERAL("general", "通用清理"),
+    DEEP("deep", "深度扫描"),
     WECHAT("wechat", "微信专清"),
     QQ("qq", "QQ 专清"),
 }

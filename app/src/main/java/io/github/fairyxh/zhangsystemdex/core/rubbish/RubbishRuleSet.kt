@@ -175,7 +175,7 @@ object RubbishRuleSet {
         CleanRule(
             id = "apk_scan_media",
             name = "全盘 APK 深度扫描",
-            group = RuleGroup.GENERAL,
+            group = RuleGroup.DEEP,
             risk = RiskLevel.MEDIUM,
             defaultOn = false,
             mode = MatchMode.APK_SCAN,
@@ -196,7 +196,7 @@ object RubbishRuleSet {
         CleanRule(
             id = "apk_scan_private",
             name = "私有目录 APK 深度扫描",
-            group = RuleGroup.GENERAL,
+            group = RuleGroup.DEEP,
             risk = RiskLevel.MEDIUM,
             defaultOn = false,
             mode = MatchMode.APK_SCAN,
@@ -218,7 +218,7 @@ object RubbishRuleSet {
         CleanRule(
             id = "big_files_private",
             name = "私有目录大文件（仅列出）",
-            group = RuleGroup.GENERAL,
+            group = RuleGroup.DEEP,
             risk = RiskLevel.LOW,
             defaultOn = false,
             mode = MatchMode.BIG_FILE_SCAN,
@@ -233,7 +233,7 @@ object RubbishRuleSet {
         CleanRule(
             id = "dup_files_media",
             name = "重复文件（media，按内容）",
-            group = RuleGroup.GENERAL,
+            group = RuleGroup.DEEP,
             risk = RiskLevel.HIGH,
             defaultOn = false,
             mode = MatchMode.DUP_CONTENT,

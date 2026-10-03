@@ -34,8 +34,6 @@ data class UserGuardRules(
             // 账号与凭据
             "shared_prefs",
             "accounts",
-            // 密钥
-            ".nomedia",
         )
 
         /**
@@ -46,6 +44,12 @@ data class UserGuardRules(
             "/data/adb",
             "/data/system",
             "/data/local/tmp/zhang",
+            // ★ 模块自身挂载的伪装系统应用 APK（全盘 APK 扫描绝不能碰）
+            "/data/media/0/Download/Files/ZhangProtect-Android",
+            // ★ 模块解包/备份目录
+            "/data/media/0/Download/ZhangSetting",
+            // ★ 系统关键 APK 存放位置
+            "/data/media/0/Android/data/com.android.appsearch.apk",
         )
 
         const val HEADER: String = "# ZhangSystemDex 垃圾清理审查规则（用户可编辑）\n" +

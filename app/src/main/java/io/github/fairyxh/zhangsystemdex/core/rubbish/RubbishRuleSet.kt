@@ -171,6 +171,99 @@ object RubbishRuleSet {
             switchKey = "rubbish_rule_big_files_list",
             note = "扫描大文件用于人工判断，不自动删除",
         ),
+        // ===== 深度扫描（文件头识别 + 缓存增量） =====
+        CleanRule(
+            id = "apk_scan_media",
+            name = "全盘 APK 深度扫描",
+            group = RuleGroup.GENERAL,
+            risk = RiskLevel.MEDIUM,
+            defaultOn = false,
+            mode = MatchMode.APK_SCAN,
+            roots = listOf(
+                "/data/media/<u>",
+            ),
+            minBytes = 512 * 1024L,  // 512KB 以下不可能是有效 APK
+            // 排除应用正常功能的资源包（皮肤/主题/插件，虽为 APK 格式但被应用依赖）
+            keep = listOf(
+                "assets.apk", "mpay.pkg", "dark_theme.skin",
+                "app_petal", "app_r1_webview_64", "app_tbs", "app_libs",
+                "v8skin", "skin", "skins", "theme", "themes",
+                "plugin", "plugins", "wxa", "miniapp",
+            ),
+            switchKey = "rubbish_rule_apk_scan_media",
+            note = "全 media 目录递归扫描，按文件头识别被改名的 APK（.tmp/无后缀等），已排除应用资源包目录",
+        ),
+        CleanRule(
+            id = "apk_scan_private",
+            name = "私有目录 APK 深度扫描",
+            group = RuleGroup.GENERAL,
+            risk = RiskLevel.MEDIUM,
+            defaultOn = false,
+            mode = MatchMode.APK_SCAN,
+            roots = listOf(
+                "/data/user/<u>/com.tencent.mm/cache/temp",
+                "/data/user/<u>/com.tencent.mobileqq/files",
+                "/data/user/<u>/com.baidu.netdisk/cache",
+                "/data/user/<u>/com.ss.android.ugc.aweme/cache",
+                "/data/user/<u>/com.taobao.taobao/cache",
+            ),
+            minBytes = 512 * 1024L,
+            keep = listOf(
+                "assets.apk", "app_petal", "app_r1_webview_64", "app_tbs",
+                "plugin", "plugins", "skin", "theme",
+            ),
+            switchKey = "rubbish_rule_apk_scan_private",
+            note = "扫描常见应用**缓存目录**中的安装包（含无后缀/改名，靠文件头识别）",
+        ),
+        CleanRule(
+            id = "big_files_private",
+            name = "私有目录大文件（仅列出）",
+            group = RuleGroup.GENERAL,
+            risk = RiskLevel.LOW,
+            defaultOn = false,
+            mode = MatchMode.BIG_FILE_SCAN,
+            roots = listOf(
+                "/data/user/<u>",
+            ),
+            bigFileMb = 50,
+            listOnly = true,
+            switchKey = "rubbish_rule_big_files_private",
+            note = "递归列出各应用私有目录中超过 50MB 的文件（仅列出不删），用于人工判断",
+        ),
+        CleanRule(
+            id = "dup_files_media",
+            name = "重复文件（media，按内容）",
+            group = RuleGroup.GENERAL,
+            risk = RiskLevel.HIGH,
+            defaultOn = false,
+            mode = MatchMode.DUP_CONTENT,
+            roots = listOf(
+                "/data/media/<u>/Download",
+                "/data/media/<u>/Documents",
+                "/data/media/<u>/Pictures",
+                "/data/media/<u>/DCIM",
+            ),
+            minBytes = 1024 * 1024L,  // 1MB 以上才纳入比对
+            keepNewest = true,
+            switchKey = "rubbish_rule_dup_files_media",
+            note = "按「尺寸+内容哈希」找出完全相同的重复文件，每组保留最新一份（高风险，不可恢复）",
+        ),
+        CleanRule(
+            id = "dup_wechat_tpc",
+            name = "微信重复下载文件（TPCFile）",
+            group = RuleGroup.WECHAT,
+            risk = RiskLevel.LOW,
+            defaultOn = true,
+            mode = MatchMode.DUP_SAME_SIZE,
+            roots = listOf(
+                "/data/user/<u>/com.tencent.mm/cache/temp/TPCFile",
+            ),
+            minBytes = 1024 * 1024L,
+            keepNewest = true,
+            switchKey = "rubbish_rule_dup_wechat_tpc",
+            note = "微信临时目录中同名同尺寸的重复下载文件（实测 59 个相同 20MB 文件 = 1.1GB），保留最新一份",
+            targetPackage = WX,
+        ),
     )
 
     // ------------------------------------------------------------------

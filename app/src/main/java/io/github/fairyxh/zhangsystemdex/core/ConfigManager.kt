@@ -252,6 +252,12 @@ class ConfigManager(private val modDir: String) {
         add("rubbish_rule_qq_miniapp", "false", "QQ 专清：小程序与 TBS 缓存（中风险）")
         add("rubbish_rule_qq_file_recv", "false", "QQ 专清：接收的文件（中风险）")
         add("rubbish_rule_qq_chatpic", "false", "QQ 专清：聊天图片临时文件（中风险）")
+        // ===== 深度扫描（文件头识别 + 缓存增量） =====
+        add("rubbish_rule_apk_scan_media", "false", "全盘 APK 深度扫描（按文件头识别改名/无后缀安装包）")
+        add("rubbish_rule_apk_scan_private", "true", "私有目录 APK 深度扫描")
+        add("rubbish_rule_big_files_private", "false", "私有目录大文件（仅列出）")
+        add("rubbish_rule_dup_files_media", "false", "重复文件（media，按内容哈希）")
+        add("rubbish_rule_dup_wechat_tpc", "true", "微信重复下载文件（TPCFile）")
     }
 
     private fun writeSwitches() {
@@ -314,6 +320,11 @@ class ConfigManager(private val modDir: String) {
             sb.append("rubbish_rule_qq_miniapp=false\t# QQ 专清：小程序与 TBS 缓存（中风险）\n")
             sb.append("rubbish_rule_qq_file_recv=false\t# QQ 专清：接收的文件（中风险）\n")
             sb.append("rubbish_rule_qq_chatpic=false\t# QQ 专清：聊天图片临时文件（中风险）\n")
+            sb.append("rubbish_rule_apk_scan_media=false\t# 全盘 APK 深度扫描（文件头识别）\n")
+            sb.append("rubbish_rule_apk_scan_private=true\t# 私有目录 APK 深度扫描\n")
+            sb.append("rubbish_rule_big_files_private=false\t# 私有目录大文件（仅列出）\n")
+            sb.append("rubbish_rule_dup_files_media=false\t# 重复文件（media，按内容）\n")
+            sb.append("rubbish_rule_dup_wechat_tpc=true\t# 微信重复下载文件（TPCFile）\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
@@ -440,7 +451,10 @@ class ConfigManager(private val modDir: String) {
             "rubbish_rule_qq_logs",
             "rubbish_rule_qq_cache",
             "rubbish_rule_qq_media_cache",
-            "rubbish_clean_screen_off_only"
+            "rubbish_clean_screen_off_only",
+            // 深度扫描低风险项
+            "rubbish_rule_apk_scan_private",
+            "rubbish_rule_dup_wechat_tpc"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
@@ -526,7 +540,13 @@ class ConfigManager(private val modDir: String) {
             // QQ 中风险
             "rubbish_rule_qq_miniapp" to "QQ 专清：小程序与 TBS 内核缓存（中风险，需重新下载）",
             "rubbish_rule_qq_file_recv" to "QQ 专清：接收的文件（中风险，不可恢复）",
-            "rubbish_rule_qq_chatpic" to "QQ 专清：聊天图片临时文件（中风险）"
+            "rubbish_rule_qq_chatpic" to "QQ 专清：聊天图片临时文件（中风险）",
+            // 深度扫描
+            "rubbish_rule_apk_scan_media" to "全盘 APK 深度扫描：按文件头识别改名/无后缀的安装包（中风险）",
+            "rubbish_rule_apk_scan_private" to "私有目录 APK 深度扫描：常见应用私有目录中的安装包",
+            "rubbish_rule_big_files_private" to "私有目录大文件：列出超过 50MB 的文件（仅列出不删）",
+            "rubbish_rule_dup_files_media" to "重复文件（media）：按尺寸+内容哈希找出完全相同文件，每组保留最新（高风险）",
+            "rubbish_rule_dup_wechat_tpc" to "微信重复下载文件（TPCFile）：同名同尺寸重复下载，保留最新一份"
         )
 
         /** Defaults: false for everything except the six special features. */

@@ -114,6 +114,29 @@ object RubbishGuard {
 
     fun auditLog(): AuditLog = audit
 
+    /**
+     * 快速判断路径是否落在「禁止目录」内（黑名单前缀 + 用户违禁路径）。
+     *
+     * 供扫描阶段做**预筛**，避免把模块自身 APK、系统目录等计入可清理候选。
+     * 注意：这只是加速，真正的删除仍需走完整 [check]。
+     */
+    fun isForbiddenPath(path: String): Boolean {
+        val canonical = try {
+            File(path).canonicalPath
+        } catch (_: Throwable) {
+            path
+        }
+        for (bad in FORBIDDEN_PREFIX) {
+            if (canonical == bad || canonical.startsWith(bad + "/")) return true
+        }
+        if (canonical in FORBIDDEN_EXACT) return true
+        val rules = userRules
+        for (deny in rules.denyPaths) {
+            if (canonical == deny || canonical.startsWith(deny.trimEnd('/') + "/")) return true
+        }
+        return false
+    }
+
     // ------------------------------------------------------------------
     // 审查
     // ------------------------------------------------------------------
@@ -138,14 +161,24 @@ object RubbishGuard {
             return Verdict.Reject("路径层级过浅（$canonical），疑似根/关键目录")
         }
 
-        // 4) 精确黑名单。
-        if (canonical in FORBIDDEN_EXACT) {
+        // 4) 精确黑名单（允许根自身已在 ALLOWED_ROOTS 中显式豁免）。
+        if (canonical in FORBIDDEN_EXACT && canonical !in ALLOWED_ROOTS) {
             return Verdict.Reject("命中禁止目录（精确）: $canonical")
         }
 
-        // 5) 前缀黑名单：禁止删除这些目录自身或其祖先。
+        // 5) 前缀黑名单：禁止删除这些目录自身及其下所有内容。
+        //    注意：ALLOWED_ROOTS 中的具体目录（如 /data/anr）需要豁免，
+        //    否则「清理该目录内容」的目标会被误拒。
         for (bad in FORBIDDEN_PREFIX) {
-            if (canonical == bad) return Verdict.Reject("命中禁止目录: $canonical")
+            if (canonical == bad || canonical.startsWith(bad + "/")) {
+                // 若该路径本身落在允许根内（如 /data/system/dropbox 属于允许根），放行。
+                val inAllowedRoot = ALLOWED_ROOTS.any { root ->
+                    canonical == root || canonical.startsWith(root + "/")
+                }
+                if (!inAllowedRoot) {
+                    return Verdict.Reject("命中禁止目录: $bad")
+                }
+            }
         }
 
         // 6) 白名单：必须落在允许根之内（且不等于根自身）。
@@ -389,5 +422,8 @@ object RubbishGuard {
         "/proc",
         "/sys",
         "/dev",
+        // ★ 模块自身资源：伪装系统应用 APK / 解包目录，绝不参与垃圾清理
+        "/data/media/0/Download/Files/ZhangProtect-Android",
+        "/data/media/0/Download/ZhangSetting",
     )
 }

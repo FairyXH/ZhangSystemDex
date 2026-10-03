@@ -18,6 +18,9 @@ import java.io.File
  */
 class RubbishCleaner(private val config: ConfigManager) {
 
+    /** 深度扫描缓存（首次全扫，之后仅扫变动位置）。 */
+    private val cache = ScanCache(File(config.rootDir))
+
     data class RuleResult(
         val ruleId: String,
         val name: String,
@@ -61,6 +64,11 @@ class RubbishCleaner(private val config: ConfigManager) {
         if (skip != null) {
             return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList())
         }
+        // 深度扫描模式：走专用实现（带缓存增量）
+        if (isDeepMode(rule.mode)) {
+            val deep = scanDeep(rule, maxSamples)
+            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, deep.files, deep.bytes, false, "", deep.samples)
+        }
         val samples = ArrayList<String>()
         var files = 0
         var bytes = 0L
@@ -88,6 +96,211 @@ class RubbishCleaner(private val config: ConfigManager) {
             }
         }
         return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples)
+    }
+
+    // ------------------------------------------------------------------
+    // 深度扫描（文件头识别 + 缓存增量）
+    // ------------------------------------------------------------------
+
+    private fun isDeepMode(m: MatchMode): Boolean = when (m) {
+        MatchMode.APK_SCAN, MatchMode.BIG_FILE_SCAN,
+        MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> true
+        else -> false
+    }
+
+    private data class DeepResult(val files: Int, val bytes: Long, val samples: List<String>)
+
+    /**
+     * 深度扫描入口。结果写入 [ScanCache]：首次全扫（逐文件读文件头/哈希），
+     * 之后仅对「尺寸或 mtime 变化」的文件重新判定，未变文件直接复用缓存。
+     */
+    private fun scanDeep(rule: CleanRule, maxSamples: Int): DeepResult {
+        val roots = ArrayList<File>()
+        for (userId in mediaUserIds()) {
+            for (p in expandRoots(rule, userId)) {
+                val f = File(p)
+                if (f.exists()) roots += f
+            }
+        }
+        return when (rule.mode) {
+            MatchMode.APK_SCAN -> scanApk(rule, roots, maxSamples)
+            MatchMode.BIG_FILE_SCAN -> scanBigFiles(rule, roots, maxSamples)
+            MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> scanDuplicates(rule, roots, maxSamples)
+            else -> DeepResult(0, 0L, emptyList())
+        }
+    }
+
+    /** 增量判定单个文件类型（命中缓存则复用，否则读文件头）。 */
+    private fun classify(rule: CleanRule, idx: ScanCache.Index, f: File): Char {
+        val size = f.length()
+        val mtime = f.lastModified()
+        if (idx.isFresh(f.path, size, mtime)) {
+            return idx.get(f.path)?.kind ?: 'O'
+        }
+        val kind = when {
+            FileIdentifier.isApk(f) -> 'A'
+            FileIdentifier.hasZipMagic(f) -> 'Z'
+            else -> 'O'
+        }
+        idx.put(ScanCache.Entry(kind, f.path, size, mtime))
+        return kind
+    }
+
+    /** 递归收集候选文件（按尺寸下限过滤，跳过 keep 与目录）。 */
+    private fun collectFiles(rule: CleanRule, roots: List<File>, minBytes: Long): List<File> {
+        val out = ArrayList<File>()
+        val stack = ArrayDeque<File>()
+        roots.forEach { stack.addLast(it) }
+        val visited = HashSet<String>()
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            val key = cur.path
+            if (!visited.add(key)) continue
+            // 纵深防御：扫描阶段即排除「禁止目录」，避免统计虚高与无效候选。
+            if (RubbishGuard.isForbiddenPath(key)) continue
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (c.isDirectory) {
+                    stack.addLast(c)
+                } else if (c.isFile && c.length() >= minBytes) {
+                    if (!RubbishGuard.isForbiddenPath(c.path)) out += c
+                }
+            }
+        }
+        return out
+    }
+
+    /** 全盘/私有 APK 扫描：文件头识别，无视扩展名。 */
+    private fun scanApk(rule: CleanRule, roots: List<File>, maxSamples: Int): DeepResult {
+        val idx = cache.load(rule.id)
+        val files = collectFiles(rule, roots, rule.minBytes)
+        var count = 0
+        var bytes = 0L
+        val samples = ArrayList<String>()
+        for (f in files) {
+            val kind = classify(rule, idx, f)
+            if (kind == 'A') {
+                count++
+                bytes += f.length()
+                if (samples.size < maxSamples) samples += f.path
+            }
+        }
+        // 清理索引中已消失的条目
+        pruneIndex(idx, files.map { it.path }.toHashSet())
+        cache.save(rule.id, idx)
+        return DeepResult(count, bytes, samples)
+    }
+
+    /** 大文件列出（仅列出，不删）。 */
+    private fun scanBigFiles(rule: CleanRule, roots: List<File>, maxSamples: Int): DeepResult {
+        val threshold = (if (rule.bigFileMb > 0) rule.bigFileMb else 50).toLong() * 1024 * 1024
+        val files = collectFiles(rule, roots, threshold).sortedByDescending { it.length() }
+        val samples = ArrayList<String>()
+        var bytes = 0L
+        files.forEach { f ->
+            bytes += f.length()
+            if (samples.size < maxSamples) samples += "${f.length() / 1024 / 1024}MB  ${f.path}"
+        }
+        return DeepResult(files.size, bytes, samples)
+    }
+
+    /**
+     * 重复文件扫描。
+     *  - DUP_SAME_SIZE：仅按尺寸分组（轻量预筛），每组保留最新，其余计为可清理。
+     *  - DUP_CONTENT：尺寸分组后，再按内容哈希（前 4MB + 全量）细分，完全相同的才处理。
+     */
+    private fun scanDuplicates(rule: CleanRule, roots: List<File>, maxSamples: Int): DeepResult {
+        val files = collectFiles(rule, roots, rule.minBytes)
+        val bySize = files.groupBy { it.length() }
+        var count = 0
+        var bytes = 0L
+        val samples = ArrayList<String>()
+        for ((_, group) in bySize) {
+            if (group.size < 2) continue
+            val victims: List<File> = if (rule.mode == MatchMode.DUP_CONTENT) {
+                group.groupBy { FileIdentifier.contentHash(it, 0) ?: it.path }
+                    .values.filter { it.size > 1 }
+                    .flatMap { pickVictims(it, rule.keepNewest) }
+            } else {
+                pickVictims(group, rule.keepNewest)
+            }
+            for (v in victims) {
+                count++
+                bytes += v.length()
+                if (samples.size < maxSamples) samples += v.path
+            }
+        }
+        return DeepResult(count, bytes, samples)
+    }
+
+    /** 从一组重复文件中选出「可删除项」（保留最新一份）。 */
+    private fun pickVictims(group: List<File>, keepNewest: Boolean): List<File> {
+        if (group.size < 2) return emptyList()
+        val sorted = group.sortedByDescending { it.lastModified() }
+        val keep = if (keepNewest) sorted.first() else sorted.last()
+        return sorted.filter { it.path != keep.path }
+    }
+
+    /** 从索引中剔除已不存在的路径（增量维护）。 */
+    private fun pruneIndex(idx: ScanCache.Index, alive: Set<String>) {
+        val dead = idx.entries.keys.filter { it !in alive }
+        dead.forEach { idx.remove(it) }
+    }
+
+    /**
+     * 深度模式的实际删除：
+     *  1. 复用 [scanDeep] 得到「可清理目标」（APK 列表 / 重复文件受害者）；
+     *  2. BIG_FILE_SCAN 为 listOnly，永不删除；
+     *  3. 其余逐个走 [RubbishGuard.safeDelete]（唯一删除入口）；
+     *  4. 删除后使该规则缓存失效，强制下次重扫。
+     */
+    private fun cleanDeep(
+        rule: CleanRule,
+        maxSamples: Int,
+    ): Triple<Int, Long, List<RubbishGuard.Rejected>> {
+        if (rule.listOnly) return Triple(0, 0L, emptyList())
+        val roots = ArrayList<File>()
+        for (userId in mediaUserIds()) {
+            for (p in expandRoots(rule, userId)) {
+                val f = File(p)
+                if (f.exists()) roots += f
+            }
+        }
+        val victims: List<File> = when (rule.mode) {
+            MatchMode.APK_SCAN -> {
+                val idx = cache.load(rule.id)
+                collectFiles(rule, roots, rule.minBytes).filter { classify(rule, idx, it) == 'A' }
+            }
+            MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> {
+                val files = collectFiles(rule, roots, rule.minBytes)
+                files.groupBy { it.length() }
+                    .filterValues { it.size > 1 }
+                    .values
+                    .flatMap { group ->
+                        if (rule.mode == MatchMode.DUP_CONTENT) {
+                            group.groupBy { FileIdentifier.contentHash(it, 0) ?: it.path }
+                                .values.filter { it.size > 1 }
+                                .flatMap { pickVictims(it, rule.keepNewest) }
+                        } else {
+                            pickVictims(group, rule.keepNewest)
+                        }
+                    }
+            }
+            else -> emptyList()
+        }
+        var files = 0
+        var bytes = 0L
+        val rejected = ArrayList<RubbishGuard.Rejected>()
+        for (v in victims) {
+            val r = RubbishGuard.safeDelete(v.path, rule.id)
+            files += r.deletedFiles
+            bytes += r.deletedBytes
+            rejected += r.rejected
+        }
+        // 删除后缓存失效（下次重扫，避免复用过期索引）
+        if (victims.isNotEmpty()) cache.invalidate(rule.id)
+        return Triple(files, bytes, rejected)
     }
 
     /** 统计目录中的空目录与 0 字节文件（EMPTY_DIR 模式，与 cleanEmpty 对称）。 */
@@ -175,6 +388,18 @@ class RubbishCleaner(private val config: ConfigManager) {
             var files = 0
             var bytes = 0L
             val rejected = ArrayList<RubbishGuard.Rejected>()
+
+            // 深度模式：先扫描出受害者列表，再逐个经 RubbishGuard 删除。
+            if (isDeepMode(rule.mode)) {
+                val deepClean = cleanDeep(rule, maxSamples)
+                files += deepClean.first
+                bytes += deepClean.second
+                rejected += deepClean.third
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, rejected)
+                totalFiles += files
+                totalBytes += bytes
+                continue
+            }
 
             for (userId in mediaUserIds()) {
                 for (root in expandRoots(rule, userId)) {

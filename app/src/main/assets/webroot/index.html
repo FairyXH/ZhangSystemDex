@@ -141,6 +141,31 @@
   .pill.on{background:rgba(52,199,89,.16);color:var(--ok)}
   .pill.off{background:rgba(142,142,147,.18);color:var(--dim)}
   .pill.warn{background:rgba(255,159,10,.18);color:var(--warn)}
+  /* ---------- Clean tab ---------- */
+  .cleanhead{background:var(--grouped);border-radius:var(--radius);padding:14px 16px;margin:0 16px 18px}
+  .cleanhead .big{font-size:28px;font-weight:700;font-family:ui-monospace,monospace;letter-spacing:-.5px}
+  .cleanhead .sub{color:var(--dim);font-size:12.5px;margin-top:3px}
+  .cleanhead .acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .bar{height:6px;border-radius:3px;background:var(--dim2);overflow:hidden;margin-top:12px}
+  .bar > i{display:block;height:100%;width:0;background:var(--acc2);transition:width .25s}
+  .risk{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:6px;margin-left:6px;
+    vertical-align:middle}
+  .risk.low{background:rgba(52,199,89,.18);color:var(--ok)}
+  .risk.medium{background:rgba(255,159,10,.20);color:var(--warn)}
+  .risk.high{background:rgba(255,59,48,.18);color:var(--err)}
+  .cleanrule .size{color:var(--dim);font-size:12px;font-family:ui-monospace,monospace;margin-top:2px}
+  .cleanrule .note{color:var(--dim);font-size:11.5px;margin-top:2px;line-height:1.35}
+  .grouphdr{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;
+    padding:14px 4px 7px;font-weight:600}
+  .modal{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.45);display:none;
+    align-items:center;justify-content:center;padding:24px}
+  .modal.show{display:flex}
+  .modal .box{background:var(--grouped);border-radius:16px;padding:20px;max-width:420px;width:100%}
+  .modal .box h3{margin:0 0 8px;font-size:17px}
+  .modal .box p{margin:0 0 16px;font-size:13.5px;color:var(--dim);line-height:1.5}
+  .modal .box .mbtns{display:flex;gap:10px;justify-content:flex-end}
+  .audit{font-family:ui-monospace,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;
+    word-break:break-all;max-height:240px;overflow:auto;background:var(--card2);border-radius:10px;padding:10px}
 </style>
 </head>
 <body>
@@ -244,7 +269,52 @@
           <div class="val"><button class="btn sm" id="btnRevert2">执行</button></div></div>
       </div></div>
   </section>
+
+  <!-- ============ TAB 5: 清理 ============ -->
+  <section class="pane" id="pane-clean">
+    <div class="cleanhead">
+      <div class="big" id="cleanSize">—</div>
+      <div class="sub" id="cleanSub">点击「扫描」统计可清理空间</div>
+      <div class="bar"><i id="cleanBar"></i></div>
+      <div class="acts">
+        <button class="btn primary sm" id="btnCleanScan">扫描</button>
+        <button class="btn sm" id="btnCleanRun">清理选中项</button>
+        <button class="btn ghost sm" id="btnCleanHist">历史</button>
+        <button class="btn ghost sm" id="btnCleanGuard">审查规则</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#ff9f0a">⚑</div>
+          <div class="body"><div class="k">垃圾清理总开关</div>
+            <div class="d">关闭后不扫描、不删除；WebUI 与定时任务同时失效</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swCleanMaster"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#0a84ff">☾</div>
+          <div class="body"><div class="k">定时清理仅息屏执行</div>
+            <div class="d">高占用周期到达时，若亮屏则跳过、下周期重试</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swCleanScreenOff"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#8e8e93">⚠</div>
+          <div class="body"><div class="k">目标应用运行中强制清理</div>
+            <div class="d">默认关闭：微信/QQ 运行中则跳过其私有目录，避免删文件异常</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swCleanForce"><i></i></label></div></div>
+      </div>
+      <div class="sfoot">所有删除都经过中心化审查（<span class="mono">RubbishGuard</span>），
+        拒绝规则可在「审查规则」中自定义。</div>
+    </div>
+    <div id="cleanGroups"></div>
+  </section>
 </main>
+
+<div class="modal" id="cleanModal">
+  <div class="box">
+    <h3 id="cmTitle">确认清理</h3>
+    <p id="cmBody"></p>
+    <div class="mbtns">
+      <button class="btn sm ghost" id="cmCancel">取消</button>
+      <button class="btn sm primary" id="cmOk">确认</button>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -253,6 +323,7 @@
   <div class="tab active" data-tab="home"><span class="tico">⌂</span><span>概览</span></div>
   <div class="tab" data-tab="switch"><span class="tico">⚙</span><span>开关</span></div>
   <div class="tab" data-tab="power"><span class="tico">⚡</span><span>电源</span></div>
+  <div class="tab" data-tab="clean"><span class="tico">🧹</span><span>清理</span></div>
   <div class="tab" data-tab="settings"><span class="tico">☰</span><span>设置</span></div>
 </nav>
 <script>
@@ -832,7 +903,7 @@ async function saveBgList(){
 /* ------------------------------------------------------------------ *
  * 底栏 Tab 切换
  * ------------------------------------------------------------------ */
-const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", settings:"设置" };
+const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", clean:"清理", settings:"设置" };
 function switchTab(name){
   if (!TAB_TITLES[name]) name = "home";
   $$(".pane").forEach(p=> p.classList.toggle("active", p.id === "pane-" + name));
@@ -841,13 +912,221 @@ function switchTab(name){
   if (nt) nt.textContent = TAB_TITLES[name];
   // 概览/电源面板需要时顺手刷新实时读数
   if (name === "power") refreshPowerStatus();
+  if (name === "clean") loadCleanState();
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
 }
 
 /* ------------------------------------------------------------------ *
- * 事件绑定 & 初始化
+ * 清理 Tab：状态 / 规则 / 扫描 / 清理 / 审计 / 审查规则
  * ------------------------------------------------------------------ */
+let CLEAN_RULES = [];          // /api/rubbish/rules 返回的规则表
+let CLEAN_SELECTED = new Set();// 用户勾选的规则 id
+let CLEAN_LAST = null;         // 最近一次扫描/清理结果
+
+function fmtBytes(n){
+  if (n == null || isNaN(n)) return "—";
+  const u = ["B","KB","MB","GB","TB"]; let i=0; let v=Number(n);
+  while (v >= 1024 && i < u.length-1){ v/=1024; i++; }
+  return (i===0 ? v.toFixed(0) : v.toFixed(v<10?2:1)) + u[i];
+}
+function riskClass(r){ return r === "HIGH" ? "high" : (r === "MEDIUM" ? "medium" : "low"); }
+function riskText(r){ return r === "HIGH" ? "高风险" : (r === "MEDIUM" ? "中风险" : "低风险"); }
+
+async function loadCleanState(){
+  try{
+    const st = await api("/api/rubbish/status");
+    const m = $("#swCleanMaster"), s = $("#swCleanScreenOff"), f = $("#swCleanForce");
+    if (m) m.checked = !!(st && st.masterEnabled);
+    if (s) s.checked = !!(st && st.screenOffOnly);
+    if (f) f.checked = !!(st && st.forceWhenRunning);
+  }catch(e){ /* 后端未就绪时静默 */ }
+  try{
+    const r = await api("/api/rubbish/rules");
+    CLEAN_RULES = (r && r.rules) || [];
+    // 首次进入：按每条规则自身的 enabled 初始化勾选
+    if (CLEAN_SELECTED.size === 0){
+      CLEAN_RULES.forEach(x=>{ if (x.enabled) CLEAN_SELECTED.add(x.id); });
+    }
+    renderCleanGroups();
+  }catch(e){
+    const host = $("#cleanGroups");
+    if (host) host.innerHTML = '<div class="empty">无法读取规则表：' + esc(String(e.message||e)) + '</div>';
+  }
+}
+
+function renderCleanGroups(){
+  const host = $("#cleanGroups");
+  if (!host) return;
+  host.innerHTML = "";
+  const groups = [];
+  const idx = {};
+  CLEAN_RULES.forEach(r=>{
+    if (!(r.group in idx)){ idx[r.group] = groups.length; groups.push({key:r.group, title:r.groupTitle||r.group, rules:[]}); }
+    groups[idx[r.group]].rules.push(r);
+  });
+  groups.forEach(g=>{
+    const sec = document.createElement("div");
+    sec.className = "section";
+    const h = document.createElement("div");
+    h.className = "grouphdr";
+    h.textContent = g.title;
+    sec.appendChild(h);
+    const list = document.createElement("div");
+    list.className = "list";
+    g.rules.forEach(r=> list.appendChild(renderCleanCell(r)));
+    sec.appendChild(list);
+    host.appendChild(sec);
+  });
+}
+
+function renderCleanCell(r){
+  const cell = document.createElement("div");
+  cell.className = "cell cleanrule";
+  cell.dataset.rule = r.id;
+  const ic = document.createElement("div");
+  ic.className = "ic";
+  ic.textContent = r.group === "wechat" ? "💬" : (r.group === "qq" ? "🐧" : "🧹");
+  ic.style.background = r.group === "wechat" ? "#07c160" : (r.group === "qq" ? "#12b7f5" : "#8e8e93");
+  cell.appendChild(ic);
+
+  const body = document.createElement("div");
+  body.className = "body";
+  const k = document.createElement("div");
+  k.className = "k";
+  k.innerHTML = esc(r.name) + '<span class="risk ' + riskClass(r.risk) + '">' + riskText(r.risk) + '</span>';
+  body.appendChild(k);
+  const size = document.createElement("div");
+  size.className = "size";
+  size.dataset.sizeFor = r.id;
+  size.textContent = "未扫描";
+  body.appendChild(size);
+  if (r.note){
+    const n = document.createElement("div");
+    n.className = "note";
+    n.textContent = r.note;
+    body.appendChild(n);
+  }
+  cell.appendChild(body);
+
+  const sw = document.createElement("label");
+  sw.className = "sw";
+  const inp = document.createElement("input");
+  inp.type = "checkbox";
+  inp.checked = CLEAN_SELECTED.has(r.id);
+  inp.onchange = ()=>{
+    if (inp.checked) CLEAN_SELECTED.add(r.id); else CLEAN_SELECTED.delete(r.id);
+  };
+  const i = document.createElement("i");
+  sw.appendChild(inp); sw.appendChild(i);
+  cell.appendChild(sw);
+  return cell;
+}
+
+async function doCleanScan(){
+  const btn = $("#btnCleanScan");
+  if (btn) btn.disabled = true;
+  const bar = $("#cleanBar"); if (bar) bar.style.width = "30%";
+  const sub = $("#cleanSub"); if (sub) sub.textContent = "扫描中…";
+  try{
+    const r = await api("/api/rubbish/scan", { rules: Array.from(CLEAN_SELECTED) });
+    CLEAN_LAST = r;
+    if (bar) bar.style.width = "100%";
+    const total = (r && r.totalBytes) || 0;
+    const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = fmtBytes(total);
+    if (sub) sub.textContent = "可清理 " + ((r && r.totalFiles) || 0) + " 个文件 · " + fmtBytes(total);
+    (r && r.rules || []).forEach(x=>{
+      const el = document.querySelector('[data-size-for="' + x.id + '"]');
+      if (!el) return;
+      if (x.skipped){ el.textContent = "跳过：" + x.skipReason; }
+      else { el.textContent = x.files + " 文件 · " + fmtBytes(x.bytes); }
+    });
+    toast("扫描完成：" + fmtBytes(total), "ok");
+  }catch(e){
+    if (bar) bar.style.width = "0";
+    if (sub) sub.textContent = "扫描失败";
+    toast("扫描失败：" + (e.message||e), "err");
+  }finally{
+    if (btn) btn.disabled = false;
+    setTimeout(()=>{ if (bar) bar.style.width = "0"; }, 1200);
+  }
+}
+
+function confirmModal(title, body, onOk){
+  const m = $("#cleanModal");
+  if (!m){ onOk(); return; }
+  $("#cmTitle").textContent = title;
+  $("#cmBody").innerHTML = body;
+  m.classList.add("show");
+  const ok = $("#cmOk"), cancel = $("#cmCancel");
+  const close = ()=>{ m.classList.remove("show"); ok.onclick = null; cancel.onclick = null; };
+  ok.onclick = ()=>{ close(); onOk(); };
+  cancel.onclick = close;
+}
+
+async function doCleanRun(){
+  if (CLEAN_SELECTED.size === 0){ toast("请先勾选要清理的类型", "err"); return; }
+  const risky = CLEAN_RULES.filter(r=> CLEAN_SELECTED.has(r.id) && r.risk !== "LOW");
+  const msg = "将清理 " + CLEAN_SELECTED.size + " 类垃圾，删除后不可恢复。"
+    + (risky.length ? '<br/><b style="color:var(--warn)">其中含中/高风险项：' + risky.map(r=>esc(r.name)).join("、") + '</b>' : "");
+  confirmModal("确认清理", msg, async ()=>{
+    const btn = $("#btnCleanRun"); if (btn) btn.disabled = true;
+    const sub = $("#cleanSub"); if (sub) sub.textContent = "清理中…";
+    try{
+      const r = await api("/api/rubbish/clean", { rules: Array.from(CLEAN_SELECTED) });
+      CLEAN_LAST = r;
+      const total = (r && r.totalBytes) || 0;
+      const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = fmtBytes(total);
+      if (sub) sub.textContent = "本次已释放 " + ((r && r.totalFiles) || 0) + " 个文件 · " + fmtBytes(total);
+      toast("清理完成，释放 " + fmtBytes(total), "ok");
+      await doCleanScan();
+    }catch(e){
+      toast("清理失败：" + (e.message||e), "err");
+    }finally{
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+async function showCleanHistory(){
+  try{
+    const r = await api("/api/rubbish/history?lines=120");
+    const lines = (r && r.lines) || [];
+    const body = lines.length
+      ? '<div class="audit">' + esc(lines.join("\n")) + '</div>'
+      : '<p>暂无审计记录。</p>';
+    confirmModal("清理审计日志", body, ()=>{});
+    const ok = $("#cmOk"); if (ok) ok.textContent = "关闭";
+  }catch(e){ toast("读取失败：" + (e.message||e), "err"); }
+}
+
+async function showCleanGuard(){
+  try{
+    const r = await api("/api/rubbish/guard/read");
+    const content = (r && r.content) || "";
+    const body = '<p>违禁路径（deny_path）与违禁词（deny_word），只增拒绝：</p>'
+      + '<textarea id="guardText" style="min-height:180px">' + esc(content) + '</textarea>';
+    confirmModal("审查规则", body, ()=>{});
+    const ok = $("#cmOk"); if (ok) ok.textContent = "保存";
+    ok.onclick = async ()=>{
+      const ta = $("#guardText"); if (!ta) return;
+      try{
+        await api("/api/rubbish/guard/write", { content: ta.value });
+        toast("审查规则已保存并立即生效", "ok");
+        $("#cleanModal").classList.remove("show");
+      }catch(e){ toast("保存失败：" + (e.message||e), "err"); }
+    };
+  }catch(e){ toast("读取失败：" + (e.message||e), "err"); }
+}
+
+async function setCleanSwitch(key, on){
+  try{
+    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
+    await api("/api/reload").catch(()=>{});
+  }catch(e){ toast("保存失败：" + (e.message||e), "err"); }
+}
+
+
 function bind(){
   const bs = $("#btnSave");   if (bs) bs.onclick = save;
   const br = $("#btnReload"); if (br) br.onclick = load;
@@ -857,6 +1136,14 @@ function bind(){
   const bp = $("#btnPowerRefresh"); if (bp) bp.onclick = refreshPowerStatus;
   const bl = $("#btnBgLoad"); if (bl) bl.onclick = loadBgList;
   const bgs = $("#btnBgSave"); if (bgs) bgs.onclick = saveBgList;
+  // 清理 Tab 事件
+  const bcs = $("#btnCleanScan"); if (bcs) bcs.onclick = doCleanScan;
+  const bcr = $("#btnCleanRun"); if (bcr) bcr.onclick = doCleanRun;
+  const bch = $("#btnCleanHist"); if (bch) bch.onclick = showCleanHistory;
+  const bcg = $("#btnCleanGuard"); if (bcg) bcg.onclick = showCleanGuard;
+  const m = $("#swCleanMaster"); if (m) m.onchange = ()=> setCleanSwitch("rubbish_clean_enable", m.checked);
+  const so = $("#swCleanScreenOff"); if (so) so.onchange = ()=> setCleanSwitch("rubbish_clean_screen_off_only", so.checked);
+  const fc = $("#swCleanForce"); if (fc) fc.onchange = ()=> setCleanSwitch("rubbish_force_when_running", fc.checked);
   $$(".tab").forEach(t=> t.onclick = ()=> switchTab(t.dataset.tab));
 }
 

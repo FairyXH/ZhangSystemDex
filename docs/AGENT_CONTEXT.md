@@ -558,3 +558,31 @@ zip 内无 `__pycache__`。
 
 **注意**：本次只改了 WebUI（webroot），**未重新打包 zip**；如需发布，改后可用母版
 `pack.sh` 重打包。`Main.dex` 未变动。
+
+---
+
+## 13. 发布构建：含保存修复的正式 zip（2026-10-03 19:53）
+
+**背景**：上一步修复了 WebUI「保存按钮不可点」（见 §12），本次按最新源码重新打包发布。
+
+**产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,117,507 字节**（≈410 MB），91 文件
+- **SHA256 = `19fc276aaa8089a049759ea1e0ad1865e5222095e39064bfee705cbcf5e25b93`**
+- 打包耗时 35s（`pack.sh` v4 全程进度输出）
+
+**关键条目（md5 与源一致）**：
+- `Main.dex` = `d5c533e802a5fa6b93dbeb5e13ec3648`（含电源读数补全 + listOnly 护栏）
+- `webroot/index.html` = `6119cd5265645d9567af725bf070f0e4`（**含保存按钮修复**）
+- `webroot/config.json` = `d01d5fc7f95f27ed10a33d1a16c1c255`
+- `pack.sh` = `73dbb4955be8790141abbd868db61c58`（v4 进度版）
+- `tools/zippack.py` = `46570096ae97cb5a4ad4a40985991724`、`tools/zipcheck.py` = `682f9f8ca3e4a82f00336d3385361132`
+
+**校验**：
+- `unzip -t` 零错误；`pack.sh` 内置 SHA256 逐文件比对 **91/91 一致**。
+- 发布前内容清查：无 `*.bak/*.tmp/*~/*.orig/__pycache__/.DS_Store` 残留；
+  `Python.zip` 为必需内容物（保留）。
+- 权限位：zip 忠实保存源 FUSE 模式（脚本 0770、数据 0660），与上一版正式包一致，
+  安装后由 KernelSU 归一化（模块目录显示为 2777），**非回归**。
+
+**对比上一版正式包**（17:05，430,117,015 字节，SHA256 `6e1a9d69…`）：
+差异仅 `webroot/index.html`（保存按钮修复）；`Main.dex` 未变。

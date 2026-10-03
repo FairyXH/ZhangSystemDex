@@ -14,3 +14,10 @@
 .cxx
 local.properties
 
+
+# Agent 临时/日志（不提交）
+/logs/
+*.log
+*.bak
+*.bak.*
+_zsd_deploy/

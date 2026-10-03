@@ -48,7 +48,10 @@ object RubbishGuard {
 
     /**
      * 允许删除的根白名单。路径规范化后必须落在其中之一（或与之相等）。
-     * 这些根对应清理功能的合法作用域；新增清理范围必须同步在此登记。
+     *
+     * 模型（2026-10-03 扩展）：从「列举允许根」改为「/data 全域 + 排除清单」，
+     * 以覆盖系统级垃圾（/data/vendor、/data/misc、/data/system/dropbox 等）。
+     * 真正的安全边界由 [FORBIDDEN_EXACT] / [FORBIDDEN_PREFIX] / 用户违禁规则承担。
      */
     private val ALLOWED_ROOTS: List<String> = listOf(
         // 外部存储真实路径（严禁经 /sdcard、/storage/emulated、/mnt/user）
@@ -56,11 +59,33 @@ object RubbishGuard {
         // 应用私有目录（真实路径，等价 /data/data，多用户正确）
         "/data/user",
         "/data/data",
-        // 系统崩溃/诊断目录（受对应规则约束）
+        // 系统崩溃/诊断目录
         "/data/anr",
         "/data/tombstones",
         "/data/system/dropbox",
+        // ===== 系统级垃圾区（本轮新增）=====
+        "/data/log",
+        "/data/bootchart",
+        "/data/debugging",
+        "/data/dropbox",
+        "/data/ss",
+        "/data/resource-cache",
+        "/data/ramdump",
+        "/data/misc",
+        "/data/vendor",
+        "/data/system_ce",
+        "/data/system_de",
+        "/data/cache",
+        "/data/local/tmp",
     )
+
+    /**
+     * 「/data 全域」模式开关：允许白名单之外的 /data 子路径，
+     * 只要它不命中 [FORBIDDEN_EXACT] / [FORBIDDEN_PREFIX] / 用户违禁规则。
+     *
+     * 这使扫描能覆盖整个 /data（用户明确要求），排除清单保证安全。
+     */
+    private const val ALLOW_BROAD_DATA = true
 
     /**
      * 系统关键目录黑名单（规范化后精确或前缀匹配，命中即拒绝）。
@@ -157,7 +182,13 @@ object RubbishGuard {
 
         // 3) 层级检查。
         val segments = canonical.split('/').filter { it.isNotEmpty() }
-        if (segments.size < MIN_SEGMENTS) {
+        // 例外：/data 根下的「顶层散落文件」（如内核追踪输出 /data/*_bcc.csv）。
+        // 严格限制：必须是文件，且文件名匹配已知的临时产物模式。
+        val isDataTopLevelFile = segments.size == 2 &&
+            segments[0] == "data" &&
+            File(canonical).isFile &&
+            isKnownDataRootFile(segments[1])
+        if (segments.size < MIN_SEGMENTS && !isDataTopLevelFile) {
             return Verdict.Reject("路径层级过浅（$canonical），疑似根/关键目录")
         }
 
@@ -185,12 +216,28 @@ object RubbishGuard {
         val inAllowed = ALLOWED_ROOTS.any { root ->
             canonical.startsWith(root + "/")
         }
-        if (!inAllowed) {
+        // /data 全域模式：白名单之外，若落在 /data 下且未命中任何禁止项，也放行。
+        val broadData = ALLOW_BROAD_DATA &&
+            canonical.startsWith("/data/") &&
+            canonical !in FORBIDDEN_EXACT
+        if (!inAllowed && !broadData) {
             return Verdict.Reject("不在允许根白名单内: $canonical")
         }
         // 不允许直接删除白名单根自身。
         if (canonical in ALLOWED_ROOTS) {
             return Verdict.Reject("禁止删除允许根本身: $canonical")
+        }
+        // /data 下只允许删除「至少两级」的内容（如 /data/xxx/yyy），
+        // 避免误删 /data/<topdir> 自身；
+        // 例外：/data 根下匹配白名单模式的散落文件（如 *_bcc.csv）。
+        if (broadData) {
+            val rel = canonical.removePrefix("/data/")
+            val topLevelOk = !rel.contains('/') &&
+                File(canonical).isFile &&
+                isKnownDataRootFile(rel)
+            if (!rel.contains('/') && !topLevelOk) {
+                return Verdict.Reject("禁止删除 /data 一级目录: $canonical")
+            }
         }
 
         // 6b) 结构性校验：/data/media 与 /data/user 之下必须紧跟数字用户目录，
@@ -410,20 +457,89 @@ object RubbishGuard {
 
     private fun escape(s: String): String = s.replace("'", "'\\''")
 
+    /**
+     * /data 根下允许清理的顶层文件模式（严格白名单）。
+     * 只放行「明确的临时产物」，绝不放行任何系统文件。
+     */
+    private val DATA_ROOT_FILE_PATTERNS: List<Regex> = listOf(
+        Regex("^\\d{4}-\\d{2}-\\d{2}[_-].*\\.csv$"),   // BCC 追踪输出 2026-04-12_15-49-42_bcc.csv
+        Regex("^.*_bcc\\.csv$"),
+        Regex("^.*\\.hprof$"),                          // Java 堆转储
+        Regex("^tombstone_\\d+$"),                      // 崩溃墓碑
+    )
+
+    private fun isKnownDataRootFile(name: String): Boolean =
+        DATA_ROOT_FILE_PATTERNS.any { it.matches(name) }
+
     /** 禁止删除的前缀目录（其自身或位于其下的关键系统位置）。 */
     private val FORBIDDEN_PREFIX: List<String> = listOf(
+        // ===== 模块与 root 环境（绝不可动）=====
         "/data/adb",
+        "/data/local/tmp/zhang",
+        // ===== Python 解释器 / 运行环境（用户明确要求排除）=====
+        "/data/python-packages",
+        "/data/Python",
+        "/data/debian",
+        "/data/data/com.termux",
+        "/data/user/0/com.termux",
+        "/data/data/ru.meefik.linuxdeploy",
+        "/data/user/0/ru.meefik.linuxdeploy",
+        // ===== 系统核心（删除会破坏系统）=====
+        "/data/system",
         "/data/local",
         "/data/app",
         "/data/dalvik-cache",
-        "/data/system",
+        "/data/app-lib",
+        "/data/app-private",
+        "/data/app-staging",
+        "/data/app-ephemeral",
+        "/data/app-asec",
+        "/data/app-metadata",
+        "/data/misc/keystore",
+        "/data/misc/user",
+        "/data/misc/vold",
+        "/data/misc/apexdata",
+        "/data/misc/gatekeeper",
+        "/data/misc/installd",
+        "/data/misc/keychain",
+        "/data/misc/audioserver",
+        "/data/misc/credstore",
+        "/data/misc/update_engine",
+        "/data/apex",
+        "/data/gsi",
+        "/data/backup",
+        "/data/bootchart/snapshot",   // 仅允许清理其余部分
+        "/data/rollback",
+        "/data/rollback-history",
+        "/data/rollback-observer",
+        "/data/sota_package",
+        "/data/themes",
+        "/data/theme",
+        "/data/theme_bak",
+        "/data/server_configurable_flags",
+        "/data/incremental",
+        "/data/mediadrm",
+        "/data/drm",
+        "/data/vendor/audio",          // 音频校准数据
+        "/data/vendor/modem",          // 基带
+        "/data/vendor/radio",
+        // ===== 其它顶层关键 =====
         "/system",
         "/vendor",
+        "/product",
+        "/system_ext",
         "/proc",
         "/sys",
         "/dev",
-        // ★ 模块自身资源：伪装系统应用 APK / 解包目录，绝不参与垃圾清理
+        "/mnt",
+        "/storage",
+        // ===== 模块自身资源 =====
         "/data/media/0/Download/Files/ZhangProtect-Android",
         "/data/media/0/Download/ZhangSetting",
+        // ===== 用户数据（清理会丢数据）=====
+        "/data/user_de",               // 设备加密用户数据
+        "/data/vendor_ce",
+        "/data/vendor_de",
+        "/data/unencrypted",
     )
 }

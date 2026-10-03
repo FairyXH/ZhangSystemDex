@@ -37,12 +37,21 @@ enum class MatchMode {
 
     /** 在 roots 下递归查找「同尺寸 + 同内容哈希」的重复文件（保留每个组最新一份）。 */
     DUP_CONTENT,
+
+    /**
+     * 泛化垃圾扫描：按「文件名模式 + 目录名模式 + 文件头特征」识别所有 App 的潜在垃圾。
+     *
+     * 覆盖：缓存、日志、临时、崩溃转储、零字节、空目录、缩略图、广告缓存等。
+     * 与 APK_SCAN 的区别：不限定类型，靠多组特征联合判定，适用范围覆盖全部 App。
+     */
+    JUNK_SCAN,
 }
 
 /** 功能分组，用于 WebUI 分区展示。 */
 enum class RuleGroup(val key: String, val title: String) {
     GENERAL("general", "通用清理"),
     DEEP("deep", "深度扫描"),
+    SYSTEM("system", "系统级清理"),
     WECHAT("wechat", "微信专清"),
     QQ("qq", "QQ 专清"),
 }

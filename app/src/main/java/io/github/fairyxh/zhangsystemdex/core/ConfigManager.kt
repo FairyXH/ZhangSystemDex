@@ -258,6 +258,11 @@ class ConfigManager(private val modDir: String) {
         add("rubbish_rule_big_files_private", "false", "私有目录大文件（仅列出）")
         add("rubbish_rule_dup_files_media", "false", "重复文件（media，按内容哈希）")
         add("rubbish_rule_dup_wechat_tpc", "true", "微信重复下载文件（TPCFile）")
+        // ===== 泛化垃圾扫描（全部 App + 整个 /data）=====
+        add("rubbish_rule_junk_all_apps", "false", "全部应用垃圾扫描（私人目录，按特征识别）")
+        add("rubbish_rule_junk_media_apps", "true", "外部存储应用垃圾扫描（全部 App）")
+        add("rubbish_rule_system_junk_data", "false", "系统级垃圾（/data 下缓存/日志/崩溃转储）")
+        add("rubbish_rule_system_bcc_csv", "true", "内核追踪 CSV（/data 根下 *_bcc.csv）")
     }
 
     private fun writeSwitches() {
@@ -325,6 +330,10 @@ class ConfigManager(private val modDir: String) {
             sb.append("rubbish_rule_big_files_private=false\t# 私有目录大文件（仅列出）\n")
             sb.append("rubbish_rule_dup_files_media=false\t# 重复文件（media，按内容）\n")
             sb.append("rubbish_rule_dup_wechat_tpc=true\t# 微信重复下载文件（TPCFile）\n")
+            sb.append("rubbish_rule_junk_all_apps=false\t# 全部应用垃圾扫描\n")
+            sb.append("rubbish_rule_junk_media_apps=true\t# 外部存储应用垃圾扫描\n")
+            sb.append("rubbish_rule_system_junk_data=false\t# 系统级垃圾（/data）\n")
+            sb.append("rubbish_rule_system_bcc_csv=true\t# 内核追踪 CSV\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
@@ -454,7 +463,9 @@ class ConfigManager(private val modDir: String) {
             "rubbish_clean_screen_off_only",
             // 深度扫描低风险项
             "rubbish_rule_apk_scan_private",
-            "rubbish_rule_dup_wechat_tpc"
+            "rubbish_rule_dup_wechat_tpc",
+            "rubbish_rule_junk_media_apps",
+            "rubbish_rule_system_bcc_csv"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
@@ -546,7 +557,12 @@ class ConfigManager(private val modDir: String) {
             "rubbish_rule_apk_scan_private" to "私有目录 APK 深度扫描：常见应用私有目录中的安装包",
             "rubbish_rule_big_files_private" to "私有目录大文件：列出超过 50MB 的文件（仅列出不删）",
             "rubbish_rule_dup_files_media" to "重复文件（media）：按尺寸+内容哈希找出完全相同文件，每组保留最新（高风险）",
-            "rubbish_rule_dup_wechat_tpc" to "微信重复下载文件（TPCFile）：同名同尺寸重复下载，保留最新一份"
+            "rubbish_rule_dup_wechat_tpc" to "微信重复下载文件（TPCFile）：同名同尺寸重复下载，保留最新一份",
+            // 泛化垃圾扫描
+            "rubbish_rule_junk_all_apps" to "全部应用垃圾扫描：按特征识别所有 App 私有目录的缓存/日志/临时垃圾（中风险）",
+            "rubbish_rule_junk_media_apps" to "外部存储应用垃圾：扫描 /data/media 各应用目录的缓存/日志（全部 App）",
+            "rubbish_rule_system_junk_data" to "系统级垃圾：/data 下缓存/日志/崩溃转储（已排除 /data/adb 与 Python 解释器）",
+            "rubbish_rule_system_bcc_csv" to "内核追踪 CSV：清理 /data 根下散落的 *_bcc.csv"
         )
 
         /** Defaults: false for everything except the six special features. */

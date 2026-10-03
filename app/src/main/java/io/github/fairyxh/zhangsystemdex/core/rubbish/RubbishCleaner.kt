@@ -104,7 +104,7 @@ class RubbishCleaner(private val config: ConfigManager) {
 
     private fun isDeepMode(m: MatchMode): Boolean = when (m) {
         MatchMode.APK_SCAN, MatchMode.BIG_FILE_SCAN,
-        MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> true
+        MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT, MatchMode.JUNK_SCAN -> true
         else -> false
     }
 
@@ -115,19 +115,78 @@ class RubbishCleaner(private val config: ConfigManager) {
      * 之后仅对「尺寸或 mtime 变化」的文件重新判定，未变文件直接复用缓存。
      */
     private fun scanDeep(rule: CleanRule, maxSamples: Int): DeepResult {
-        val roots = ArrayList<File>()
-        for (userId in mediaUserIds()) {
-            for (p in expandRoots(rule, userId)) {
-                val f = File(p)
-                if (f.exists()) roots += f
-            }
-        }
+        val roots = collectRoots(rule)
         return when (rule.mode) {
             MatchMode.APK_SCAN -> scanApk(rule, roots, maxSamples)
             MatchMode.BIG_FILE_SCAN -> scanBigFiles(rule, roots, maxSamples)
             MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> scanDuplicates(rule, roots, maxSamples)
+            MatchMode.JUNK_SCAN -> scanJunk(rule, roots, maxSamples)
             else -> DeepResult(0, 0L, emptyList())
         }
+    }
+
+    /**
+     * 泛化垃圾扫描：按 [JunkPatterns] 特征识别全部 App 的潜在垃圾。
+     *
+     * 覆盖维度：目录名（cache/logs/tmp/crash...）、文件名后缀（.log/.tmp/.bak...）、
+     * 文件名特征（thumbs.db/core...）、零字节文件、hprof 堆转储。
+     *
+     * 预筛：跳过 [RubbishGuard.isForbiddenPath] 与 [JunkPatterns.isProtectedPath]。
+     */
+    private fun scanJunk(rule: CleanRule, roots: List<File>, maxSamples: Int): DeepResult {
+        val idx = cache.load(rule.id)
+        var count = 0
+        var bytes = 0L
+        val samples = ArrayList<String>()
+        val alive = HashSet<String>()
+        val stack = ArrayDeque<File>()
+        roots.forEach { stack.addLast(it) }
+        val visited = HashSet<String>()
+
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            if (!visited.add(cur.path)) continue
+            if (RubbishGuard.isForbiddenPath(cur.path)) continue
+            if (JunkPatterns.isProtectedPath(cur.path.lowercase())) continue
+            // 深度限制：避免遍历到过深层（默认 8 层）
+            if (rule.maxDepth > 0 && cur.path.split('/').size > rule.maxDepth) continue
+
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (RubbishGuard.isForbiddenPath(c.path)) continue
+                if (JunkPatterns.isProtectedPath(c.path.lowercase())) continue
+                if (c.isDirectory) {
+                    // 空目录：直接计为垃圾
+                    if (JunkPatterns.isEmptyDir(c)) {
+                        count++
+                        if (samples.size < maxSamples) samples += c.path
+                    } else {
+                        stack.addLast(c)
+                    }
+                } else if (c.isFile) {
+                    alive += c.path
+                    val size = c.length()
+                    // 增量：命中缓存则复用
+                    val fresh = idx.isFresh(c.path, size, c.lastModified())
+                    val junk = if (fresh) {
+                        idx.get(c.path)?.kind == 'J'
+                    } else {
+                        val j = JunkPatterns.isJunk(c.name, cur.name, c, size)
+                        idx.put(ScanCache.Entry(if (j) 'J' else 'O', c.path, size, c.lastModified()))
+                        j
+                    }
+                    if (junk) {
+                        count++
+                        bytes += size
+                        if (samples.size < maxSamples) samples += c.path
+                    }
+                }
+            }
+        }
+        pruneIndex(idx, alive)
+        cache.save(rule.id, idx)
+        return DeepResult(count, bytes, samples)
     }
 
     /** 增量判定单个文件类型（命中缓存则复用，否则读文件头）。 */
@@ -249,6 +308,38 @@ class RubbishCleaner(private val config: ConfigManager) {
     }
 
     /**
+     * 收集泛化垃圾清理目标（JUNK_SCAN 的实际删除候选）。
+     *
+     * 与 [scanJunk] 判定一致，但**只返回文件**（空目录由 cleanup 阶段单独处理），
+     * 且严格排除受保护路径。
+     */
+    private fun collectJunkVictims(rule: CleanRule, roots: List<File>): List<File> {
+        val out = ArrayList<File>()
+        val stack = ArrayDeque<File>()
+        roots.forEach { stack.addLast(it) }
+        val visited = HashSet<String>()
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            if (!visited.add(cur.path)) continue
+            if (RubbishGuard.isForbiddenPath(cur.path)) continue
+            if (JunkPatterns.isProtectedPath(cur.path.lowercase())) continue
+            if (rule.maxDepth > 0 && cur.path.split('/').size > rule.maxDepth) continue
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (RubbishGuard.isForbiddenPath(c.path)) continue
+                if (JunkPatterns.isProtectedPath(c.path.lowercase())) continue
+                if (c.isDirectory) {
+                    if (JunkPatterns.isEmptyDir(c)) out += c else stack.addLast(c)
+                } else if (c.isFile && JunkPatterns.isJunk(c.name, cur.name, c, c.length())) {
+                    out += c
+                }
+            }
+        }
+        return out
+    }
+
+    /**
      * 深度模式的实际删除：
      *  1. 复用 [scanDeep] 得到「可清理目标」（APK 列表 / 重复文件受害者）；
      *  2. BIG_FILE_SCAN 为 listOnly，永不删除；
@@ -260,13 +351,7 @@ class RubbishCleaner(private val config: ConfigManager) {
         maxSamples: Int,
     ): Triple<Int, Long, List<RubbishGuard.Rejected>> {
         if (rule.listOnly) return Triple(0, 0L, emptyList())
-        val roots = ArrayList<File>()
-        for (userId in mediaUserIds()) {
-            for (p in expandRoots(rule, userId)) {
-                val f = File(p)
-                if (f.exists()) roots += f
-            }
-        }
+        val roots = collectRoots(rule)
         val victims: List<File> = when (rule.mode) {
             MatchMode.APK_SCAN -> {
                 val idx = cache.load(rule.id)
@@ -287,6 +372,7 @@ class RubbishCleaner(private val config: ConfigManager) {
                         }
                     }
             }
+            MatchMode.JUNK_SCAN -> collectJunkVictims(rule, roots)
             else -> emptyList()
         }
         var files = 0
@@ -581,6 +667,33 @@ class RubbishCleaner(private val config: ConfigManager) {
             if (current.isEmpty()) break
         }
         return current
+    }
+
+    /**
+     * 收集规则的实际扫描根。
+     *
+     * - 含 `<u>` 的 root：按每个媒体用户 id 展开（如 `/data/user/<u>` → `/data/user/0`、`/data/user/999`）
+     * - 不含 `<u>` 的 root：直接使用（如 `/data/log`、`/data/vendor/camera`）
+     */
+    private fun collectRoots(rule: CleanRule): List<File> {
+        val roots = ArrayList<File>()
+        val hasPlaceholder = rule.roots.any { it.contains("<u>") }
+        if (hasPlaceholder) {
+            for (userId in mediaUserIds()) {
+                for (p in expandRoots(rule, userId)) {
+                    if (p.contains("<u>")) continue
+                    val f = File(p)
+                    if (f.exists()) roots += f
+                }
+            }
+        } else {
+            for (p in rule.roots) {
+                if (p.contains("<u>")) continue
+                val f = File(p)
+                if (f.exists()) roots += f
+            }
+        }
+        return roots
     }
 
     private fun expandRoots(rule: CleanRule, userId: Int): List<String> =

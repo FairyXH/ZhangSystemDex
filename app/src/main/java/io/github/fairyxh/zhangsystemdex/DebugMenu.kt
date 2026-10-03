@@ -17,6 +17,8 @@ import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
+import io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer
+import io.github.fairyxh.zhangsystemdex.core.power.PowerPolicyEngine
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -54,6 +56,9 @@ object DebugMenu {
         println("21. 模块目录防护检查（删除 skip_mount 等残留）")
         println("22. AppOps 写入/读取测试")
         println("23. 厂商权限数据库写入/读取测试")
+        println("24. 电源优化：立即评估一次（真实施加/回滚，输出统计）")
+        println("25. 电源优化：查看状态快照（只读，不施加）")
+        println("26. 电源优化：查看决策表（纯计算，不产生副作用）")
         println("17. 退出")
         print("请选择数字: ")
         val line = try {
@@ -116,6 +121,37 @@ object DebugMenu {
                 23 -> {
                     val result = AppManagerModule(ctx).testVendorPermissionDatabaseWriteRead()
                     Logger.i("DebugMenu", "厂商权限数据库写入/读取测试结果: $result")
+                }
+                24 -> {
+                    // Real evaluation: honours power_optimize_enable, applies or
+                    // reverts exactly like the daemon path. Reversible.
+                    val opt = PowerOptimizer(ctx, ctx.config)
+                    Logger.i("DebugMenu", "电源优化立即评估完成: ${opt.evaluateNow()}")
+                }
+                25 -> {
+                    // Read-only snapshot; never starts the event loop.
+                    val opt = PowerOptimizer(ctx, ctx.config)
+                    for ((k, v) in opt.snapshot()) {
+                        Logger.i("DebugMenu", "  电源快照 $k = $v")
+                    }
+                }
+                26 -> {
+                    // Pure decision table, no side effects at all.
+                    val engine = PowerPolicyEngine(ctx.config)
+                    val cases = listOf(
+                        Triple(true, false, 80),
+                        Triple(false, false, 80),
+                        Triple(false, false, 10),
+                        Triple(false, true, 50),
+                    )
+                    for ((on, charging, pct) in cases) {
+                        val d = engine.decide(on, charging, pct)
+                        Logger.i(
+                            "DebugMenu",
+                            "  决策 screenOn=$on charging=$charging battery=$pct% -> " +
+                                "level=${d.level} cpuCap=${d.cpuCapPercent} restrictBg=${d.restrictBackground} reason=${d.reason}"
+                        )
+                    }
                 }
                 21 -> {
                     val removed = SkipMountGuardModule(ctx).runOnce()

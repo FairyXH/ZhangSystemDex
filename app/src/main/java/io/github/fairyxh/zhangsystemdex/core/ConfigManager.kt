@@ -20,6 +20,16 @@ class ConfigManager(private val modDir: String) {
     var logEnabled: Boolean = true
         private set
 
+    /**
+     * Fixed loopback port for the built-in WebUI HTTP backend (Main.dex side).
+     * Declared in config.conf as `http_port=NNNN`. The server ALWAYS binds to
+     * 127.0.0.1 only; this value never opens an external interface. Invalid or
+     * missing values fall back to [DEFAULT_HTTP_PORT].
+     */
+    @Volatile
+    var httpPort: Int = DEFAULT_HTTP_PORT
+        private set
+
     val rootFile: File get() = File(rootDir)
     val logDir: File get() = File(rootDir, "log")
     val cacheDir: File get() = File(rootDir, "cache")
@@ -34,6 +44,7 @@ class ConfigManager(private val modDir: String) {
     fun load() {
         var parsedRoot: String? = null
         var parsedLog: Boolean? = null
+        var parsedPort: Int? = null
         if (configFile.exists()) {
             try {
                 configFile.forEachLine { line ->
@@ -46,6 +57,11 @@ class ConfigManager(private val modDir: String) {
                             when (k) {
                                 "root_dir" -> parsedRoot = v
                                 "log_enabled" -> parsedLog = v.equals("true", ignoreCase = true)
+                                // Loopback HTTP port for the built-in WebUI backend.
+                                // Only accept sane, non-privileged ports; otherwise keep default.
+                                "http_port" -> v.toIntOrNull()?.let { p ->
+                                    if (p in 1024..65535) parsedPort = p
+                                }
                             }
                         }
                     }
@@ -58,6 +74,7 @@ class ConfigManager(private val modDir: String) {
         }
         if (!parsedRoot.isNullOrBlank()) rootDir = parsedRoot!!
         logEnabled = parsedLog ?: true
+        httpPort = parsedPort ?: DEFAULT_HTTP_PORT
         rootFile.mkdirs()
         logDir.mkdirs()
         cacheDir.mkdirs()
@@ -148,6 +165,34 @@ class ConfigManager(private val modDir: String) {
         if (switches["module_appops_auth_enable"] == null) {
             missing.add("module_appops_auth_enable=false\t# 为模块挂载 App 授权 AppOps（仅处理模块目录 APK）")
         }
+        // ===== 电源与后台调度优化子系统（新增，仅追加缺失键，不覆盖已有值）=====
+        if (switches["power_optimize_enable"] == null) {
+            missing.add("power_optimize_enable=false\t# 电源与后台调度优化（事件驱动省电子系统，关闭时不影响其它功能与系统 Doze）")
+        }
+        if (switches["power_charging_release"] == null) {
+            missing.add("power_charging_release=true\t# 充电时自动退出省电策略并还原临时调度状态")
+        }
+        if (switches["power_low_battery_threshold"] == null) {
+            missing.add("power_low_battery_threshold=20\t# 低电量阈值（百分比，0-100，默认 20）")
+        }
+        if (switches["power_low_battery_cpu_cap"] == null) {
+            missing.add("power_low_battery_cpu_cap=55\t# 低电量时 CPU 最高频率上限百分比（1-100，默认 55）")
+        }
+        if (switches["power_screen_off_cpu_cap_percent"] == null) {
+            missing.add("power_screen_off_cpu_cap_percent=70\t# 灭屏时 CPU 最高频率上限百分比（1-100，默认 70）")
+        }
+        // 以下三个布尔键此前仅在 SWITCH_DESCRIPTIONS 中登记、未落盘，导致
+        // WebUI 渲染的开关在 switches.conf 中不存在（默认 false 恰好一致，
+        // 但“文件即唯一真源”的一致性被破坏）。此处补齐，默认 false 保持保守。
+        if (switches["power_screen_off_cpu_cap"] == null) {
+            missing.add("power_screen_off_cpu_cap=false\t# 灭屏时限制 CPU 最高频率（true/false，默认 false，退出即还原）")
+        }
+        if (switches["power_low_battery_restrict_bg"] == null) {
+            missing.add("power_low_battery_restrict_bg=false\t# 低电量时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）")
+        }
+        if (switches["power_screen_off_restrict_bg"] == null) {
+            missing.add("power_screen_off_restrict_bg=false\t# 灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）")
+        }
         if (missing.isEmpty()) return
         try {
             val sb = StringBuilder("\n# 主调优循环参数（可选项，留空使用默认值）\n")
@@ -188,6 +233,13 @@ class ConfigManager(private val modDir: String) {
             sb.append("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）\n")
             sb.append("heavy_screen_off_only=false\t# 高占用任务是否仅在息屏时执行（false=亮屏也允许执行）\n")
             sb.append("module_appops_auth_enable=false\t# 为模块挂载 App 授权 AppOps（仅处理模块目录 APK）\n")
+            sb.append("\n# 电源与后台调度优化参数（可选项，总开关见上方 power_optimize_enable）\n")
+            sb.append("power_low_battery_threshold=20\t# 低电量阈值（百分比，0-100，默认 20）\n")
+            sb.append("power_low_battery_cpu_cap=55\t# 低电量时 CPU 最高频率上限百分比（1-100，默认 55）\n")
+            sb.append("power_low_battery_restrict_bg=false\t# 低电量时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）\n")
+            sb.append("power_screen_off_cpu_cap=false\t# 灭屏时限制 CPU 最高频率（true/false，默认 false，退出即还原）\n")
+            sb.append("power_screen_off_cpu_cap_percent=70\t# 灭屏时 CPU 最高频率上限百分比（1-100，默认 70）\n")
+            sb.append("power_screen_off_restrict_bg=false\t# 灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）\n")
             switchesFile.writeText(sb.toString())
             Logger.i("ConfigManager", "switches.conf 已初始化")
         } catch (t: Throwable) {
@@ -203,7 +255,11 @@ class ConfigManager(private val modDir: String) {
                     "# root_dir: directory holding all feature configuration\n" +
                     "root_dir=/data/adb/Zhang\n" +
                     "# log_enabled: master logging switch (true/false)\n" +
-                    "log_enabled=true\n"
+                    "log_enabled=true\n" +
+                    "# http_port: fixed loopback port of the built-in WebUI backend.\n" +
+                    "# The server binds 127.0.0.1 ONLY and is never reachable from the network.\n" +
+                    "# Range 1024-65535; change it only if the chosen port is already in use.\n" +
+                    "http_port=$DEFAULT_HTTP_PORT\n"
             )
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "写入默认 config.conf 失败: ${t.message}")
@@ -217,6 +273,7 @@ class ConfigManager(private val modDir: String) {
         copyOrInit("notification.conf", DEFAULT_NOTIFICATION_CONF)
         copyOrInit("autorun.conf", DEFAULT_AUTORUN_CONF)
         copyOrInit("HideMyAppList_MoreBlack.txt", DEFAULT_HMA_MORE_BLACK)
+        copyOrInit("power_bg_stop_list.conf", DEFAULT_POWER_BG_STOP_LIST)
         File(rootDir, "app_manager").mkdirs()
         copyOrInit("app_manager/disable_app_list.conf", DEFAULT_DISABLE_APP_LIST)
         copyOrInit("app_manager/disable_app_list_onlydisable.conf", DEFAULT_DISABLE_APP_LIST_ONLY)
@@ -263,6 +320,12 @@ class ConfigManager(private val modDir: String) {
     companion object {
         const val MODULE_APPOPS_CONF = "appops_packages.conf"
 
+        /**
+         * Default loopback port for the built-in WebUI HTTP backend. Chosen in
+         * the unprivileged range and unlikely to collide with common services.
+         */
+        const val DEFAULT_HTTP_PORT = 26437
+
         /** Features that default to ON. */
         val SPECIAL_DEFAULT_TRUE: Set<String> = setOf(
             "doze_enable",
@@ -279,7 +342,8 @@ class ConfigManager(private val modDir: String) {
             "miui_tuning_enable",
             "module_appops_auth_enable",
             "skip_mount_guard_enable",
-            "game_oom_protect_enable"
+            "game_oom_protect_enable",
+            "power_charging_release"
         )
 
         /** Ordered switch descriptions (key -> Chinese description). */
@@ -319,7 +383,18 @@ class ConfigManager(private val modDir: String) {
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
             "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
-            "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转"
+            "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转",
+            "bt_offload_guard_enable" to "蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，修复卡顿/无声/断连）",
+
+            // ===== 电源与后台调度优化子系统（新增，默认关闭） =====
+            "power_optimize_enable" to "电源与后台调度优化：事件驱动的省电子系统（关闭后不创建监听、立即恢复临时调度状态，不影响其它功能与系统 Doze）",
+            "power_low_battery_threshold" to "低电量阈值（百分比，0-100，默认 20）",
+            "power_low_battery_cpu_cap" to "低电量时 CPU 最高频率上限百分比（1-100，默认 55，仅降不锁，退出即还原）",
+            "power_low_battery_restrict_bg" to "低电量时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）",
+            "power_screen_off_cpu_cap" to "灭屏时限制 CPU 最高频率（true/false，默认 false，退出即还原）",
+            "power_screen_off_cpu_cap_percent" to "灭屏时 CPU 最高频率上限百分比（1-100，默认 70）",
+            "power_screen_off_restrict_bg" to "灭屏时限制后台（true/false，默认 false，仅作用于 power_bg_stop_list.conf 中的应用）",
+            "power_charging_release" to "充电时自动退出省电策略并还原临时调度状态（true/false，默认 true）"
         )
 
         /** Defaults: false for everything except the six special features. */
@@ -463,5 +538,14 @@ class ConfigManager(private val modDir: String) {
 
         const val DEFAULT_HMA_MORE_BLACK =
             "# user blacklist: one package name per line, appended to the hidden list\n"
+
+        /**
+         * Packages the power subsystem may restrict in the background.
+         * EMPTY by default: the subsystem never touches any app unless the user
+         * explicitly lists it here. One package name per line, '#' starts a comment.
+         */
+        const val DEFAULT_POWER_BG_STOP_LIST =
+            "# 电源优化后台限制列表：每行一个包名，默认空白（不限制任何应用）\n" +
+                "# 受保护应用（systemui/settings/gms/桌面/模块自身/前台应用/Doze 白名单）永远不会被限制\n"
     }
 }

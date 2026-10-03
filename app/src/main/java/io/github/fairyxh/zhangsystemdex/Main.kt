@@ -5,14 +5,17 @@ import android.os.Process
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.HiddenApiBypass
+import io.github.fairyxh.zhangsystemdex.core.HttpBackend
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.RootUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
+import io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.AccelerometerRotationModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
+import io.github.fairyxh.zhangsystemdex.modules.BtOffloadGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
 import io.github.fairyxh.zhangsystemdex.modules.GamePauseModule
 import io.github.fairyxh.zhangsystemdex.modules.GameOomProtectModule
@@ -169,6 +172,11 @@ object Main {
             ModuleEntry("power", { true }) {
                 PowerManagerModule(ctx)
             },
+            // 电源与后台调度优化子系统（新增）：受总闸 powersave_enable 与自身开关双重控制。
+            // 关闭时不创建线程/监听，且会还原所有临时调度状态。
+            ModuleEntry("power_optimize", { enabled("power_optimize_enable") }) {
+                PowerOptimizer(ctx, ctx.config)
+            },
             ModuleEntry("memory_clean", { enabled("memory_clean_enable") }) { MemoryModule(ctx) },
             ModuleEntry("accelerometer_rotation", { enabled("accelerometer_rotation_enable") }) {
                 AccelerometerRotationModule(ctx)
@@ -178,9 +186,23 @@ object Main {
             },
             ModuleEntry("hma_config", { enabled("hma_config_enable") }) { ConfigGenModule(ctx, scanner) },
             ModuleEntry("network_ipv6", { enabled("network_ipv6_disable_enable") }) { NetworkModule(ctx) },
+            // 蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，已内置于 dex 常驻循环）。
+            // 受 bt_offload_guard_enable 开关控制，未启用时不创建线程。
+            ModuleEntry("bt_offload_guard", { enabled("bt_offload_guard_enable") }) {
+                BtOffloadGuardModule(ctx)
+            },
             // 防护类功能：不受 powersave_enable 影响（省电模式不关闭防护）
             ModuleEntry("skip_mount_guard", { sw.switch("skip_mount_guard_enable") }) { SkipMountGuardModule(ctx) },
         )
+
+        // ---- WebUI 后端（Main.dex 承载）--------------------------------------
+        // HTTP 服务是 WebUI 的控制平面：页面加载后立刻需要它来读取/写入所有
+        // 配置。若它跟随任何功能开关，用户一旦从 UI 里关掉对应功能就会把
+        // 自己的后端关掉（死锁）。因此它必须常驻，且只监听 127.0.0.1，
+        // 端口取自 config.conf 的 http_port。
+        val httpBackend = HttpBackend(ctx, sw.httpPort)
+        httpBackend.start()
+        Logger.i("Main", "WebUI 后端已启动：http://127.0.0.1:${httpBackend.activePort()}（仅回环）")
 
         val running = mutableMapOf<String, DaemonLoop>()
 
@@ -214,6 +236,10 @@ object Main {
 
         Runtime.getRuntime().addShutdownHook(Thread {
             Logger.i("Main", "关机钩子，正在停止模块")
+            try {
+                httpBackend.stop()
+            } catch (_: Throwable) {
+            }
             running.values.forEach { it.stop() }
         })
 

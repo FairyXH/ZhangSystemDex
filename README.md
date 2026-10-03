@@ -34,7 +34,8 @@ Magisk 模块目录                       运行时数据目录
 | 文件 | 职责 |
 |---|---|
 | `Main.dex` | 整个模块的核心（Kotlin Dex Daemon），所有配置由它生出 |
-| `config.conf` | 仅两键：`root_dir`（配置根，默认 `/data/adb/Zhang`）、`log_enabled`（日志总开关） |
+| `webroot/` | WebUI 前端资源（`index.html` + `config.json`）。由 Main.dex 承载的 HTTP 后端提供数据，页面只负责渲染与控制 |
+| `config.conf` | 三键：`root_dir`（配置根，默认 `/data/adb/Zhang`）、`log_enabled`（日志总开关）、`http_port`（内置 WebUI 后端回环端口，默认 26437） |
 | `sqlite_lib/` | 内置 sqlite3 CLI 及其依赖库（首次启动自动同步到 `cache/sqlite_lib`） |
 | `service.sh` | 正式启动器：同步 Main.dex、防重复 pid、`app_process` 后台启动 |
 | `启动Dex.sh` / `停止Dex.sh` / `重启Dex.sh` | daemon 启停/重启快捷脚本（重启=停止+启动） |
@@ -104,6 +105,9 @@ Magisk 模块目录                       运行时数据目录
 | `storage_isolate_all_enable` | 存储空间隔离作用于所有应用（false=仅第三方） |
 | `storage_isolate_media_enable` | 允许隔离媒体选择器 |
 | `boost_process_enable` | 进程调度提升（renice/chrt/cpuset） |
+| `power_optimize_enable` | 电源与后台调度优化：事件驱动省电子系统（关闭时不创建监听、立即还原临时调度状态，不影响其它功能与系统 Doze） |
+| `bt_offload_guard_enable` | 蓝牙音频 offload 循环守护：周期性复位 A2DP/LE 音频硬件 offload 属性，消除爆音/无声/重连 |
+
 | `boost_game_enable` | 游戏进程自动加速 |
 | `run_once_enable` | 高占用任务仅执行一次后退出 |
 | `max_cpu_enable` | CPU/GPU 满频率与核心分配 |
@@ -122,6 +126,18 @@ Magisk 模块目录                       运行时数据目录
 | `tuning_interval_seconds` | 600（服务器模式 300） | 主调优循环周期（秒），最小 30 |
 | `heavy_interval_cycles` | 6（服务器模式 24） | 高占用任务间隔周期数，即每 N 个主循环周期执行一次 heavy，最小 1 |
 | `heavy_screen_off_only` | `false` | 高占用任务是否**仅在息屏时执行**；`false`=亮屏也允许执行，`true`=亮屏到期跳过并下一周期立即重试 |
+**电源与后台调度优化参数**（`power_optimize_enable` 开启后生效；`config.conf` 生成时自动补写，修改后需重启 daemon）：
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `power_low_battery_threshold` | `20` | 低电量阈值（百分比 0-100），低于则进入低电策略 |
+| `power_low_battery_cpu_cap` | `55` | 低电量时 CPU 最高频率上限百分比（1-100，**仅降上限、退出即还原，永不锁频/下线核心/关温控**） |
+| `power_screen_off_cpu_cap` | `false` | 灭屏时是否限制 CPU 最高频率（退出即还原） |
+| `power_screen_off_cpu_cap_percent` | `70` | 灭屏时 CPU 最高频率上限百分比（1-100） |
+| `power_screen_off_restrict_bg` | `false` | 灭屏时是否限制后台（**仅作用于 `power_bg_stop_list.conf` 中的应用**） |
+| `power_low_battery_restrict_bg` | `false` | 低电量时是否限制后台（同上，仅作用于停名单） |
+| `power_charging_release` | `true` | 充电时自动退出省电策略并还原全部临时调度状态 |
+| `http_port` | `26437` | 内置 WebUI 后端回环端口（**只监听 127.0.0.1**） |
+
 
 ---
 
@@ -215,6 +231,39 @@ Magisk 模块目录                       运行时数据目录
 
 ---
 
+### 5.4 电源与后台调度优化（core/power/）
+
+事件驱动的省电子系统，默认关闭（`power_optimize_enable=false`），且受总闸 `powersave_enable` 双重控制。
+
+| 类 | 职责 | 副作用 |
+| --- | --- | --- |
+| `PowerPolicyEngine` | 纯决策层：根据屏幕/电量/充电状态输出四级策略（0 IDLE / 1 SCREEN_OFF / 2 LOW_BATTERY / 3 CHARGING，充电恒回退 IDLE） | 无（可纯函数测试） |
+| `PowerOptimizer` | 唯一副作用编排器：接收状态事件 → 求策略 → 施加/回滚；60s `sleepLoop` 仅作粗粒度兜底 | 施加/回滚 |
+| `PowerStateMonitor` | 事件源：注册 framework 广播（息屏/亮屏/电量/充电）；注册失败 fail-open 降级为周期 tick | 无 |
+| `KernelPowerManager` | 内核侧施加：**仅降 CPU 最高频率上限**，绝不锁频、绝不下线核心、绝不关温控；支持 `revertAll` 完整还原 | 写 sysfs |
+| `AppPowerManager` | 应用侧施加：只对 `power_bg_stop_list.conf` 名单内的包做后台限制；**空表 = 不做任何事**；白名单永不触碰 | 写 AppOps/强制停止 |
+| `PowerStatistics` | 无锁原子计数（施加次数/回滚次数/命中策略等），供 `/api/powerstatus` 快照 | 无 |
+
+**设计原则**：决策与副作用彻底分离——`PowerPolicyEngine` 可单测、`PowerOptimizer` 是唯一改状态的入口；所有施加都可逆（`revertAll`），关闭开关立即还原，不改变系统自身 Doze/调度逻辑。调试菜单 24/25/26 与 `SelfTest.powerChecks` 均以只读或纯计算方式验证，**自测不写 sysfs**。
+
+### 5.5 WebUI 控制台（core/HttpBackend.kt + webroot/）
+
+Main.dex 内常驻 HTTP 服务，**仅绑定 `127.0.0.1`**（不对外暴露），端口取自 `config.conf` 的 `http_port`（默认 `26437`，有效范围 1024–65535）。前端静态资源位于模块目录 `webroot/`（`index.html` + `config.json`），由 KernelSU/Magisk 的模块 WebUI 入口加载，通过本机回环访问后端 API。
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/ping` | GET | 存活探测 |
+| `/api/paths` | GET | 返回关键路径（配置根、日志、模块目录等） |
+| `/api/read` | GET | 读取指定配置文件内容 |
+| `/api/write` | POST | 写入指定配置文件内容 |
+| `/api/bglist/read` | GET | 读取 `power_bg_stop_list.conf` |
+| `/api/bglist/write` | POST | 写入 `power_bg_stop_list.conf` |
+| `/api/powerstatus` | GET | 电源子系统状态快照（策略 + 统计 + 名单规模） |
+| `/api/switch/set` | POST | 修改功能开关并触发重载 |
+| `/api/reload` | POST | 手动触发配置热重载 |
+
+所有端点返回 UTF-8 JSON，并带宽松 CORS 头（便于 WebUI 容器内嵌页面调用）。服务随 daemon 启动常驻，在关机钩子中 `stop()`。
+
 ## 6. 线程与日志
 
 - **线程模型**：每个功能独立线程 + 独立异常捕获；单个模块崩溃不影响 daemon。
@@ -302,6 +351,11 @@ HMA 生成/DNTA/target 列表/LSPosed 扫描/MIUI 调优/温控遮蔽），每�
 ---
 
 ## 9. 版本记录
+- 2026-10-03：**新增 WebUI 控制台与电源/后台调度优化子系统，并内置蓝牙音频 offload 循环守护。**
+  1. **WebUI HTTP 后端（`core/HttpBackend.kt`）**：Main.dex 内常驻一个仅监听 `127.0.0.1` 的 HTTP 服务，端口取自 `config.conf` 的 `http_port`（默认 `26437`，可 1024–65535）；提供 `/api/ping`、`/api/paths`、`/api/read`、`/api/write`、`/api/bglist/read`、`/api/bglist/write`、`/api/powerstatus`、`/api/switch/set`、`/api/reload` 等 JSON 端点（UTF-8 + 宽松 CORS）。前端资源位于模块目录 `webroot/`（`index.html` + `config.json`），由 KernelSU/Magisk 模块 WebUI 入口渲染。服务随 daemon 启动常驻，关机钩子中停止。
+  2. **电源与后台调度优化子系统（`core/power/`，6 个类）**：`PowerPolicyEngine` 为纯决策层（IDLE / SCREEN_OFF / LOW_BATTERY / CHARGING 四级，充电恒回退 IDLE）；`PowerOptimizer` 为唯一副作用编排器，事件驱动、60s 兜底轮询；`PowerStateMonitor` 注册 framework 广播，失败 fail-open 降级为 tick；`KernelPowerManager` 只降 CPU 最高频率、绝不锁频/下线核心/关温控且可 `revertAll`；`AppPowerManager` 仅作用于 `power_bg_stop_list.conf`（空表 = 不做任何事，白名单永不触碰）；`PowerStatistics` 无锁原子计数供 WebUI 快照。由总闸 `powersave_enable` 与自身开关 `power_optimize_enable` 双重控制，关闭时立即还原临时调度状态，不影响其它功能与系统 Doze。
+  3. **蓝牙音频 offload 守护（`modules/BtOffloadGuardModule.kt`）**：以 `DaemonLoop` 周期性复位 A2DP/LE 硬件 offload 属性，替代旧版 0s/20s/60s 一发式 shell 脚本，受 `bt_offload_guard_enable` 控制，解决爆音、无声、反复重连问题。
+  4. **其它**：`ConfigManager` 新增 `http_port` 与一批 `power_*` 配置键并新增 `power_bg_stop_list.conf`（默认空表）；`DebugMenu` 新增 24（立即评估一次，真实施加/回滚）、25（查看状态快照）、26（查看决策表，纯计算）；`SelfTest` 新增 `powerChecks`（对 6 个 power 类只读/纯内存验证，不写 sysfs）。
 
 - 2026-08-07：新增 `skip_mount_guard_enable`（默认 true）模块目录防护：自动删除模块目录下 `skip_mount` 等残留文件（Magisk 安装模板残留会让 system/ 挂载被跳过）；监听列表 `WATCH_FILES` 易维护、不受省电模式影响；调试菜单新增 21、SelfTest 新增检查项。模块侧 install.sh/update-binary 已移除 SKIPMOUNT 创建逻辑（永不创建 skip_mount）。构建并部署 Main.dex（单一 classes.dex，字节验证通过）。
 - 2026-08-07：修复 `hma_config_enable` 默认失效——该键在 `SPECIAL_DEFAULT_TRUE` 但缺失于 `SWITCH_DESCRIPTIONS`，导致 `SWITCH_DEFAULTS` 无此键、配置文件永不生成该行、ConfigGenModule 永不启动（HMA 模板不生成）；已补描述并支持旧配置自动追加该行。HMA 生成时除 `隐藏应用列表全隐藏.json` 外**另写 `config.json` 同名副本**到模块 `ZhangSetting/` 与 `Download/ZhangSetting/`。真机验证：ConfigGen 启用、双副本生成（白名单 117/黑名单池 66）。

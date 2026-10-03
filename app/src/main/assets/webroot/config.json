@@ -1,0 +1,19 @@
+{
+  "title": "ZhangProtect 控制台",
+  "icon": "icon.png",
+  "windowResize": false,
+  "exitConfirm": false,
+  "backHandler": true,
+  "historyFallback": false,
+  "historyFallbackFile": "index.html",
+  "autoStatusBarsStyle": true,
+  "permissions": [],
+  "require": {
+    "packages": [],
+    "version": {
+      "required": 0,
+      "supportText": "\u9700\u8981 WebUI X",
+      "supportLink": "https://github.com/MMRLApp/WebUI-X-Portable"
+    }
+  }
+}

@@ -79,6 +79,7 @@ object SelfTest {
         envChecks(s, ctx)
         toolChecks(s, ctx)
         moduleChecks(s, ctx)
+        powerChecks(s, ctx)
         s.print()
         Logger.i("SelfTest", "自测完成: 通过=${s.pass} 失败=${s.fail} 警告=${s.warn} 跳过=${s.skip}")
         return s
@@ -438,5 +439,160 @@ object SelfTest {
         s.add("模块.NetworkModule", Status.SKIP, "无公开 runOnce（daemon tick 驱动）")
         s.add("模块.Performance.applyMaxCpu", Status.SKIP, "CPU/GPU 满频副作用，需 max_cpu_enable 开启后验证")
         s.add("模块.GamePause/SystemTuning", Status.SKIP, "无公开 runOnce（周期逻辑由 daemon 驱动）")
+    }
+
+    // ---------- power & background scheduling subsystem ----------
+    //
+    // Safety: every check here is read-only or uses the pure/in-memory API.
+    // No kernel write, no background restriction, no `dumpsys` poll is
+    // performed. The side-effecting orchestrator [PowerOptimizer] is only
+    // instantiated (its constructor registers nothing and performs no I/O);
+    // its daemon loop is driven by Main, not by SelfTest. This keeps the
+    // regression suite non-destructive while still exercising all 6 classes.
+    private fun powerChecks(s: Summary, ctx: DexContext) {
+        // 1) PowerStatistics: counter + snapshot contract.
+        try {
+            val st = io.github.fairyxh.zhangsystemdex.core.power.PowerStatistics()
+            st.noteScreenOff()
+            st.notePolicyApplied(1, "test")
+            st.notePolicyReverted("test")
+            st.noteFailOpen("test")
+            val snap = st.snapshot()
+            val ok = snap.containsKey("screenOffCount") &&
+                snap.containsKey("policyAppliedCount") &&
+                snap.containsKey("policyRevertCount") &&
+                snap.containsKey("failOpenCount") &&
+                st.lastAction.isNotEmpty()
+            s.add("电源.PowerStatistics 计数/快照", if (ok) Status.PASS else Status.FAIL, st.summary())
+        } catch (t: Throwable) {
+            s.add("电源.PowerStatistics 计数/快照", Status.FAIL, t.message ?: "")
+        }
+
+        // 2) PowerPolicyEngine: pure decision table over the four levels.
+        //    Uses the live config, so this doubles as a config-read check.
+        try {
+            val eng = io.github.fairyxh.zhangsystemdex.core.power.PowerPolicyEngine(ctx.config)
+            val idle = eng.decide(screenOn = true, charging = false, batteryPct = 80)
+            val off = eng.decide(screenOn = false, charging = false, batteryPct = 80)
+            val low = eng.decide(screenOn = true, charging = false, batteryPct = 5)
+            val chg = eng.decide(screenOn = false, charging = true, batteryPct = 80)
+            val levelsOk = idle.level == 0 && off.level == 1 && low.level == 2 && chg.level == 3
+            // charging must release (charging=true) regardless of screen state
+            val releaseOk = chg.charging && !chg.restrictBackground && chg.cpuCapPercent == null
+            // low-battery branch reads power_low_battery_cpu_cap from config
+            val lowCapOk = low.cpuCapPercent != null && low.cpuCapPercent!! in 10..100
+            val ok = levelsOk && releaseOk && lowCapOk
+            s.add(
+                "电源.PowerPolicyEngine 四级决策",
+                if (ok) Status.PASS else Status.FAIL,
+                "idle=${idle.level} off=${off.level} low=${low.level} chg=${chg.level} " +
+                    "lowCap=${low.cpuCapPercent} release=${chg.charging}"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.PowerPolicyEngine 四级决策", Status.FAIL, t.message ?: "")
+        }
+
+        // 3) KernelPowerManager: gate must be closed (no write) before apply.
+        try {
+            val st = io.github.fairyxh.zhangsystemdex.core.power.PowerStatistics()
+            val km = io.github.fairyxh.zhangsystemdex.core.power.KernelPowerManager(st)
+            val idleApplied = km.isApplied()
+            // Do NOT call applyScreenOffProfile here: it writes sysfs and is a
+            // real side effect. Only assert the initial (reverted) invariant.
+            s.add(
+                "电源.KernelPowerManager 初始未施加",
+                if (!idleApplied) Status.PASS else Status.WARN,
+                "isApplied=$idleApplied（真实施加由 daemon tick 验证，避免自测写 sysfs）"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.KernelPowerManager 初始未施加", Status.FAIL, t.message ?: "")
+        }
+
+        // 4) AppPowerManager: stop list loads and default is empty (no targets).
+        try {
+            val am = io.github.fairyxh.zhangsystemdex.core.power.AppPowerManager(ctx.config.rootDir)
+            val has = am.hasTargets()
+            s.add(
+                "电源.AppPowerManager 停名单加载",
+                Status.PASS,
+                "hasTargets=$has（默认空名单，不作用于任何应用）"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.AppPowerManager 停名单加载", Status.FAIL, t.message ?: "")
+        }
+
+        // 5) PowerStateMonitor: register + unregister receivers without side effects.
+        try {
+            val st = io.github.fairyxh.zhangsystemdex.core.power.PowerStatistics()
+            val mon = io.github.fairyxh.zhangsystemdex.core.power.PowerStateMonitor(
+                stats = st,
+                onScreenOff = {},
+                onScreenOn = {},
+                onChargingChanged = { _, _ -> }
+            )
+            val started = mon.start()
+            val eventDriven = mon.isEventDriven()
+            val coarse = mon.batteryLevel
+            mon.stop()
+            val stopped = !mon.isEventDriven()
+            val ok = started && eventDriven && stopped
+            s.add(
+                "电源.PowerStateMonitor 事件注册/注销",
+                if (ok) Status.PASS else Status.WARN,
+                "start=$started eventDriven=$eventDriven battery=$coarse stopped=$stopped"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.PowerStateMonitor 事件注册/注销", Status.FAIL, t.message ?: "")
+        }
+
+        // 6) PowerOptimizer: construct only (no loop start); verify fail-open snapshot.
+        try {
+            val opt = io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer(ctx, ctx.config)
+            val snap = opt.snapshot()
+            val ok = snap.isNotEmpty()
+            s.add(
+                "电源.PowerOptimizer 快照可读",
+                if (ok) Status.PASS else Status.WARN,
+                "keys=${snap.keys.joinToString(",")}（未启动 daemon，仅构造与快照）"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.PowerOptimizer 快照可读", Status.FAIL, t.message ?: "")
+        }
+
+        // 7) Config consistency: every power key described in the WebUI must
+        //    exist in switches.conf. This guards the exact defect fixed in the
+        //    migration (3 booleans were described but not emitted).
+        try {
+            val keys = listOf(
+                "power_optimize_enable",
+                "power_charging_release",
+                "power_low_battery_threshold",
+                "power_low_battery_cpu_cap",
+                "power_screen_off_cpu_cap",
+                "power_screen_off_cpu_cap_percent",
+                "power_low_battery_restrict_bg",
+                "power_screen_off_restrict_bg"
+            )
+            val missing = keys.filter { ctx.config.getString(it, "")?.trim().isNullOrEmpty() }
+            s.add(
+                "电源.配置键齐备（8 项）",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                if (missing.isEmpty()) "8/8 已在 switches.conf" else "缺失: $missing"
+            )
+        } catch (t: Throwable) {
+            s.add("电源.配置键齐备（8 项）", Status.FAIL, t.message ?: "")
+        }
+
+        // 8) Background stop list file must exist (created by initUserConfigs).
+        try {
+            val f = File(ctx.config.rootDir, "power_bg_stop_list.conf")
+            s.add(
+                "电源.停名单文件存在",
+                if (f.exists()) Status.PASS else Status.WARN,
+                f.path
+            )
+        } catch (t: Throwable) {
+            s.add("电源.停名单文件存在", Status.FAIL, t.message ?: "")
+        }
     }
 }

@@ -586,3 +586,42 @@ zip 内无 `__pycache__`。
 
 **对比上一版正式包**（17:05，430,117,015 字节，SHA256 `6e1a9d69…`）：
 差异仅 `webroot/index.html`（保存按钮修复）；`Main.dex` 未变。
+---
+## 14. 修复：刷入新 zip 后 WebUI 仍无法保存配置（2026-10-04 07:30）
+**现象**：用户刷入上一步的 zip 并重启后，反馈「webui 依旧无法保存配置」（保存按钮已可点，
+但改动不落盘）。用户追加要求：**改成开关切换后 2 秒自动保存，同时保留保存按钮，且保存按钮永远可点**。
+**根因（真机证据）**：
+- WebUI 页面 origin 为 `webui-x://…`（opaque origin），向 `http://127.0.0.1:26437` 发请求。
+- **GET 正常**（`/api/paths`、`/api/read` 是「简单请求」，无预检）；**POST `/api/write`
+  带 `Content-Type: application/json` 会先发 `OPTIONS` 预检**。
+- 后端 `route()` **没有 OPTIONS 分支**，落入 `else -> jsonError`；且 `respond()` **缺少
+  `Access-Control-Allow-Private-Network: true`**。Chromium 的 **Private Network Access**
+  会因此静默拦截从「公有/不透明 origin」到 **loopback** 地址的请求 → POST 从未到达 daemon。
+- 佐证：连接 `ss -tlnp` 显示 26437 由新 dex（pid）持有，`/api/ping` 正常，但 POST 无落盘。
+**修复**：
+- 后端 `HttpBackend.kt`：
+  - `respond()` 增加 `Access-Control-Allow-Private-Network: true` 与 `Vary: Origin`。
+  - `handle()`：`if (method == "OPTIONS") ""`，直接返回**空体 2xx 预检**，不再进 `route()`。
+  - `handle()` 增加**每请求日志** `请求 METHOD PATH`（便于诊断；受 `log_enabled` 门控）。
+- 前端 `index.html`：
+  - `markDirty()` 末尾 `scheduleAutoSave()`：**改动后 2 秒去抖自动保存**（`save({auto:true})`）。
+  - `refreshNav()`：**保存/撤销按钮永远可点**（不再按 dirty/busy 禁用）。
+  - `save(opts)` 支持 auto 模式，自动保存用轻提示「已自动保存」。
+**验证**：
+- 无头 harness（linkedom）：`save_harness.mjs` **17/17 PASS**（含自动保存 2 秒落盘、
+  手动保存、撤销、按钮常可点）；`check_html` ALL PASS；`clean` 15/15；`power` 22/22。
+- 真机 SelfTest（新 dex `c33ab7ae…`）：**47 PASS / 1 FAIL**；唯一 FAIL 为设备相关的
+  AppOps `CAPTURE_CONSENTLESS_BUGREPORT_ON_USERDEBUG_BUILD`（user build 固有，与本次改动无关）。
+- 真机端到端：开启 `log_enabled=true` 后，`POST /api/write` 日志显示
+  `请求 POST /api/write` → `已写入 /data/adb/Zhang/switches.conf (4977 chars)` →
+  `请求 GET /api/reload` → `已加载开关（85 项）`，全链路打通。`switches.conf` 104 行、
+  与写入前 **diff 完全一致**（无数据丢失）；随后恢复 `log_enabled=false`。
+**产物（已部署）**：
+- `Main.dex` = `c33ab7aee533f8ee3723b39759055275`（2,503,564 B），同步到
+  `/data/adb/modules/Zhang/Main.dex`、`/data/adb/Zhang/Main.dex`、母版 `Main.dex`。
+- `webroot/index.html` = `f0f19f8e5f9f2415099ef9a6e08ab65b`（60,248 B），同步到模块
+  `webroot/`、母版 `webroot/`、仓库 `app/src/main/assets/webroot/`。
+- 备份：`/data/adb/Zhang/_backup_corsfix_20261004-073009/`（旧 dex + 旧 UI，模块+母版各一份）。
+**注意**：本次**未重新打包 zip**。如需发布，用母版 `pack.sh` 重打包（会含新 dex + 新 UI）。
+**⚠ 关键环境事实**：`config.conf` 的 `log_enabled=false` → 日志默认全静默；
+排查时「看不到请求日志」≠「请求没到」，必须先临时置 `log_enabled=true` 再判断。

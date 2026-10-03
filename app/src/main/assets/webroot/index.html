@@ -3,108 +3,268 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#f2f2f7" />
 <title>ZhangProtect 控制台</title>
 <style>
   :root{
-    --bg:#0f1116; --card:#171a21; --card2:#1e222b; --fg:#e6e8ee; --dim:#9aa3b2;
-    --line:#2a2f3a; --acc:#4f8cff; --ok:#35c46a; --warn:#e6a23c; --err:#f56c6c;
+    --bg:#f2f2f7; --grouped:#ffffff; --card:#ffffff; --card2:#f7f7fa;
+    --fg:#1c1c1e; --dim:#8e8e93; --dim2:#c7c7cc;
+    --line:rgba(60,60,67,.14); --sep:rgba(60,60,67,.10);
+    --acc:#0a84ff; --acc2:#007aff; --ok:#34c759; --warn:#ff9f0a; --err:#ff3b30;
+    --tabh:52px; --tabpad:env(safe-area-inset-bottom,0px);
+    --hdr:env(safe-area-inset-top,0px);
+    --radius:12px;
+    color-scheme:light dark;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#000000; --grouped:#1c1c1e; --card:#1c1c1e; --card2:#2c2c2e;
+      --fg:#ffffff; --dim:#8e8e93; --dim2:#48484a;
+      --line:rgba(84,84,88,.36); --sep:rgba(84,84,88,.30);
+      --acc:#0a84ff; --acc2:#0a84ff;
+    }
+    meta[name=theme-color]{} 
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;background:var(--bg);color:var(--fg);
-    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
-    padding-bottom:40px}
-  header{position:sticky;top:0;z-index:5;background:rgba(15,17,22,.92);
-    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:12px 14px}
-  header h1{margin:0;font-size:16px;font-weight:600}
-  header .sub{color:var(--dim);font-size:12px;margin-top:2px;word-break:break-all}
-  .toolbar{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-  button{font:inherit;border:1px solid var(--line);background:var(--card2);color:var(--fg);
-    padding:7px 12px;border-radius:9px;cursor:pointer}
-  button:active{transform:scale(.97)}
-  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
-  button.ghost{background:transparent}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  main{padding:12px 14px;max-width:760px;margin:0 auto}
-  .banner{border:1px solid var(--line);background:var(--card);border-radius:12px;
-    padding:10px 12px;margin-bottom:12px;color:var(--dim);font-size:12.5px}
-  .banner b{color:var(--fg)}
-  .group{background:var(--card);border:1px solid var(--line);border-radius:14px;
-    margin-bottom:14px;overflow:hidden}
-  .group>.ghead{display:flex;align-items:center;justify-content:space-between;
-    padding:12px 14px;cursor:pointer;user-select:none}
-  .ghead .t{font-weight:600}
-  .ghead .t small{display:block;color:var(--dim);font-weight:400;font-size:11.5px;margin-top:2px}
-  .chev{color:var(--dim);transition:transform .2s}
-  .group.collapsed .chev{transform:rotate(-90deg)}
-  .group.collapsed .gbody{display:none}
-  .gbody{border-top:1px solid var(--line);padding:4px 0}
-  .row{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}
-  .row:last-child{border-bottom:none}
-  .row .info{flex:1;min-width:0}
-  .row .key{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
-  .row .desc{color:var(--dim);font-size:12px;margin-top:2px}
-  .row.danger .key{color:var(--warn)}
-  .row.danger .desc::before{content:"⚠ ";color:var(--warn)}
-  .row.modified .key::after{content:" ●";color:var(--acc);font-size:10px;vertical-align:middle}
-  .val input{width:92px;text-align:right;background:var(--card2);border:1px solid var(--line);
-    color:var(--fg);border-radius:8px;padding:6px 8px;font-family:ui-monospace,monospace}
-  .val .unit{color:var(--dim);font-size:11px;margin-left:6px}
-  /* toggle */
-  .sw{position:relative;width:48px;height:28px;flex:0 0 auto}
-  .sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
-  .sw i{position:absolute;inset:0;background:#39404e;border-radius:999px;transition:.18s}
-  .sw i::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
-    background:#fff;transition:.18s}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--fg);
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","Noto Sans SC",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:calc(var(--tabh) + var(--tabpad) + 8px);
+  }
+  /* ---------- Nav bar (large title) ---------- */
+  .navbar{position:sticky;top:0;z-index:20;background:var(--bg);
+    padding:calc(var(--hdr) + 6px) 0 0;transition:box-shadow .2s}
+  .navbar.scrolled{box-shadow:0 1px 0 var(--sep)}
+  .navbar .title{font-size:30px;font-weight:700;letter-spacing:-.4px;padding:2px 20px 8px}
+  .navbar .subt{color:var(--dim);font-size:12px;padding:0 20px 8px;word-break:break-all;
+    margin-top:-6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .navbar .actions{display:flex;gap:8px;padding:0 16px 10px;flex-wrap:wrap}
+  .navstatus{display:none;margin:0 16px 10px;padding:10px 14px;border-radius:12px;
+    background:rgba(10,132,255,.12);color:var(--acc2);font-size:13px;line-height:1.5}
+  .navstatus.err{background:rgba(255,59,48,.12);color:#ff3b30}
+  /* ---------- Buttons (iOS style) ---------- */
+  button{font:inherit;-webkit-appearance:none;border:none;background:none;color:var(--acc2);
+    cursor:pointer;padding:6px 2px}
+  .btn{display:inline-flex;align-items:center;gap:6px;justify-content:center;
+    height:34px;padding:0 16px;border-radius:999px;font-size:15px;font-weight:600;
+    background:var(--card2);color:var(--fg);border:1px solid var(--line);
+    transition:opacity .15s,transform .08s}
+  .btn:active{transform:scale(.96)}
+  .btn.primary{background:var(--acc2);color:#fff;border-color:transparent}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.sm{height:30px;font-size:13px;padding:0 12px}
+  main{padding:0 0 12px;max-width:720px;margin:0 auto}
+  /* ---------- Grouped list ---------- */
+  .section{padding:0 16px;margin-bottom:22px}
+  .section>.stitle{font-size:13px;color:var(--dim);text-transform:uppercase;
+    letter-spacing:.4px;padding:0 4px 7px;font-weight:500}
+  .section>.sfoot{font-size:12.5px;color:var(--dim);padding:7px 4px 0;line-height:1.45}
+  .list{background:var(--grouped);border-radius:var(--radius);overflow:hidden}
+  .cell{display:flex;align-items:center;gap:12px;padding:11px 16px;position:relative;
+    background:var(--grouped)}
+  .cell+.cell::before{content:"";position:absolute;left:16px;right:0;top:0;
+    height:1px;background:var(--sep);transform:scaleY(.6)}
+  .cell .ic{width:29px;height:29px;border-radius:7px;flex:0 0 auto;display:flex;
+    align-items:center;justify-content:center;font-size:16px;color:#fff}
+  .cell .body{flex:1;min-width:0}
+  .cell .k{font-size:15px;font-weight:500;word-break:break-word}
+  .cell .k.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
+  .cell .d{color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.35}
+  .cell.danger .k{color:var(--warn)}
+  .cell.danger .d::before{content:"⚠️ ";}
+  .cell.modified .k::after{content:" ●";color:var(--acc2);font-size:10px;vertical-align:middle}
+  .cell .val{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .cell input.vin{width:74px;text-align:right;background:var(--card2);border:1px solid var(--line);
+    color:var(--fg);border-radius:8px;padding:6px 9px;font-size:15px;
+    font-family:ui-monospace,monospace}
+  .cell .unit{color:var(--dim);font-size:13px;min-width:18px}
+  /* ---------- iOS Switch ---------- */
+  .sw{position:relative;width:51px;height:31px;flex:0 0 auto}
+  .sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:2}
+  .sw i{position:absolute;inset:0;background:var(--dim2);border-radius:999px;transition:background .2s}
+  .sw i::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s}
   .sw input:checked + i{background:var(--ok)}
   .sw input:checked + i::after{transform:translateX(20px)}
-  .sub-panel{padding:12px 14px;background:var(--card2);border-top:1px solid var(--line);
-    font-size:12.5px;color:var(--dim)}
-  .sub-panel .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  /* ---------- Sub panel / stats ---------- */
+  .panel{background:var(--card2);padding:12px 16px}
+  .panel .hint{color:var(--dim);font-size:12.5px;line-height:1.45}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .stat{background:var(--grouped);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
   .stat .k{color:var(--dim);font-size:11.5px}
-  .stat .v{font-size:15px;margin-top:2px;font-family:ui-monospace,monospace}
-  textarea{width:100%;min-height:110px;background:var(--card2);border:1px solid var(--line);
-    color:var(--fg);border-radius:10px;padding:9px;font-family:ui-monospace,monospace;font-size:12px}
-  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:20;
-    background:#2c313c;border:1px solid var(--line);color:var(--fg);padding:10px 16px;border-radius:10px;
-    font-size:13px;opacity:0;pointer-events:none;transition:.2s;max-width:88vw;text-align:center}
-  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
-  .toast.err{border-color:var(--err)} .toast.ok{border-color:var(--ok)}
-  .empty{color:var(--dim);padding:14px;text-align:center}
-  .mono{font-family:ui-monospace,monospace}
+  .stat .v{font-size:16px;margin-top:2px;font-family:ui-monospace,monospace}
+  textarea{width:100%;min-height:112px;background:var(--grouped);border:1px solid var(--line);
+    color:var(--fg);border-radius:10px;padding:10px;font-family:ui-monospace,monospace;
+    font-size:13px;-webkit-appearance:none}
+  .panel .pbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  /* ---------- Tab bar ---------- */
+  .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:50;
+    height:calc(var(--tabh) + var(--tabpad));padding-bottom:var(--tabpad);
+    background:rgba(249,249,249,.94);backdrop-filter:blur(20px) saturate(180%);
+    -webkit-backdrop-filter:blur(20px) saturate(180%);border-top:.5px solid var(--sep);
+    display:flex;align-items:stretch}
+  @media (prefers-color-scheme:dark){
+    .tabbar{background:rgba(22,22,24,.92)}
+  }
+  .tabbar .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;color:var(--dim);font-size:10px;font-weight:500;cursor:pointer;
+    padding-top:6px;transition:color .15s;-webkit-user-select:none;user-select:none}
+  .tabbar .tab .tico{font-size:22px;line-height:1;position:relative}
+  .tabbar .tab.active{color:var(--acc2)}
+  .tabbar .tab .badge{position:absolute;top:-4px;right:-9px;min-width:16px;height:16px;
+    padding:0 4px;border-radius:8px;background:var(--err);color:#fff;font-size:10px;
+    line-height:16px;text-align:center;font-weight:600}
+  /* ---------- Toast ---------- */
+  .toast{position:fixed;left:50%;bottom:calc(var(--tabh) + var(--tabpad) + 16px);
+    transform:translateX(-50%) translateY(8px);z-index:80;
+    background:rgba(40,40,44,.94);backdrop-filter:blur(10px);color:#fff;padding:11px 20px;
+    border-radius:14px;font-size:14px;font-weight:500;opacity:0;pointer-events:none;
+    transition:.25s;max-width:86vw;text-align:center;box-shadow:0 6px 24px rgba(0,0,0,.28)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{background:rgba(255,59,48,.96)} .toast.ok{background:rgba(52,199,89,.96)}
+  /* ---------- Utils ---------- */
+  .empty{color:var(--dim);padding:26px 16px;text-align:center;font-size:14px;line-height:1.6}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .pane{display:none}
+  .pane.active{display:block;animation:fade .22s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .seg{display:flex;background:var(--card2);border-radius:10px;padding:3px;margin:0 16px 16px}
+  .seg .s{flex:1;text-align:center;padding:6px 0;font-size:13.5px;font-weight:600;border-radius:8px;
+    color:var(--dim);cursor:pointer;transition:.15s}
+  .seg .s.on{background:var(--grouped);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:999px}
+  .pill.on{background:rgba(52,199,89,.16);color:var(--ok)}
+  .pill.off{background:rgba(142,142,147,.18);color:var(--dim)}
+  .pill.warn{background:rgba(255,159,10,.18);color:var(--warn)}
 </style>
 </head>
 <body>
-<header>
-  <h1>ZhangProtect 控制台</h1>
-  <div class="sub" id="pathInfo">正在读取配置…</div>
-  <div class="toolbar">
-    <button class="primary" id="btnSave" disabled>保存</button>
-    <button class="ghost" id="btnReload" disabled>重新加载</button>
-    <button class="ghost" id="btnRevert" disabled>撤销改动</button>
-    <button class="ghost" id="btnExpand">全部展开/收起</button>
+<div class="navbar" id="navbar">
+  <div class="title" id="navTitle">概览</div>
+  <div class="subt" id="pathInfo">正在读取配置…</div>
+  <div class="navstatus" id="navStatus"></div>
+  <div class="actions" id="navActions">
+    <button class="btn primary" id="btnSave" disabled>保存</button>
+    <button class="btn" id="btnReload" disabled>重新加载</button>
+    <button class="btn ghost" id="btnRevert" disabled>撤销</button>
   </div>
-</header>
+</div>
+
 <main>
-  <div class="banner" id="banner">
-    <b>说明：</b>本页直接读写模块的 <span class="mono">switches.conf</span>；<b>未知配置项与注释会被完整保留</b>。
-    改动保存后，daemon 会在 60 秒内自动重载（或可重启 daemon 立即生效）。
-  </div>
-  <div id="groups"></div>
-  <div class="empty" id="loading">加载中…</div>
+  <!-- ============ TAB 1: 概览 ============ -->
+  <section class="pane active" id="pane-home">
+    <div class="section">
+      <div class="stitle">运行状态</div>
+      <div class="list" id="ovStatus">
+        <div class="cell"><div class="ic" style="background:#34c759">●</div>
+          <div class="body"><div class="k">后端服务</div><div class="d" id="ovBackend">检测中…</div></div>
+          <div class="val"><span class="pill off" id="ovBackendPill">…</span></div></div>
+        <div class="cell"><div class="ic" style="background:#0a84ff"></div>
+          <div class="body"><div class="k">配置文件</div><div class="d mono" id="ovConfPath">—</div></div></div>
+        <div class="cell"><div class="ic" style="background:#5e5ce6">⌘</div>
+          <div class="body"><div class="k">端口 / PID</div><div class="d" id="ovPortPid">—</div></div></div>
+        <div class="cell"><div class="ic" style="background:#ff9f0a">⚠</div>
+          <div class="body"><div class="k">已改动项</div><div class="d" id="ovDirty">0 项</div></div></div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="stitle">快速开关</div>
+      <div class="list" id="ovQuick"></div>
+      <div class="sfoot">快速调整常用策略，改动后点右上角“保存”生效。</div>
+    </div>
+    <div class="section">
+      <div class="stitle">关于</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#8e8e93">i</div>
+          <div class="body"><div class="k">ZhangProtect 控制台</div>
+            <div class="d">直读直写模块 switches.conf，注释与未知项完整保留；daemon 会在 60 秒内自动重载。</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 2: 开关 ============ -->
+  <section class="pane" id="pane-switch">
+    <div id="switchSections"></div>
+  </section>
+
+  <!-- ============ TAB 3: 电源 ============ -->
+  <section class="pane" id="pane-power">
+    <div class="section">
+      <div class="stitle">实时状态</div>
+      <div class="list"><div class="panel">
+        <div class="hint">以下为前端即时读数（需启用 <span class="mono">power_optimize_enable</span> 后 daemon 才会给出统计数据）。</div>
+        <div class="grid">
+          <div class="stat"><div class="k">电量</div><div class="v" id="stBatt">—</div></div>
+          <div class="stat"><div class="k">充电状态</div><div class="v" id="stCharging">—</div></div>
+          <div class="stat"><div class="k">屏幕状态</div><div class="v" id="stScreen">—</div></div>
+          <div class="stat"><div class="k">当前等级</div><div class="v" id="stLevel">—</div></div>
+          <div class="stat"><div class="k">策略应用</div><div class="v" id="stApplied">—</div></div>
+          <div class="stat"><div class="k">fail-open</div><div class="v" id="stFail">—</div></div>
+        </div>
+        <div class="pbtns"><button class="btn sm" id="btnPowerRefresh">读取电池状态</button></div>
+      </div></div>
+    </div>
+    <div class="section"><div class="stitle">省电策略</div>
+      <div class="list" id="powerSwitches"></div></div>
+    <div class="section"><div class="stitle">后台限制名单</div>
+      <div class="list"><div class="panel">
+        <div class="hint"><span class="mono">power_bg_stop_list.conf</span>：每行一个包名；<b>默认空白=不限制任何应用</b>。受保护应用（systemui/settings/gms/桌面/模块自身/前台应用/Doze 白名单）永不被限制。</div>
+        <textarea id="bgList" placeholder="com.example.app&#10;com.foo.bar" style="margin-top:10px"></textarea>
+        <div class="pbtns">
+          <button class="btn sm" id="btnBgLoad">读取名单</button>
+          <button class="btn sm primary" id="btnBgSave">保存名单</button>
+        </div>
+      </div></div></div>
+    <div class="section"><div class="sfoot"><b>安全约束：</b>本子系统仅“下调”CPU 最高频率（不锁最低频、不关核心、不禁用温控），优化失败时保持系统默认（fail-open），可在任意时刻关闭并立即还原。</div></div>
+  </section>
+
+  <!-- ============ TAB 4: 设置 ============ -->
+  <section class="pane" id="pane-settings">
+    <div class="section"><div class="stitle">调优循环参数</div>
+      <div class="list" id="tuningList"></div>
+      <div class="sfoot">留空使用默认值；修改后建议重启 daemon 生效。</div></div>
+    <div class="section"><div class="stitle">服务器模式外部命令</div>
+      <div class="list" id="extcmdList"></div>
+      <div class="sfoot">字符串配置项，留空则跳过。</div></div>
+    <div class="section"><div class="stitle">危险操作</div>
+      <div class="list" id="dangerList"></div>
+      <div class="sfoot">以上开关会关闭系统安全机制或强制锁频，请谨慎开启。</div></div>
+    <div class="section"><div class="stitle">操作</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#0a84ff">↻</div>
+          <div class="body"><div class="k">重新加载配置</div><div class="d">从磁盘重新读取 switches.conf，丢弃未保存改动</div></div>
+          <div class="val"><button class="btn sm" id="btnReload2">执行</button></div></div>
+        <div class="cell"><div class="ic" style="background:#ff9f0a">↺</div>
+          <div class="body"><div class="k">撤销未保存改动</div><div class="d">恢复到最近一次加载时的状态</div></div>
+          <div class="val"><button class="btn sm" id="btnRevert2">执行</button></div></div>
+      </div></div>
+  </section>
 </main>
+
 <div class="toast" id="toast"></div>
 
+<!-- ============ Tab bar ============ -->
+<nav class="tabbar" id="tabbar">
+  <div class="tab active" data-tab="home"><span class="tico">⌂</span><span>概览</span></div>
+  <div class="tab" data-tab="switch"><span class="tico">⚙</span><span>开关</span></div>
+  <div class="tab" data-tab="power"><span class="tico">⚡</span><span>电源</span></div>
+  <div class="tab" data-tab="settings"><span class="tico">☰</span><span>设置</span></div>
+</nav>
 <script>
 "use strict";
 
 /* ------------------------------------------------------------------ *
  * Data backend bridge  (Main.dex HTTP 后端)
  * ------------------------------------------------------------------ *
- * 本页不再依赖 KernelSU / WebUI X 的 JS 桥（宿主 SukiSU WebUI X 并不注入
- * KSU.exec / window.$，旧实现会永久挂起）。所有数据读写都改为调用
- * Main.dex 内常驻的本地 HTTP 后端（仅监听 127.0.0.1，端口见 config.conf
- * 的 http_port）。后端带 Access-Control-Allow-Origin:* ，故 file:// 页面
+ * 本页不依赖 KernelSU / WebUI X 的 JS 桥（宿主 SukiSU WebUI X 并不注入
+ * KSU.exec / window.$，旧实现会永久挂起）。所有数据读写都调用 Main.dex
+ * 内常驻的本地 HTTP 后端（仅监听 127.0.0.1，端口见 config.conf 的
+ * http_port）。后端带 Access-Control-Allow-Origin:* ，故 file:// 页面
  * 亦可直接 fetch。
  *
  * 保留 "KSU" 标记仅为兼容既有构建校验（构建脚本会检查该字符串）。
@@ -112,7 +272,6 @@
  * ------------------------------------------------------------------ */
 const KSU = "webui-x://http-backend";   // 兼容标记（保留，勿删）
 
-// 后端端口：优先从 config.conf 读取（见 detectPaths），否则用默认值。
 const DEFAULT_HTTP_PORT = 26437;
 const HTTP_PROTO = "http:";
 let HTTP_HOST = "127.0.0.1";
@@ -120,7 +279,6 @@ let HTTP_PORT = DEFAULT_HTTP_PORT;
 
 function apiBase(){ return HTTP_PROTO + "//" + HTTP_HOST + ":" + HTTP_PORT; }
 
-/** Safe JSON fetch against the Main.dex backend. Rejects on non-2xx. */
 async function api(path, body){
   const url = apiBase() + path;
   const opt = { cache:"no-store" };
@@ -139,36 +297,18 @@ async function api(path, body){
   return data;
 }
 
-/**
- * shell(cmd) 兼容壳：把少量仍旧以 shell 形式书写的调用（dumpsys 电池等）
- * 翻译为后端端点。保留该函数名仅为减少调用点改动体量。
- *  - "cat <file>"             -> /api/read
- *  - "dumpsys battery ..."    -> /api/powerstatus
- */
-async function shell(cmd){
-  const s = String(cmd).trim();
-  if (s.startsWith("cat ")){
-    const m = s.match(/cat\s+'?([^'|]+)'?/);
-    const file = m ? m[1].trim() : "";
-    const r = await api("/api/read?path=" + encodeURIComponent(file));
-    return { code:0, out:(r && r.content) || "", err:"" };
-  }
-  if (s.startsWith("dumpsys battery")){
-    const r = await api("/api/powerstatus");
-    // 合成 dumpsys 风格文本，兼容既有正则解析
-    const out = "level: " + (r.level!=null? r.level : "") + "\n" +
-                "status: " + (r.status!=null? r.status : "") + "\n" +
-                "plugged: " + (r.plugged!=null? r.plugged : "") + "\n";
-    return { code:0, out, err:"" };
-  }
-  throw new Error("unsupported shell command: " + s.slice(0,40));
-}
-
-/** Escape a string for safe single-quote shell embedding. */
 function shq(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 
+
 /* ------------------------------------------------------------------ *
- * Known config schema (mirrors ConfigManager.kt)
+ * 声明式配置：功能大类 → 底栏 Tab 映射
+ * ------------------------------------------------------------------ *
+ * 说明：所有 key 与描述均与旧版 WebUI 完全一致（保证 daemon 兼容），
+ *       仅把展示层按“功能大类”重新归类到四个 Tab：
+ *         home     概览（只读状态 + 快速开关）
+ *         switch   开关（全部功能开关，按大类分组）
+ *         power    电源（省电策略 + 后台名单）
+ *         settings 设置（调优参数 + 外部命令 + 危险操作）
  * ------------------------------------------------------------------ */
 const SPECIAL_DEFAULT_TRUE = [
   "doze_enable","hma_config_enable","game_pause_enable","accessibility_guard_enable",
@@ -215,7 +355,6 @@ const SWITCH_DESCRIPTIONS = {
   "skip_mount_guard_enable":"模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
   "game_oom_protect_enable":"保护游戏进程 Oom=-1000，不被系统杀死",
   "accelerometer_rotation_enable":"加速计自动旋转：每周期强制禁用自动旋转",
-
   "power_optimize_enable":"电源与后台调度优化：事件驱动的省电子系统（关闭后不创建监听、立即恢复临时调度状态，不影响其它功能与系统 Doze）",
   "power_low_battery_threshold":"低电量阈值（百分比，0-100，默认 20）",
   "power_low_battery_cpu_cap":"低电量时 CPU 最高频率上限百分比（1-100，默认 55，仅降不锁，退出即还原）",
@@ -226,7 +365,7 @@ const SWITCH_DESCRIPTIONS = {
   "power_charging_release":"充电时自动退出省电策略并还原临时调度状态（默认 true）"
 };
 
-// keys that take string/int values rather than a boolean toggle
+/* 非布尔型（字符串/数值）配置项 */
 const VALUE_KEYS = {
   "power_low_battery_threshold":{def:"20", unit:"%", min:0,  max:100},
   "power_low_battery_cpu_cap":  {def:"55", unit:"%", min:1,  max:100},
@@ -237,31 +376,41 @@ const VALUE_KEYS = {
   "automusic_command":          {def:"",   unit:"", min:null, max:null}
 };
 
-// marked as "dangerous" to show a warning glyph
+/* 危险开关（禁安全机制 / 强锁频），UI 上以红色警示显示 */
 const DANGER = new Set([
   "selinux_disable_enable","max_cpu_enable","thermal_mask_enable","appops_allow_enable",
   "disable_apps_enable","dexopt_everything_enable"
 ]);
 
-// logical groups for display
+/* 功能大类分组（用于“开关”Tab 的分段列表） */
 const GROUPS = [
-  {id:"special", title:"特殊默认开启", note:"这些功能默认开启（缺失时按 true 处理）", keys:SPECIAL_DEFAULT_TRUE.filter(k=>k!=="power_charging_release")},
-  {id:"power",   title:"电源与后台调度优化", note:"事件驱动省电子系统，默认关闭；关闭不影响其它功能与系统 Doze",
-    keys:["power_optimize_enable","power_low_battery_threshold","power_low_battery_cpu_cap",
-          "power_low_battery_restrict_bg","power_screen_off_cpu_cap",
-          "power_screen_off_cpu_cap_percent","power_screen_off_restrict_bg","power_charging_release"]},
-  {id:"main",    title:"主功能开关", note:"其余功能，一律默认关闭",
-    keys:["system_tuning_enable","extra_features_enable","memory_clean_enable","server_mode_enable",
-          "thermal_mask_enable","appops_allow_enable","module_appops_auth_enable",
-          "dexopt_everything_enable","selinux_disable_enable","powersave_enable",
-          "storage_isolation_enable","storage_isolate_all_enable","storage_isolate_media_enable",
-          "boost_process_enable","boost_game_enable","run_once_enable","max_cpu_enable",
-          "dnt_accessibility_enable","network_ipv6_disable_enable","only_base_enable",
-          "accelerometer_rotation_enable"]},
-  {id:"tuning",  title:"调优循环参数", note:"留空使用默认值；修改后建议重启 daemon 生效",
-    keys:["tuning_interval_seconds","heavy_interval_cycles","heavy_screen_off_only"]},
-  {id:"extcmd",  title:"服务器模式外部命令", note:"留空则跳过（字符串配置项）",
-    keys:["frpc_command","automusic_command"]}
+  {id:"special", title:"特殊默认开启", note:"这些功能默认开启（缺失时按 true 处理）",
+    keys:SPECIAL_DEFAULT_TRUE.filter(k=>k!=="power_charging_release")},
+  {id:"core",    title:"核心与系统调优", note:"主调优循环 / 属性 / MIUI / 温控等",
+    keys:["system_tuning_enable","prop_tuning_enable","miui_tuning_enable","heavy_task_enable",
+          "server_mode_enable","memory_clean_enable","extra_features_enable","service_guard_enable","powersave_enable"]},
+  {id:"perf",    title:"性能与加速", note:"进程提升 / 游戏加速 / 满频（含危险项）",
+    keys:["boost_process_enable","boost_game_enable","game_oom_protect_enable","max_cpu_enable","thermal_mask_enable"]},
+  {id:"privacy", title:"隐私与应用管控", note:"AppOps / 应用停用 / 存储隔离",
+    keys:["appops_allow_enable","module_appops_auth_enable","disable_apps_enable",
+          "storage_isolation_enable","storage_isolate_all_enable","storage_isolate_media_enable"]},
+  {id:"misc",    title:"其它与开机行为", note:"开机编译 / SELinux / IPv6 / 自动旋转等",
+    keys:["dexopt_everything_enable","selinux_disable_enable","run_once_enable",
+          "dnt_accessibility_enable","network_ipv6_disable_enable",
+          "only_base_enable","accelerometer_rotation_enable"]}
+];
+
+/* 概览 Tab 的“快速开关” */
+const QUICK_KEYS = [
+  "powersave_enable","system_tuning_enable","power_optimize_enable",
+  "boost_game_enable","server_mode_enable","memory_clean_enable"
+];
+
+/* 电源 Tab 的“省电策略”开关（含数值项） */
+const POWER_KEYS = [
+  "power_optimize_enable","power_low_battery_threshold","power_low_battery_cpu_cap",
+  "power_low_battery_restrict_bg","power_screen_off_cpu_cap",
+  "power_screen_off_cpu_cap_percent","power_screen_off_restrict_bg","power_charging_release"
 ];
 
 /* ------------------------------------------------------------------ *
@@ -269,9 +418,10 @@ const GROUPS = [
  * ------------------------------------------------------------------ */
 let ROOT_DIR = "/data/adb/Zhang";
 let MOD_DIR  = "/data/adb/modules/Zhang";
-let lines = [];          // raw file lines
-let original = "";       // original file text
+let lines    = [];      // switches.conf 原始行（逐行保留）
+let original = "";      // 原始全文
 let dirtyKeys = new Set();
+let loaded = false;
 
 const $  = (s)=>document.querySelector(s);
 const $$ = (s)=>Array.from(document.querySelectorAll(s));
@@ -279,15 +429,15 @@ const $$ = (s)=>Array.from(document.querySelectorAll(s));
 function toast(msg, kind){
   const t = $("#toast");
   t.textContent = msg;
-  t.className = "toast show" + (kind? " "+kind : "");
+  t.className = "toast show" + (kind ? " " + kind : "");
   clearTimeout(t._tm);
   t._tm = setTimeout(()=>{ t.className = "toast"; }, 2600);
 }
-
-function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"""}[c])); }
+function esc(s){ return String(s).replace(/\x26/g,"\x26amp;").replace(/</g,"\x26lt;").replace(/>/g,"\x26gt;").replace(/\u0022/g,"\x26quot;"); }
 
 /* ------------------------------------------------------------------ *
- * Parse / serialize switches.conf (line preserving)
+ * 解析 / 序列化 switches.conf（逐行保留，注释与未知项不动）
+ * 与旧版语义一致：daemon 自上而下赋值，重复 key 以最后一处为准。
  * ------------------------------------------------------------------ */
 function parseLine(line){
   const t = line.trim();
@@ -302,31 +452,14 @@ function parseLine(line){
   const comment = hash >= 0 ? rest.slice(hash) : "";
   return {key, value, comment};
 }
-
-/**
- * Read a key's value.
- * IMPORTANT: the daemon (ConfigManager.loadSwitches) iterates lines top-to-bottom
- * assigning `switches[k] = v`, so the LAST occurrence wins when a key is duplicated
- * (e.g. module_appops_auth_enable / power_*_cap params are emitted twice by
- * writeSwitches). We mirror that exact semantics here so the WebUI always shows
- * what the daemon actually uses.
- */
 function readValue(key){
   let found;
   for (const ln of lines){
     const p = parseLine(ln);
-    if (p && p.key === key) found = p.value; // keep scanning -> last wins
+    if (p && p.key === key) found = p.value; // last wins
   }
   return found;
 }
-
-/**
- * Set a key's value in place (line preserving, unknown lines & comments intact).
- * Mirrors the daemon's last-wins read order: we update the LAST occurrence of a
- * duplicated key, which is the one the daemon believes. Any earlier duplicates are
- * left untouched (they never take effect and we must not rewrite unrelated lines).
- * The key is appended only when completely missing.
- */
 function setValue(key, value, commentHint){
   let last = -1;
   for (let idx=0; idx<lines.length; idx++){
@@ -335,139 +468,217 @@ function setValue(key, value, commentHint){
   }
   if (last >= 0){
     const p = parseLine(lines[last]);
-    const cmt = p.comment && p.comment.trim().length>0 ? " " + p.comment.trim() : (commentHint? "\t# "+commentHint : "");
+    const cmt = p.comment && p.comment.trim().length>0 ? " " + p.comment.trim() : (commentHint ? "\t# " + commentHint : "");
     lines[last] = key + "=" + value + cmt;
     return;
   }
-  // append when completely missing
-  const cmt = commentHint ? "\t# "+commentHint : "";
+  const cmt = commentHint ? "\t# " + commentHint : "";
   lines.push(key + "=" + value + cmt);
+}
+function originalValue(key){
+  let found;
+  for (const ln of original.replace(/\r\n/g,"\n").split("\n")){
+    const i = ln.indexOf("=");
+    if (i < 0) continue;
+    if (ln.slice(0,i).trim() !== key) continue;
+    const rest = ln.slice(i+1);
+    const h = rest.indexOf("#");
+    found = (h>=0 ? rest.slice(0,h) : rest).trim();
+  }
+  return found;
+}
+function isBoolKey(key){ return !(key in VALUE_KEYS) || key === "heavy_screen_off_only"; }
+function currentBool(key){
+  const raw = readValue(key);
+  if (raw === undefined) return SPECIAL_DEFAULT_TRUE.includes(key);
+  return raw === "true" || raw === "1";
 }
 
 /* ------------------------------------------------------------------ *
- * Load
+ * 后端路径探测
  * ------------------------------------------------------------------ */
 async function detectPaths(){
   try{
-    // 后端 /api/paths 直接回传真实 root_dir / mod_dir / 端口 / pid，
-    // 无需再去 cat 文件（也避免了宿主无 shell 桥的问题）。
     const r = await api("/api/paths");
     if (r){
       if (r.rootDir) ROOT_DIR = r.rootDir;
       if (r.modDir)  MOD_DIR  = r.modDir;
       if (r.port)    HTTP_PORT = Number(r.port) || HTTP_PORT;
     }
+    return r;
   }catch(e){
-    // 后端不可达时给出明确提示（而非静默卡在“加载中”）
-    throw new Error("无法连接 Main.dex 后端 (" + apiBase() + ")："
-      + (e && e.message ? e.message : e)
-      + "。请确认守护进程正在运行（config.conf 的 http_port=" + HTTP_PORT + "）。");
+    throw new Error("无法连接 Main.dex 后端 (" + apiBase() + ")：" +
+      (e && e.message ? e.message : e) +
+      "。请确认守护进程正在运行（config.conf 的 http_port=" + HTTP_PORT + "）。");
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 加载
+ * ------------------------------------------------------------------ */
 async function load(){
-  $("#btnSave").disabled = true;
-  $("#btnReload").disabled = true;
-  $("#btnRevert").disabled = true;
-  $("#loading").textContent = "加载中…";
-  $("#loading").style.display = "block";
-  $("#groups").innerHTML = "";
-
+  setNavBusy(true);
+  setStatus("加载中…");
+  loaded = false;
+  let pathResp = null;
   try{
-    await detectPaths();
+    pathResp = await detectPaths();
   }catch(e){
-    $("#loading").innerHTML = "后端连接失败：" + esc(e.message);
+    setStatus("后端连接失败：" + esc(e.message), true);
+    renderEmptyHome();
+    setNavBusy(false);
     return;
   }
   const file = ROOT_DIR + "/switches.conf";
   $("#pathInfo").textContent = file;
-
-  let out = "", code = 0;
+  updatePortPid(pathResp);
+  let out = "";
   try{
     const r = await api("/api/read?path=" + encodeURIComponent(file));
-    // 后端约定：文件缺失时仍返回 200，但 ok=false。据此走“未找到配置文件”分支。
-    if (r && r.ok === false){ out = ""; }
-    else { out = (r && r.content) || ""; }
-    code = 0;
+    out = (r && r.ok === false) ? "" : ((r && r.content) || "");
   }catch(e){
-    $("#loading").innerHTML = "无法读取配置：" + esc(String(e && e.message || e));
+    setStatus("无法读取配置：" + esc(String(e && e.message || e)), true);
+    setNavBusy(false);
     return;
   }
-
   if (!out || !out.trim()){
-    $("#loading").innerHTML = "未找到配置文件：<span class='mono'>" + esc(file) + "</span><br/>" +
-      "请先启动一次 daemon（它会自动生成 switches.conf）。";
+    setStatus("未找到配置文件：" + esc(file) + "<br/>请先启动一次 daemon（它会自动生成 switches.conf）。", true);
+    setNavBusy(false);
     return;
   }
-
   original = out;
   lines = out.replace(/\r\n/g,"\n").split("\n");
   if (lines.length && lines[lines.length-1] === "") lines.pop();
   dirtyKeys = new Set();
+  loaded = true;
+  setStatus("");
+  renderAll();
+  setNavBusy(false);
+}
 
-  $("#loading").style.display = "none";
-  render();
-  $("#btnSave").disabled = false;
-  $("#btnReload").disabled = false;
+function setStatus(html, isErr){
+  const el = $("#navStatus");
+  if (!el) return;
+  if (!html){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.className = "navstatus" + (isErr ? " err" : "");
+  el.innerHTML = html;
+}
+function setNavBusy(busy){
+  const b = loaded ? !busy : true;
+  ["#btnSave","#btnReload"].forEach(s=>{ const e=$(s); if(e) e.disabled = b; });
+  const rv = $("#btnRevert"); if (rv) rv.disabled = (busy || dirtyKeys.size===0);
+  const r2 = $("#btnReload2"); if (r2) r2.disabled = busy;
+  const rv2 = $("#btnRevert2"); if (rv2) rv2.disabled = (busy || dirtyKeys.size===0);
+}
+function updatePortPid(r){
+  const el = $("#ovPortPid");
+  if (!el) return;
+  const port = (r && r.port) ? r.port : HTTP_PORT;
+  const pid  = (r && r.pid)  ? r.pid  : "—";
+  el.textContent = "端口 " + port + " · PID " + pid;
+}
+function renderEmptyHome(){
+  const el = $("#ovBackend");
+  if (el) el.textContent = "未连接";
+  const pill = $("#ovBackendPill");
+  if (pill){ pill.textContent = "离线"; pill.className = "pill err"; }
 }
 
 /* ------------------------------------------------------------------ *
- * Render
+ * 渲染：一次性把所有 Tab 内容铺好
  * ------------------------------------------------------------------ */
-function isBoolKey(key){
-  return !(key in VALUE_KEYS) || key === "heavy_screen_off_only";
+function renderAll(){
+  renderHome();
+  renderSwitchTab();
+  renderPowerTab();
+  renderSettingsTab();
+  updateDirtyCount();
 }
-
-function currentBool(key){
-  const raw = readValue(key);
-  if (raw === undefined) return SPECIAL_DEFAULT_TRUE.includes(key); // missing => default
-  return raw === "true" || raw === "1";
-}
-
-function render(){
-  const host = $("#groups");
+function renderHome(){
+  // 后端状态
+  const be = $("#ovBackend");
+  if (be) be.textContent = "已连接 · " + apiBase();
+  const pill = $("#ovBackendPill");
+  if (pill){ pill.textContent = "在线"; pill.className = "pill ok"; }
+  const cp = $("#ovConfPath");
+  if (cp) cp.textContent = ROOT_DIR + "/switches.conf";
+  // 快速开关
+  const host = $("#ovQuick");
+  if (!host) return;
   host.innerHTML = "";
-
-  GROUPS.forEach(g=>{
-    const el = document.createElement("section");
-    el.className = "group";
-    const head = document.createElement("div");
-    head.className = "ghead";
-    head.innerHTML = `<div class="t">${esc(g.title)}<small>${esc(g.note||"")}</small></div>
-                      <div class="chev">▾</div>`;
-    head.onclick = ()=> el.classList.toggle("collapsed");
-    el.appendChild(head);
-
-    const body = document.createElement("div");
-    body.className = "gbody";
-
-    const known = new Set();
-    g.keys.forEach(key=>{
-      known.add(key);
-      body.appendChild(renderRow(key));
-    });
-
-    // power sub-panel embedded in power group
-    if (g.id === "power"){
-      body.appendChild(renderPowerPanel());
-      body.appendChild(renderBgListEditor());
-    }
-    el.appendChild(body);
-    host.appendChild(el);
+  QUICK_KEYS.forEach(key=>{
+    host.appendChild(renderCell(key, {compact:true}));
   });
 }
+function renderSwitchTab(){
+  const host = $("#switchSections");
+  if (!host) return;
+  host.innerHTML = "";
+  GROUPS.forEach(g=>{
+    const sec = document.createElement("div");
+    sec.className = "section";
+    const title = document.createElement("div");
+    title.className = "stitle";
+    title.textContent = g.title;
+    sec.appendChild(title);
+    const list = document.createElement("div");
+    list.className = "list";
+    g.keys.forEach(key=> list.appendChild(renderCell(key)));
+    sec.appendChild(list);
+    if (g.note){
+      const f = document.createElement("div");
+      f.className = "sfoot";
+      f.textContent = g.note;
+      sec.appendChild(f);
+    }
+    host.appendChild(sec);
+  });
+}
+function renderPowerTab(){
+  const host = $("#powerSwitches");
+  if (!host) return;
+  host.innerHTML = "";
+  POWER_KEYS.forEach(key=> host.appendChild(renderCell(key)));
+}
+function renderSettingsTab(){
+  const t = $("#tuningList");
+  if (t){ t.innerHTML = ""; ["tuning_interval_seconds","heavy_interval_cycles","heavy_screen_off_only"].forEach(k=> t.appendChild(renderCell(k))); }
+  const e = $("#extcmdList");
+  if (e){ e.innerHTML = ""; ["frpc_command","automusic_command"].forEach(k=> e.appendChild(renderCell(k))); }
+  const d = $("#dangerList");
+  if (d){ d.innerHTML = ""; Array.from(DANGER).forEach(k=> d.appendChild(renderCell(k))); }
+}/* ------------------------------------------------------------------ *
+ * 渲染单个开关单元格（iOS 列表风格）
+ *   key     配置键
+ *   opts.compact  紧凑模式（概览快速开关用，隐藏描述）
+ * ------------------------------------------------------------------ */
+function renderCell(key, opts){
+  opts = opts || {};
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  if (DANGER.has(key)) cell.classList.add("danger");
+  cell.dataset.key = key;
 
-function renderRow(key){
-  const row = document.createElement("div");
-  row.className = "row";
-  if (DANGER.has(key)) row.classList.add("danger");
-  row.dataset.key = key;
+  const ic = document.createElement("div");
+  ic.className = "ic";
+  ic.textContent = DANGER.has(key) ? "\u26a0" : (isBoolKey(key) ? "\u25cf" : "\u270e");
+  ic.style.background = DANGER.has(key) ? "#ff3b30" : (isBoolKey(key) ? "#34c759" : "#0a84ff");
+  cell.appendChild(ic);
 
-  const info = document.createElement("div");
-  info.className = "info";
-  info.innerHTML = `<div class="key">${esc(key)}</div>
-                    <div class="desc">${esc(SWITCH_DESCRIPTIONS[key]||"")}</div>`;
-  row.appendChild(info);
+  const body = document.createElement("div");
+  body.className = "body";
+  const k = document.createElement("div");
+  k.className = "k mono";
+  k.textContent = key;
+  body.appendChild(k);
+  if (!opts.compact){
+    const d = document.createElement("div");
+    d.className = "d";
+    d.textContent = SWITCH_DESCRIPTIONS[key] || "";
+    body.appendChild(d);
+  }
+  cell.appendChild(body);
 
   if (isBoolKey(key)){
     const sw = document.createElement("label");
@@ -477,157 +688,74 @@ function renderRow(key){
     inp.checked = currentBool(key);
     inp.onchange = ()=>{
       setValue(key, inp.checked ? "true" : "false", SWITCH_DESCRIPTIONS[key]);
-      markDirty(key, row);
+      markDirty(key, cell);
     };
     const i = document.createElement("i");
     sw.appendChild(inp); sw.appendChild(i);
-    row.appendChild(sw);
+    cell.appendChild(sw);
   } else {
-    const meta = VALUE_KEYS[key] || {def:"", unit:""};
+    const meta = VALUE_KEYS[key] || {def:"", unit:"", min:null, max:null};
     const wrap = document.createElement("div");
     wrap.className = "val";
     const inp = document.createElement("input");
     inp.type = "text";
-    inp.inputMode = (meta.min!==null? "numeric":"text");
+    inp.inputMode = (meta.min !== null && meta.min !== undefined) ? "numeric" : "text";
     const cur = readValue(key);
-    inp.value = (cur === undefined || cur === "") ? "" : cur; // empty => use daemon default
+    inp.value = (cur === undefined || cur === "") ? "" : cur;
     inp.placeholder = meta.def || "";
     inp.onchange = ()=>{
       let v = inp.value.trim();
       if (v !== "" && meta.min !== null && meta.min !== undefined){
-        let n = parseInt(v,10);
-        if (isNaN(n)) { toast("请输入数字", "err"); inp.value = ""; return; }
+        let n = parseInt(v, 10);
+        if (isNaN(n)){ toast("请输入数字", "err"); inp.value = ""; return; }
         if (n < meta.min) n = meta.min;
         if (n > meta.max) n = meta.max;
         inp.value = String(n);
         v = String(n);
       }
       setValue(key, v, SWITCH_DESCRIPTIONS[key]);
-      markDirty(key, row);
+      markDirty(key, cell);
     };
     wrap.appendChild(inp);
-    if (meta.unit){ const u=document.createElement("span"); u.className="unit"; u.textContent=meta.unit; wrap.appendChild(u); }
-    row.appendChild(wrap);
+    if (meta.unit){
+      const u = document.createElement("span");
+      u.className = "unit";
+      u.textContent = meta.unit;
+      wrap.appendChild(u);
+    }
+    cell.appendChild(wrap);
   }
-  return row;
-}
-
-function renderPowerPanel(){
-  const p = document.createElement("div");
-  p.className = "sub-panel";
-  p.innerHTML = `本面板数值由 daemon 在运行中统计（只读，需启用 <span class="mono">power_optimize_enable</span> 后才有数据）。
-    当前为前端即时读数（若 daemon 未暴露统计接口则显示 —）。`;
-  const grid = document.createElement("div");
-  grid.className = "grid";
-  const items = [
-    ["屏幕状态","#stScreen"],["充电状态","#stCharging"],["电量","#stBatt"],
-    ["当前等级","#stLevel"],["策略应用次数","#stApplied"],["fail-open 次数","#stFail"]
-  ];
-  items.forEach(([k,id])=>{
-    const s = document.createElement("div");
-    s.className = "stat";
-    s.innerHTML = `<div class="k">${k}</div><div class="v" id="${id.slice(1)}">—</div>`;
-    grid.appendChild(s);
-  });
-  p.appendChild(grid);
-
-  const refresh = document.createElement("button");
-  refresh.className = "ghost";
-  refresh.style.marginTop = "10px";
-  refresh.textContent = "刷新状态（读取电池）";
-  refresh.onclick = async ()=>{
-    try{
-      // 后端直接回传解析好的字段（level/status/plugged），比抓 dumpsys 文本更稳。
-      const r = await api("/api/powerstatus");
-      const lvl = (r && r.level!=null) ? String(r.level) : "";
-      const st  = (r && r.status!=null) ? String(r.status) : "";
-      $("#stBatt").textContent = lvl ? lvl+"%" : "—";
-      $("#stCharging").textContent = (st==="2"||st==="5") ? "充电中" : "未充电";
-      $("#stScreen").textContent = "—"; // 后端未提供屏幕状态
-      $("#stLevel").textContent = "—";
-      $("#stApplied").textContent = "—";
-      $("#stFail").textContent = "—";
-    }catch(e){ toast("读取失败："+e.message, "err"); }
-  };
-  p.appendChild(refresh);
-
-  // safety note
-  const note = document.createElement("div");
-  note.style.marginTop = "10px";
-  note.innerHTML = `<b>安全约束：</b>本子系统仅“下调”CPU 最高频率（不锁最低频、不关核心、不禁用温控），
-    优化失败时保持系统默认（fail-open），可在任意时刻关闭并立即还原。`;
-  p.appendChild(note);
-  return p;
-}
-
-function renderBgListEditor(){
-  const p = document.createElement("div");
-  p.className = "sub-panel";
-  p.innerHTML = `<b>后台限制名单</b> <span class="mono">power_bg_stop_list.conf</span>
-    <div style="margin:6px 0">每行一个包名；<b>默认空白=不限制任何应用</b>。受保护应用（systemui/settings/gms/桌面/模块自身/前台应用/Doze 白名单）永不被限制。</div>`;
-  const ta = document.createElement("textarea");
-  ta.id = "bgList";
-  ta.placeholder = "com.example.app\ncom.foo.bar";
-  p.appendChild(ta);
-
-  const btns = document.createElement("div");
-  btns.className = "toolbar";
-  const load = document.createElement("button");
-  load.className = "ghost"; load.textContent = "读取名单";
-  load.onclick = async ()=>{
-    try{
-      const r = await api("/api/bglist/read");
-      // 后端文件缺失时返回 ok=false（HTTP 仍 200）：按空名单处理。
-      if (r && r.ok === false){ ta.value = ""; toast("名单为空", "ok"); }
-      else { ta.value = (r && r.content) || ""; toast("已读取名单", "ok"); }
-    }catch(e){ toast("读取失败："+String(e && e.message || e), "err"); }
-  };
-  const save = document.createElement("button");
-  save.className = "primary"; save.textContent = "保存名单";
-  save.onclick = async ()=>{
-    const content = ta.value.replace(/\r\n/g,"\n");
-    try{
-      // 直接 POST 内容给后端，由后端完成原子写（tmp+rename），无需 base64 管道。
-      const r = await api("/api/bglist/write", { content: content });
-      if (r && (r.ok === true || r.success === true)) toast("名单已保存", "ok");
-      else toast("已提交保存", "ok");
-    }catch(e){ toast("保存失败："+e.message, "err"); }
-  };
-  btns.appendChild(load); btns.appendChild(save);
-  p.appendChild(btns);
-  return p;
-}
-
-function markDirty(key, row){
-  dirtyKeys.add(key);
-  // reflect whether value differs from original
-  const orig = originalValue(key);
-  const now  = readValue(key);
-  const changed = (orig===undefined ? false : (orig||"").trim()) !== ((now||"").trim());
-  const before = row.classList.contains("modified");
-  row.classList.toggle("modified", changed);
-  $("#btnRevert").disabled = dirtyKeys.size === 0;
-  if (changed !== before && changed) {} // no-op
-}
-
-function originalValue(key){
-  let found;
-  for (const ln of original.replace(/\r\n/g,"\n").split("\n")){
-    const i = ln.indexOf("=");
-    if (i < 0) continue;
-    if (ln.slice(0,i).trim() !== key) continue;
-    const rest = ln.slice(i+1);
-    const h = rest.indexOf("#");
-    found = (h>=0? rest.slice(0,h): rest).trim(); // last wins, matches daemon
-  }
-  return found;
+  return cell;
 }
 
 /* ------------------------------------------------------------------ *
- * Save
+ * 脏标记 & 计数
+ * ------------------------------------------------------------------ */
+function markDirty(key, cell){
+  dirtyKeys.add(key);
+  const orig = originalValue(key);
+  const now  = readValue(key);
+  const changed = (orig === undefined ? false : (orig || "").trim()) !== ((now || "").trim());
+  cell.classList.toggle("modified", changed);
+  updateDirtyCount();
+  if (loaded) setNavBusy(false);
+}
+function updateDirtyCount(){
+  const n = dirtyKeys.size;
+  const el = $("#ovDirty");
+  if (el) el.textContent = n + " 项";
+  const b = $("#btnSave");
+  if (b) b.disabled = (n === 0) || !loaded;
+  const rv = $("#btnRevert"); if (rv) rv.disabled = (n === 0) || !loaded;
+  const rv2 = $("#btnRevert2"); if (rv2) rv2.disabled = (n === 0) || !loaded;
+}
+
+/* ------------------------------------------------------------------ *
+ * 保存 / 撤销
  * ------------------------------------------------------------------ */
 async function save(){
-  $("#btnSave").disabled = true;
+  const btn = $("#btnSave");
+  if (btn) btn.disabled = true;
   const text = lines.join("\n") + "\n";
   const file = ROOT_DIR + "/switches.conf";
   try{
@@ -637,36 +765,107 @@ async function save(){
     if (r && (r.ok === true || r.success === true || r.written === true)){
       try { await api("/api/reload"); } catch(_){}
       toast("已保存，daemon 将在 60 秒内自动生效", "ok");
-      $("#btnSave").disabled = false;
       dirtyKeys = new Set();
-      $$(".row").forEach(r=>r.classList.remove("modified"));
-      $("#btnRevert").disabled = true;
+      $$(".cell.modified").forEach(c=> c.classList.remove("modified"));
       await load();
     } else {
       toast("保存失败：后端未确认写入", "err");
-      $("#btnSave").disabled = false;
+      if (btn) btn.disabled = false;
     }
   }catch(e){
-    toast("保存失败：" + e.message, "err");
-    $("#btnSave").disabled = false;
+    toast("保存失败：" + (e && e.message ? e.message : e), "err");
+    if (btn) btn.disabled = false;
+  }
+}
+async function revert(){
+  await load();
+  toast("已撤销未保存改动", "ok");
+}
+
+/* ------------------------------------------------------------------ *
+ * 电源 Tab：实时读数 & 后台名单
+ * ------------------------------------------------------------------ */
+async function refreshPowerStatus(){
+  try{
+    // 后端直接回传解析好的字段（level/status/plugged），比抓 dumpsys 文本更稳。
+    const r = await api("/api/powerstatus");
+    const lvl = (r && r.level != null) ? String(r.level) : "";
+    const st  = (r && r.status != null) ? String(r.status) : "";
+    const set = (sel, txt)=>{ const e = $(sel); if (e) e.textContent = txt; };
+    set("#stBatt", lvl ? lvl + "%" : "\u2014");
+    set("#stCharging", (st === "2" || st === "5") ? "充电中" : "\u672a\u5145\u7535");
+    set("#stScreen", "\u2014");
+    set("#stLevel", "\u2014");
+    set("#stApplied", "\u2014");
+    set("#stFail", "\u2014");
+    toast("已刷新电池状态", "ok");
+  }catch(e){
+    toast("读取失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
+async function loadBgList(){
+  const ta = $("#bgList");
+  if (!ta) return;
+  try{
+    const r = await api("/api/bglist/read");
+    // 后端文件缺失时返回 ok=false（HTTP 仍 200）：按空名单处理。
+    if (r && r.ok === false){ ta.value = ""; toast("名单为空", "ok"); }
+    else { ta.value = (r && r.content) || ""; toast("已读取名单", "ok"); }
+  }catch(e){
+    toast("读取失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
+async function saveBgList(){
+  const ta = $("#bgList");
+  if (!ta) return;
+  const content = ta.value.replace(/\r\n/g, "\n");
+  try{
+    // 直接 POST 内容给后端，由后端完成原子写（tmp+rename），无需 base64 管道。
+    const r = await api("/api/bglist/write", { content: content });
+    if (r && (r.ok === true || r.success === true)) toast("名单已保存", "ok");
+    else toast("已提交保存", "ok");
+  }catch(e){
+    toast("保存失败：" + (e && e.message ? e.message : e), "err");
   }
 }
 
 /* ------------------------------------------------------------------ *
- * Wire up
+ * 底栏 Tab 切换
  * ------------------------------------------------------------------ */
-function bind(){
-  $("#btnSave").onclick = save;
-  $("#btnReload").onclick = load;
-  $("#btnRevert").onclick = async ()=>{ await load(); toast("已撤销未保存改动"); };
-  let allCollapsed = false;
-  $("#btnExpand").onclick = ()=>{
-    allCollapsed = !allCollapsed;
-    $$(".group").forEach(g=> g.classList.toggle("collapsed", allCollapsed));
-  };
+const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", settings:"设置" };
+function switchTab(name){
+  if (!TAB_TITLES[name]) name = "home";
+  $$(".pane").forEach(p=> p.classList.toggle("active", p.id === "pane-" + name));
+  $$(".tab").forEach(t=> t.classList.toggle("active", t.dataset.tab === name));
+  const nt = $("#navTitle");
+  if (nt) nt.textContent = TAB_TITLES[name];
+  // 概览/电源面板需要时顺手刷新实时读数
+  if (name === "power") refreshPowerStatus();
+  try{ location.hash = name; }catch(_){}
+  window.scrollTo(0, 0);
 }
 
-document.addEventListener("DOMContentLoaded", ()=>{ bind(); load(); });
+/* ------------------------------------------------------------------ *
+ * 事件绑定 & 初始化
+ * ------------------------------------------------------------------ */
+function bind(){
+  const bs = $("#btnSave");   if (bs) bs.onclick = save;
+  const br = $("#btnReload"); if (br) br.onclick = load;
+  const bv = $("#btnRevert"); if (bv) bv.onclick = revert;
+  const br2 = $("#btnReload2"); if (br2) br2.onclick = load;
+  const bv2 = $("#btnRevert2"); if (bv2) bv2.onclick = revert;
+  const bp = $("#btnPowerRefresh"); if (bp) bp.onclick = refreshPowerStatus;
+  const bl = $("#btnBgLoad"); if (bl) bl.onclick = loadBgList;
+  const bgs = $("#btnBgSave"); if (bgs) bgs.onclick = saveBgList;
+  $$(".tab").forEach(t=> t.onclick = ()=> switchTab(t.dataset.tab));
+}
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  bind();
+  const h = (location.hash || "").replace("#", "");
+  switchTab(TAB_TITLES[h] ? h : "home");
+  load();
+});
 </script>
 </body>
 </html>

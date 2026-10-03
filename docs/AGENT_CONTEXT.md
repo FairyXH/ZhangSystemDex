@@ -625,3 +625,20 @@ zip 内无 `__pycache__`。
 **注意**：本次**未重新打包 zip**。如需发布，用母版 `pack.sh` 重打包（会含新 dex + 新 UI）。
 **⚠ 关键环境事实**：`config.conf` 的 `log_enabled=false` → 日志默认全静默；
 排查时「看不到请求日志」≠「请求没到」，必须先临时置 `log_enabled=true` 再判断。
+---
+## 15. 发布构建：含 CORS/自动保存修复的正式 zip（2026-10-04 07:42）
+**背景**：上一步修复了「WebUI 无法保存配置」（CORS PNA 预检 + 开关 2 秒自动保存，见 §14），
+本次按最新源码重新打包发布。
+**产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,118,171 字节**（≈410 MB），91 文件
+- **SHA256 = `223aa415c76a9725825f7240c064ab6c99412b1c2e8590b1b1a0c61bb67ac719`**
+- 打包耗时 37s（`pack.sh` v4 全程进度输出）
+**关键条目（md5 与源一致）**：
+- `Main.dex` = `c33ab7aee533f8ee3723b39759055275`（2,503,564 B，含 CORS/PNA 预检修复）
+- `webroot/index.html` = `f0f19f8e5f9f2415099ef9a6e08ab65b`（60,248 B，含 **2 秒自动保存 + 保存按钮常可点**）
+- `webroot/config.json` = `d01d5fc7f95f27ed10a33d1a16c1c255`
+**校验**：
+- `unzip -t` 零错误；`pack.sh` 内置 SHA256 逐文件比对 **91/91 一致**。
+- 从 zip 解出关键条目 md5 与母版/模块完全一致（dex `c33ab7ae`、UI `f0f19f8e`、config `d01d5fc7`）。
+**对比上一版正式包**（19:53，430,117,507 字节，SHA256 `19fc276a…`）：
+差异为 `Main.dex`（CORS 修复）+ `webroot/index.html`（自动保存）；其余 89 文件不变。

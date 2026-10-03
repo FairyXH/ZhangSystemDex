@@ -298,23 +298,201 @@ class HttpBackend(
         }
     }
 
-    /** Battery + power facts sourced from the framework (no shell needed). */
+    /**
+     * Battery + power subsystem facts. Two data sources are merged:
+     *
+     *  1. `dumpsys battery` — the authoritative kernel/HAL battery readings
+     *     (level, status, plugged, health, temperature, voltage, current).
+     *  2. [io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer] live
+     *     snapshot — whether the optimization subsystem is running, its current
+     *     policy level, applied action and fail-open counter.
+     *
+     * All fields are always present (never omitted) so the WebUI can render a
+     * stable grid; unavailable readings are reported as null and the UI shows
+     * a placeholder. `ok=false` is only returned when nothing at all could be
+     * read.
+     */
     private fun apiPowerStatus(): String {
-        val level = readBatteryInt("EXTRA_LEVEL", -1)
-        val status = readBatteryInt("EXTRA_STATUS", -1)
-        val plugged = readBatteryInt("EXTRA_PLUGGED", -1)
-        val charging = (status == 2 || status == 5 || plugged > 0)
+        val bat = readBatteryFacts()
+        val opt = io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer.live()
+        val snap = opt?.snapshot()
+        val subsystemEnabled = ctx.config.switch("power_optimize_enable")
+
         val body = StringBuilder()
-        body.append("{\"ok\":true,\"level\":").append(level)
-        body.append(",\"status\":").append(status)
-        body.append(",\"plugged\":").append(plugged)
-        body.append(",\"charging\":").append(charging).append("}")
+        body.append("{\"ok\":true")
+
+        // ---- Raw battery facts -------------------------------------------
+        body.append(",\"level\":").append(bat.level)
+        body.append(",\"scale\":").append(bat.scale)
+        body.append(",\"status\":").append(bat.status)
+        body.append(",\"plugged\":").append(bat.plugged)
+        body.append(",\"health\":").append(bat.health)
+        body.append(",\"present\":").append(bat.present)
+        body.append(",\"temperature\":").append(bat.temperature)
+        body.append(",\"voltage\":").append(bat.voltage)
+        body.append(",\"currentNow\":").append(bat.currentNow)
+
+        // Derived / human-meaningful fields.
+        body.append(",\"charging\":").append(bat.charging)
+        body.append(",\"statusText\":").append(q(bat.statusText))
+        body.append(",\"pluggedText\":").append(q(bat.pluggedText))
+        body.append(",\"healthText\":").append(q(bat.healthText))
+        body.append(",\"levelPercent\":").append(if (bat.level >= 0) bat.level else -1)
+
+        // ---- Subsystem facts ---------------------------------------------
+        body.append(",\"subsystemEnabled\":").append(subsystemEnabled)
+        body.append(",\"running\":").append(opt != null)
+        body.append(",\"eventDriven\":").append(snap?.get("eventDriven") ?: false)
+        body.append(",\"screenOn\":").append(snap?.get("screenOn") ?: bat.screenOn)
+        body.append(",\"policyLevel\":").append(snap?.get("level") ?: 0)
+        body.append(",\"policyLevelText\":").append(q(policyLevelText(snap?.get("level"))))
+        body.append(",\"lastAction\":").append(q(snap?.get("lastAction")?.toString() ?: ""))
+        body.append(",\"kernelApplied\":").append(snap?.get("kernelApplied") ?: false)
+        body.append(",\"hasBgTargets\":").append(snap?.get("hasBgTargets") ?: false)
+        body.append(",\"policyAppliedCount\":").append(snap?.get("policyAppliedCount") ?: 0)
+        body.append(",\"policyRevertCount\":").append(snap?.get("policyRevertCount") ?: 0)
+        body.append(",\"backgroundRestrictCount\":").append(snap?.get("backgroundRestrictCount") ?: 0)
+        body.append(",\"lowBatteryEnterCount\":").append(snap?.get("lowBatteryEnterCount") ?: 0)
+        body.append(",\"failOpenCount\":").append(snap?.get("failOpenCount") ?: 0)
+        body.append(",\"screenOffCount\":").append(snap?.get("screenOffCount") ?: 0)
+        body.append(",\"screenOnCount\":").append(snap?.get("screenOnCount") ?: 0)
+        body.append(",\"lastTransitionMs\":").append(snap?.get("lastTransitionMs") ?: 0L)
+
+        // Thresholds the policy actually uses (so the UI can explain the level).
+        body.append(",\"lowBatteryThreshold\":")
+            .append(ctx.config.getString("power_low_battery_threshold", "20").trim().toIntOrNull() ?: 20)
+        body.append(",\"timestamp\":").append(System.currentTimeMillis())
+        body.append("}")
         return jsonRaw(body.toString())
     }
 
+    /** Parsed subset of `dumpsys battery` plus the screen state. */
+    private class BatteryFacts {
+        var level: Int = -1
+        var scale: Int = -1
+        var status: Int = -1
+        var plugged: Int = -1
+        var health: Int = -1
+        var present: Boolean = false
+        var temperature: Int = Int.MIN_VALUE   // tenths of a degree C
+        var voltage: Int = -1                  // mV
+        var currentNow: Int = Int.MIN_VALUE    // µA (signed)
+        var charging: Boolean = false
+        var screenOn: Boolean = false
+        var statusText: String = "未知"
+        var pluggedText: String = "未连接"
+        var healthText: String = "未知"
+    }
+
+    /**
+     * Read the battery facts from `dumpsys battery`. The framework sticky
+     * intent is not reachable from app_process, so `dumpsys` is the portable
+     * source. Every field is best-effort: a missing line leaves the sentinel.
+     */
+    private fun readBatteryFacts(): BatteryFacts {
+        val f = BatteryFacts()
+        val out = ShellExecutor.run("dumpsys battery 2>/dev/null")
+        if (out != null) {
+            f.level = intField(out, "level", -1)
+            f.scale = intField(out, "scale", -1)
+            f.status = intField(out, "status", -1)
+            f.health = intField(out, "health", -1)
+            f.present = boolField(out, "present", false)
+            f.voltage = intField(out, "voltage", -1)
+            // Temperature: standard AOSP uses `temperature:` (tenths of °C);
+            // some OEM builds (OPLUS) expose `PhoneTemp:` as a fallback.
+            f.temperature = intField(out, "temperature", Int.MIN_VALUE)
+                .let { if (it == Int.MIN_VALUE) intField(out, "PhoneTemp", Int.MIN_VALUE) else it }
+            // Current: standard is `current now:`; OPLUS uses `Battery current:`.
+            f.currentNow = intField(out, "current now", Int.MIN_VALUE)
+                .let { if (it == Int.MIN_VALUE) intField(out, "current_now", Int.MIN_VALUE) else it }
+                .let { if (it == Int.MIN_VALUE) intField(out, "Battery current", Int.MIN_VALUE) else it }
+            // `plugged:` is absent on some OEM builds; derive it from the
+            // per-source power flags instead.
+            f.plugged = intField(out, "plugged", Int.MIN_VALUE)
+                .let { if (it == Int.MIN_VALUE) derivePlugged(out) else it }
+        }
+        f.charging = f.status == 2 || f.status == 5 || f.plugged > 0
+        f.statusText = statusText(f.status)
+        f.pluggedText = pluggedText(f.plugged)
+        f.healthText = healthText(f.health)
+        f.screenOn = screenOnNow()
+        return f
+    }
+
+    /**
+     * Derive the `plugged` bitmask from OEM `* powered` flags when the standard
+     * `plugged:` line is missing. Mirrors BatteryManager's BATTERY_PLUGGED_*.
+     */
+    private fun derivePlugged(out: String): Int {
+        var mask = 0
+        if (boolField(out, "AC powered", false)) mask = mask or 0x1
+        if (boolField(out, "USB powered", false)) mask = mask or 0x2
+        if (boolField(out, "Wireless powered", false)) mask = mask or 0x4
+        if (boolField(out, "Dock powered", false)) mask = mask or 0x8
+        return mask
+    }
+
+    private fun intField(text: String, field: String, def: Int): Int {
+        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + ":\\s*(-?\\d+)").find(text) ?: return def
+        return m.groupValues[1].toIntOrNull() ?: def
+    }
+
+    private fun boolField(text: String, field: String, def: Boolean): Boolean {
+        val m = Regex("(?:^|\\n)\\s*" + Regex.escape(field) + ":\\s*(true|false)").find(text) ?: return def
+        return m.groupValues[1].equals("true", ignoreCase = true)
+    }
+
+    private fun screenOnNow(): Boolean =
+        try {
+            val c = SystemContext.get() ?: return false
+            val pm = c.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                ?: return false
+            pm.isInteractive
+        } catch (_: Throwable) {
+            false
+        }
+
+    private fun statusText(s: Int): String = when (s) {
+        1 -> "未知"
+        2 -> "充电中"
+        3 -> "放电中"
+        4 -> "未充电"
+        5 -> "已充满"
+        else -> "未知"
+    }
+
+    private fun pluggedText(p: Int): String = when (p) {
+        0 -> "未连接"
+        1 -> "交流电源"
+        2 -> "USB"
+        4 -> "无线充电"
+        8 -> "Dock"
+        else -> if (p > 0) "已连接" else "未连接"
+    }
+
+    private fun healthText(h: Int): String = when (h) {
+        1 -> "未知"
+        2 -> "良好"
+        3 -> "过热"
+        4 -> "已损坏"
+        5 -> "过压"
+        6 -> "未指定故障"
+        7 -> "过冷"
+        else -> "未知"
+    }
+
+    /** Map the numeric policy level to a professional label matching PowerPolicyEngine. */
+    private fun policyLevelText(level: Any?): String = when ((level as? Number)?.toInt() ?: 0) {
+        0 -> "空闲（系统默认）"
+        1 -> "息屏省电"
+        2 -> "低电量省电"
+        3 -> "充电恢复"
+        else -> "空闲（系统默认）"
+    }
+
     private fun readBatteryInt(key: String, def: Int): Int {
-        // Try framework first (StickyBroadcast intent via shell-free API is not
-        // available in app_process), so fall back to `dumpsys battery` parsing.
+        // Retained for backwards compatibility with any older caller.
         val out = ShellExecutor.run("dumpsys battery 2>/dev/null") ?: return def
         val map = mapOf(
             "EXTRA_LEVEL" to "level",

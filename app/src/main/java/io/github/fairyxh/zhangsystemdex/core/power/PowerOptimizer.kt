@@ -56,6 +56,9 @@ class PowerOptimizer(
     )
 
     override fun onStart() {
+        // Register this instance for WebUI observability before doing anything
+        // else, so a status request that races startup still sees a live object.
+        attach(this)
         // Proactively do nothing on start beyond re-evaluating the current
         // state; the receivers are registered here so we react to real events.
         eventDriven.set(monitor.start())
@@ -68,6 +71,9 @@ class PowerOptimizer(
     }
 
     override fun onStop() {
+        // Drop the observability handle first so the WebUI stops reading a
+        // subsystem that is about to revert its kernel state.
+        detach(this)
         try {
             monitor.stop()
         } catch (_: Throwable) {
@@ -204,5 +210,27 @@ class PowerOptimizer(
     fun evaluateNow(): String {
         safeEvaluate("manual")
         return stats.summary()
+    }
+
+    companion object {
+        /**
+         * Live instance registry so the WebUI HTTP backend can read the running
+         * subsystem's snapshot without coupling to the daemon's module map.
+         *
+         * Set on [onStart], cleared on [onStop]; volatile because the HTTP
+         * backend serves requests on its own threads.
+         */
+        @Volatile
+        private var live: PowerOptimizer? = null
+
+        fun live(): PowerOptimizer? = live
+
+        internal fun attach(instance: PowerOptimizer) {
+            live = instance
+        }
+
+        internal fun detach(instance: PowerOptimizer) {
+            if (live === instance) live = null
+        }
     }
 }

@@ -1,5 +1,9 @@
 package io.github.fairyxh.zhangsystemdex.core
 
+import io.github.fairyxh.zhangsystemdex.core.rubbish.JsonBuilder
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
+import io.github.fairyxh.zhangsystemdex.core.rubbish.UserGuardRules
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -157,6 +161,14 @@ class HttpBackend(
             "/api/powerstatus" -> apiPowerStatus()
             "/api/switch/set" -> apiSwitchSet(method, body)
             "/api/reload" -> apiReload()
+            // ===== 垃圾清理 =====
+            "/api/rubbish/rules" -> apiRubbishRules()
+            "/api/rubbish/scan" -> apiRubbishScan(method, body, dryRun = true)
+            "/api/rubbish/clean" -> apiRubbishScan(method, body, dryRun = false)
+            "/api/rubbish/status" -> apiRubbishStatus()
+            "/api/rubbish/history" -> apiRubbishHistory(query)
+            "/api/rubbish/guard/read" -> apiRubbishGuardRead()
+            "/api/rubbish/guard/write" -> apiRubbishGuardWrite(method, body)
             else -> jsonError("未知接口: $path")
         }
     }
@@ -319,6 +331,131 @@ class HttpBackend(
         val changed = ctx.config.reloadSwitchesIfChanged()
         // Touch the file mtime comparison is done by daemon; we just report.
         return jsonRaw("{\"ok\":true,\"reloaded\":$changed}")
+    }
+
+    // ------------------------------------------------------------------
+    // Rubbish cleaning endpoints
+    //
+    // SAFETY: the WebUI never passes filesystem paths. It only passes rule ids;
+    // every path is derived from the server-side rule table (RubbishRuleSet)
+    // and every deletion still goes through RubbishGuard's central audit.
+    // ------------------------------------------------------------------
+
+    @Volatile
+    private var rubbishCleaner: RubbishCleaner? = null
+
+    private fun cleaner(): RubbishCleaner =
+        rubbishCleaner ?: synchronized(this) {
+            rubbishCleaner ?: RubbishCleaner(ctx.config).also { rubbishCleaner = it }
+        }
+
+    /** Rule table + current switch state (for rendering the WebUI clean tab). */
+    private fun apiRubbishRules(): String = cleaner().rulesToJson()
+
+    /**
+     * Scan (dryRun=true) or clean (dryRun=false).
+     *
+     * Gate: `rubbish_clean_enable` must be true for BOTH scan and clean so the
+     * feature cannot even be triggered from the UI while disabled. Scan itself
+     * is read-only, but requiring the master switch keeps behaviour predictable.
+     */
+    private fun apiRubbishScan(method: String, body: String, dryRun: Boolean): String {
+        if (method != "POST") return jsonError("需要 POST")
+        if (!ctx.config.switch("rubbish_clean_enable")) {
+            return jsonError("垃圾清理总开关未开启（rubbish_clean_enable=false）")
+        }
+        val obj = if (body.trimStart().startsWith("{")) MiniJson.parseObject(body) else emptyMap()
+        val ruleIds = parseRuleIds(obj?.get("rules"))
+        return try {
+            val c = cleaner()
+            val summary = if (dryRun) c.scan(ruleIds) else c.clean(ruleIds)
+            c.summaryToJson(summary)
+        } catch (t: Throwable) {
+            Logger.e(name, "垃圾清理执行失败", t)
+            jsonError("执行失败: ${t.message}")
+        }
+    }
+
+    /** Quick status: master switch + per-rule switches (cheap, no filesystem walk). */
+    private fun apiRubbishStatus(): String {
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("masterEnabled"); value(ctx.config.switch("rubbish_clean_enable")); comma()
+            key("screenOffOnly"); value(ctx.config.switch("rubbish_clean_screen_off_only")); comma()
+            key("forceWhenRunning"); value(ctx.config.switch("rubbish_force_when_running")); comma()
+            key("bigFileMb"); value(ctx.config.getString("rubbish_big_file_mb", "100")); comma()
+            key("wxChatMediaDays"); value(ctx.config.getString("rubbish_wx_chat_media_days", "30")); comma()
+            key("auditLog"); value(RubbishGuard.auditLog().filePath())
+        }
+        return jsonRaw(sb)
+    }
+
+    /** Recent audit lines (default 100, max 500). */
+    private fun apiRubbishHistory(query: Map<String, String>): String {
+        val lines = (query["lines"]?.toIntOrNull() ?: 100).coerceIn(1, 500)
+        val tail = RubbishGuard.auditLog().tail(lines)
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("path"); value(RubbishGuard.auditLog().filePath()); comma()
+            key("lines"); raw(JsonBuilder.arr {
+                tail.forEachIndexed { i, l ->
+                    if (i > 0) comma()
+                    value(l)
+                }
+            })
+        }
+        return jsonRaw(sb)
+    }
+
+    /** Read the user-editable guard config (deny_path / deny_word). */
+    private fun apiRubbishGuardRead(): String {
+        val f = File(ctx.config.rootDir, "rubbish_guard.conf")
+        val content = try {
+            if (f.exists()) f.readText(Charsets.UTF_8) else UserGuardRules.defaultContent()
+        } catch (t: Throwable) {
+            return jsonError("读取失败: ${t.message}")
+        }
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("path"); value(f.path); comma()
+            key("content"); value(content)
+        }
+        return jsonRaw(sb)
+    }
+
+    /** Write the guard config (append-only semantics are the user's responsibility). */
+    private fun apiRubbishGuardWrite(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val content = obj["content"] ?: return jsonError("缺少 content")
+        val f = File(ctx.config.rootDir, "rubbish_guard.conf")
+        return try {
+            val tmp = File(f.parentFile, f.name + ".http.tmp")
+            tmp.writeText(content, Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(content, Charsets.UTF_8)
+                tmp.delete()
+            }
+            // Reload immediately so the new rules take effect without a restart.
+            RubbishGuard.loadUserRules(f.path)
+            jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"OK\"}")
+        } catch (t: Throwable) {
+            jsonError("写入失败: ${t.message}")
+        }
+    }
+
+    /** Parse the `rules` field: either ["id1","id2"] or "id1,id2". */
+    private fun parseRuleIds(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val s = raw.trim()
+        val parts = if (s.startsWith("[")) {
+            s.trimStart('[').trimEnd(']')
+                .split(',')
+                .map { it.trim().trim('"') }
+        } else {
+            s.split(',')
+        }
+        return parts.map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     // ------------------------------------------------------------------

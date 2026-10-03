@@ -150,7 +150,7 @@ object RubbishGuard {
 
         // 6) 白名单：必须落在允许根之内（且不等于根自身）。
         val inAllowed = ALLOWED_ROOTS.any { root ->
-            canonical == root || canonical.startsWith(root + "/")
+            canonical.startsWith(root + "/")
         }
         if (!inAllowed) {
             return Verdict.Reject("不在允许根白名单内: $canonical")
@@ -158,6 +158,19 @@ object RubbishGuard {
         // 不允许直接删除白名单根自身。
         if (canonical in ALLOWED_ROOTS) {
             return Verdict.Reject("禁止删除允许根本身: $canonical")
+        }
+
+        // 6b) 结构性校验：/data/media 与 /data/user 之下必须紧跟数字用户目录，
+        //     防止 normalize 之后落到 /data/media/adb 这类非用户路径上。
+        val userScopedRoots = listOf("/data/media", "/data/user")
+        for (root in userScopedRoots) {
+            if (canonical.startsWith(root + "/")) {
+                val rest = canonical.substring(root.length + 1)
+                val first = rest.substringBefore('/')
+                if (first.toIntOrNull() == null) {
+                    return Verdict.Reject("$root 之下必须紧跟数字用户目录: $canonical")
+                }
+            }
         }
 
         // 7) 用户自定义违禁路径（前缀）。

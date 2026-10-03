@@ -643,8 +643,11 @@ object SelfTest {
                 "/", "/data", "/data/media", "/data/user", "/data/data",
                 "/data/adb", "/data/system", "/data/system/dropbox",
                 "/system", "/vendor", "/sdcard", "/storage/emulated/0",
-                "/data/media/0/../..",
+                // 路径穿越：解析后落到非用户目录 / 关键目录
                 "/data/media/0/Download/../../adb",
+                "/data/media/adb",
+                "/data/user/0/../../../adb",
+                // 默认违禁词
                 "/data/user/0/com.tencent.mm/MicroMsg/x/EnMicroMsg.db",
                 "/data/user/0/com.tencent.mm/shared_prefs/x.xml",
             )

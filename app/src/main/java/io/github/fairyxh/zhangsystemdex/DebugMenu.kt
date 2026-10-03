@@ -190,12 +190,23 @@ object DebugMenu {
                 29 -> {
                     Logger.i("DebugMenu", "垃圾审查自检:")
                     val cases = listOf(
+                        // 危险：根/关键目录
                         "/" to false, "/data" to false, "/data/media" to false,
                         "/data/adb" to false, "/data/system/dropbox" to false,
-                        "/data/media/0/../.." to false,
-                        "/data/user/0/com.tencent.mm/cache/temp" to true,
-                        "/data/media/0/Android/data/com.tencent.mm/cache/Cache" to true,
+                        "/system" to false, "/sdcard" to false,
+                        // 危险：路径穿越后落到非用户目录
                         "/data/media/0/Download/../../adb" to false,
+                        "/data/user/0/../../../adb" to false,
+                        "/data/media/adb" to false,
+                        // 危险：命中默认违禁词
+                        "/data/user/0/com.tencent.mm/MicroMsg/x/EnMicroMsg.db" to false,
+                        "/data/user/0/com.tencent.mm/shared_prefs/a.xml" to false,
+                        // 合法：真实清理目标
+                        "/data/user/0/com.tencent.mm/cache/temp" to true,
+                        "/data/user/0/com.tencent.mm/files/xlog" to true,
+                        "/data/media/0/Android/data/com.tencent.mm/cache/Cache" to true,
+                        "/data/media/0/Android/data/com.tencent.mobileqq/Tencent/MobileQQ/shortvideo" to true,
+                        "/data/media/0/Download/foo.tmp" to true,
                     )
                     for ((p, expect) in cases) {
                         val v = RubbishGuard.check(p, "selftest")

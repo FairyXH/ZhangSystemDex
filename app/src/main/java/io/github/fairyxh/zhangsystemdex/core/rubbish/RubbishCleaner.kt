@@ -66,9 +66,17 @@ class RubbishCleaner(private val config: ConfigManager) {
         var bytes = 0L
         for (userId in mediaUserIds()) {
             for (root in expandRoots(rule, userId)) {
-                for (target in resolveTargets(root)) {
+                for (target in resolveTargets(rule, root)) {
                     if (samples.size < maxSamples) samples += target.path
-                    if (target.isDirectory) {
+                    if (rule.mode == MatchMode.EMPTY_DIR) {
+                        val stat = statEmpty(rule, target)
+                        files += stat.first
+                        bytes += stat.second
+                    } else if (rule.mode == MatchMode.OLDER_THAN && target.isDirectory) {
+                        val stat = statOlderThan(rule, target)
+                        files += stat.first
+                        bytes += stat.second
+                    } else if (target.isDirectory) {
                         val stat = statDir(rule, target)
                         files += stat.first
                         bytes += stat.second
@@ -80,6 +88,51 @@ class RubbishCleaner(private val config: ConfigManager) {
             }
         }
         return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples)
+    }
+
+    /** 统计目录中的空目录与 0 字节文件（EMPTY_DIR 模式，与 cleanEmpty 对称）。 */
+    private fun statEmpty(rule: CleanRule, dir: File): Pair<Int, Long> {
+        var files = 0
+        var bytes = 0L
+        val stack = ArrayDeque<File>()
+        stack.addLast(dir)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (c.isDirectory) {
+                    stack.addLast(c)
+                    if (c.listFiles()?.isEmpty() == true) files++ // 空目录计入
+                } else if (c.isFile && c.length() == 0L) {
+                    files++
+                }
+            }
+        }
+        return files to bytes
+    }
+
+    /** 统计目录中超过 ageDays 的文件（OLDER_THAN 模式，与 cleanOlderThan 对称）。 */
+    private fun statOlderThan(rule: CleanRule, dir: File): Pair<Int, Long> {
+        val cutoff = System.currentTimeMillis() - rule.ageDays.toLong() * 86400_000L
+        var files = 0
+        var bytes = 0L
+        val stack = ArrayDeque<File>()
+        stack.addLast(dir)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (c.isDirectory) {
+                    stack.addLast(c)
+                } else if (c.isFile && c.lastModified() in 1 until cutoff) {
+                    files++
+                    bytes += c.length()
+                }
+            }
+        }
+        return files to bytes
     }
 
     private fun statDir(rule: CleanRule, dir: File): Pair<Int, Long> {
@@ -125,11 +178,12 @@ class RubbishCleaner(private val config: ConfigManager) {
 
             for (userId in mediaUserIds()) {
                 for (root in expandRoots(rule, userId)) {
-                    for (target in resolveTargets(root)) {
+                    for (target in resolveTargets(rule, root)) {
                         if (samples.size < maxSamples) samples += target.path
                         val res: RubbishGuard.DeleteResult = when (rule.mode) {
                             MatchMode.DIR_CONTENT -> RubbishGuard.safeCleanDirContents(target.path, rule.id)
                             MatchMode.OLDER_THAN -> cleanOlderThan(target, rule)
+                            MatchMode.EMPTY_DIR -> cleanEmpty(rule, target)
                             else -> RubbishGuard.safeDelete(target.path, rule.id)
                         }
                         files += res.deletedFiles
@@ -146,6 +200,50 @@ class RubbishCleaner(private val config: ConfigManager) {
         RubbishGuard.auditLog().logSession(handledRules, totalFiles, totalBytes, results.sumOf { it.rejected.size })
         Logger.i("RubbishCleaner", "清理完成: rules=${handledRules.size} files=$totalFiles bytes=$totalBytes")
         return Summary(results, totalFiles, totalBytes, dryRun = false)
+    }
+
+    /**
+     * 清理根下的空目录与 0 字节文件（EMPTY_DIR 模式）。
+     * 只删除「空目录」与「0 字节普通文件」，绝不删除非空内容。
+     */
+    private fun cleanEmpty(rule: CleanRule, root: File): RubbishGuard.DeleteResult {
+        var files = 0
+        var bytes = 0L
+        val rejected = ArrayList<RubbishGuard.Rejected>()
+        // 后序遍历：先处理子目录，再判断父目录是否变空。
+        val stack = ArrayDeque<Pair<File, Boolean>>()
+        stack.addLast(root to false)
+        while (stack.isNotEmpty()) {
+            val (cur, visited) = stack.removeLast()
+            if (!visited) {
+                stack.addLast(cur to true)
+                cur.listFiles()?.forEach { c ->
+                    if (c.isDirectory) stack.addLast(c to false)
+                }
+                continue
+            }
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (c.isFile && c.length() == 0L) {
+                    val r = RubbishGuard.safeDelete(c.path, rule.id)
+                    files += r.deletedFiles
+                    bytes += r.deletedBytes
+                    rejected += r.rejected
+                }
+            }
+            // 目录变空且不是根本身 → 删除该空目录
+            if (cur.path != root.path) {
+                val left = cur.listFiles()
+                if (left != null && left.isEmpty()) {
+                    val r = RubbishGuard.safeDelete(cur.path, rule.id)
+                    files += r.deletedFiles
+                    bytes += r.deletedBytes
+                    rejected += r.rejected
+                }
+            }
+        }
+        return RubbishGuard.DeleteResult(files, bytes, rejected)
     }
 
     /** 按时间删除：仅删除修改时间早于 ageDays 天的文件。 */
@@ -190,12 +288,51 @@ class RubbishCleaner(private val config: ConfigManager) {
         return all.filter { it.id in set }
     }
 
-    private fun resolveTargets(root: String): List<File> {
-        if (root.indexOf('*') < 0) {
+    /**
+     * 解析一条 root 为实际清理目标。
+     *
+     * 语义区分（关键，避免误删）：
+     *  - GLOB：root 展开后的每个「目录」都作为**搜索根**，再在其中按 pattern
+     *    匹配子项；匹配到的子项才是清理目标（绝不清理 root 目录本身）。
+     *  - 其它模式（DIR_CONTENT / DIR_SELF / EMPTY_DIR / OLDER_THAN）：root 展开
+     *    结果本身就是目标。
+     */
+    private fun resolveTargets(rule: CleanRule, root: String): List<File> {
+        val bases = if (root.indexOf('*') >= 0) expandWildcard(root) else {
             val f = File(root)
-            return if (f.exists()) listOf(f) else emptyList()
+            if (f.exists()) listOf(f) else emptyList()
         }
-        return expandWildcard(root)
+        if (rule.mode != MatchMode.GLOB) return bases
+
+        // GLOB：在 bases 下按 pattern 匹配子项
+        val patterns = rule.pattern.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (patterns.isEmpty()) return emptyList()
+        val matched = ArrayList<File>()
+        for (base in bases) {
+            if (!base.isDirectory) continue
+            val children = base.listFiles() ?: continue
+            for (child in children) {
+                if (child.name in rule.keep) continue
+                if (patterns.any { globMatch(it, child.name) }) matched += child
+            }
+        }
+        return matched
+    }
+
+    /** 单段 glob 匹配（支持 `*` 与 `?`，大小写敏感）。 */
+    private fun globMatch(pattern: String, name: String): Boolean {
+        val regex = buildString {
+            append('^')
+            for (c in pattern) {
+                when (c) {
+                    '*' -> append(".*")
+                    '?' -> append('.')
+                    else -> append(Regex.escape(c.toString()))
+                }
+            }
+            append('$')
+        }
+        return Regex(regex).matches(name)
     }
 
     /** 单段通配展开（如 data/user/0 下的 cache 目录匹配）。 */

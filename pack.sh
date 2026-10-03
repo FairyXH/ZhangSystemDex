@@ -5,11 +5,14 @@
 # 用法:  sh pack.sh
 #        （可在 MT 管理器中直接运行；无需电脑、无需安装 zip）
 #
-# 设计目标（v3，2026-10-03 改造）：
+# 设计目标（v4，2026-10-03 改造）：
 #   * **模块自包含**：打包/校验所需的工具全部放在模块目录 tools/ 中，
 #     与 aapt / shfmt 采用同样的「随模块分发」策略；
 #   * **零系统依赖**：tools/ 内为纯 Python 实现（zippack.py / zipcheck.py），
 #     不依赖 Android 上罕见的 `zip` 命令，也不依赖 `unzip` 二进制；
+#   * **全程进度可见**：打包/解压/SHA256 校验每个阶段都持续打印进度
+#     （阶段标题 + 百分比 + 文件数 + 字节数 + 耗时），并在每条 echo 后
+#     立即输出，用户不会「干等结果」。Python 以 -u 无缓冲运行。
 #   * 只要求系统提供 python3（Android 10+ 默认内置 /system/bin/python3）。
 #     若系统确实没有 python3，可从 https://github.com/termux 或
 #     模块仓库补入 tools/python3 后再运行。
@@ -36,10 +39,25 @@ MAX_RETRY=3
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
+# 统一的分隔线/步骤函数，保证输出节奏清晰、实时。
+LINE="============================================================"
+step() { echo; echo "$LINE"; echo "== $*"; echo "$LINE"; }
+
+start_ts=$(date +%s 2>/dev/null || echo 0)
+elapsed() {
+    now=$(date +%s 2>/dev/null || echo 0)
+    if [ "$start_ts" -gt 0 ] 2>/dev/null && [ "$now" -ge "$start_ts" ] 2>/dev/null; then
+        echo "$((now - start_ts))s"
+    else
+        echo "?"
+    fi
+}
+
+step "ZhangProtect-Android 打包 (pack.sh v4)"
 echo "== 源码目录(SRC): $SRC"
 echo "== 输出产物(OUT): $OUT"
 echo "== 工作区(WORK): $WORK"
-echo
+echo "== 开始时间: $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
 
 # -------------------------------------------------------------
 # 探测 python3：本模块已内置 Python 运行时（Python.zip → /data/Python），
@@ -81,6 +99,7 @@ find_python() {
     return 1
 }
 
+step "步骤 1/5：探测 Python 运行时"
 PY_SPEC="$(find_python)"
 if [ -z "$PY_SPEC" ]; then
     echo "[!] 未找到 python3 —— 打包与校验都依赖它。"
@@ -102,14 +121,17 @@ esac
 echo "[+] 运行时: python3 = ${PY_ARG:-$PY_RUN}"
 
 # 运行自检：确保 zipfile / hashlib 可用（链接正常）
+echo "[+] 自检 python3（import zipfile/hashlib）..."
 if ! $PY_RUN $PY_ARG -c 'import sys, zipfile, hashlib' >/dev/null 2>&1; then
     echo "[!] python3 运行时不可用（缺少 zipfile/hashlib 或链接失败）"
     exit 2
 fi
+echo "[+] python3 运行时自检通过"
 
 # -------------------------------------------------------------
 # 自带工具定位（tools/ 随模块分发；缺失则视为损坏，直接报错）
 # -------------------------------------------------------------
+step "步骤 2/5：定位模块自带工具"
 ZIPPACK="$SRC/tools/zippack.py"
 ZIPCHECK="$SRC/tools/zipcheck.py"
 
@@ -122,11 +144,11 @@ if [ ! -f "$ZIPCHECK" ]; then
     exit 1
 fi
 echo "[+] 自带工具: zippack.py / zipcheck.py"
-echo
 
 # -------------------------------------------------------------
 # 前置检查(0): 防止再次打出「无 WebUI / 旧 dex」的坏包
 # -------------------------------------------------------------
+step "步骤 3/5：前置检查"
 precheck() {
     rc=0
     if [ ! -f "$SRC/webroot/index.html" ]; then
@@ -152,7 +174,6 @@ precheck() {
 }
 
 precheck || exit 1
-echo
 
 # -------------------------------------------------------------
 # 主流程：最多重试 MAX_RETRY 次
@@ -160,14 +181,15 @@ echo
 retry=0
 while [ "$retry" -lt "$MAX_RETRY" ]; do
     retry=$((retry + 1))
-    echo "############ 第 $retry 次尝试 / 共 $MAX_RETRY 次 ############"
+    step "步骤 4/5：打包（第 $retry 次尝试 / 共 $MAX_RETRY 次）"
 
     rm -f "$OUT"
 
-    # 1) 打包到临时文件（tools/zippack.py，保留权限位）
+    # 1) 打包到临时文件（tools/zippack.py，保留权限位；内部打印进度）
     TMPZIP="$WORK/ZhangProtect-Android.zip"
     rm -f "$TMPZIP"
-    if ! $PY_RUN $PY_ARG "$ZIPPACK" "$SRC" "$TMPZIP"; then
+    echo "[>] 调用 zippack.py 开始打包（下方为其实时进度）..."
+    if ! $PY_RUN $PY_ARG -u "$ZIPPACK" "$SRC" "$TMPZIP"; then
         echo "[!] 打包失败，重试..."
         continue
     fi
@@ -181,15 +203,22 @@ while [ "$retry" -lt "$MAX_RETRY" ]; do
         echo "[!] 产物移动到 $OUT 失败，重试..."
         continue
     fi
-    echo "[+] 打包完成: $OUT ($(wc -c < "$OUT") 字节)"
+    echo "[+] 打包完成: $OUT ($(wc -c < "$OUT") 字节，累计 $(elapsed))"
 
-    # 3) 解压 + SHA256 逐文件校验（tools/zipcheck.py）
-    if $PY_RUN $PY_ARG "$ZIPCHECK" "$OUT" "$SRC" "$WORK/unzip"; then
-        echo "############ 成功 ############"
+    # 3) 解压 + SHA256 逐文件校验（tools/zipcheck.py；内部打印进度）
+    step "步骤 5/5：解压 + SHA256 逐文件校验（第 $retry 次尝试）"
+    echo "[>] 调用 zipcheck.py 开始校验（下方为其实时进度）..."
+    if $PY_RUN $PY_ARG -u "$ZIPCHECK" "$OUT" "$SRC" "$WORK/unzip"; then
+        step "成功 ✅"
+        echo "[+] 产物: $OUT"
+        echo "[+] 大小: $(wc -c < "$OUT") 字节"
+        echo "[+] 耗时: $(elapsed)"
         exit 0
     fi
-    echo "[!] 将在清理后重试..."
+    echo "[!] 校验未通过，将在清理后重试..."
 done
 
-echo "############ 失败: $MAX_RETRY 次校验均未通过 ############"
+step "失败 ❌"
+echo "[!] $MAX_RETRY 次校验均未通过，请检查上方差异明细。"
+echo "[!] 耗时: $(elapsed)"
 exit 1

@@ -42,36 +42,70 @@ echo "== 工作区(WORK): $WORK"
 echo
 
 # -------------------------------------------------------------
-# 探测 python3：优先模块自带 tools/，其次 PATH，最后系统常见路径。
-# （与模块内 aapt 一样，先把依赖在模块目录里找一遍。）
+# 探测 python3：本模块已内置 Python 运行时（Python.zip → /data/Python），
+# 统一通过 tools/python3 入口调用（它会设置 PYTHONHOME / LD_LIBRARY_PATH，
+# 这一步是必须的：/data/Python/bin/python3.13 依赖 libpython3.13.so，
+# 不设 LD_LIBRARY_PATH 会报 "CANNOT LINK EXECUTABLE"）。
 # -------------------------------------------------------------
 find_python() {
-    # 1) 模块自带 tools/python3（若将来补入独立二进制）
-    if [ -x "$SRC/tools/python3" ]; then
-        echo "$SRC/tools/python3"; return 0
+    # 1) 模块自带 tools/python3（统一入口，首选）
+    #    注意：模块位于 /data/media（FUSE 挂载），文件可能没有执行位，
+    #    因此这里用 `-f` 判断存在性，再用 `sh` 显式调用。
+    if [ -f "$SRC/tools/python3" ]; then
+        echo "sh:$SRC/tools/python3"; return 0
     fi
-    # 2) tool 脚本自带 shebang 指向的解释器（zippack.py 用 /system/bin/python3）
-    if [ -x /system/bin/python3 ]; then
+    # 2) 模块内置运行时的**包装**（动态生成一个，保证环境变量正确）
+    if [ -f /data/Python/bin/python3.13 ]; then
+        WRAP="$WORK/python3"
+        {
+            echo '#!/system/bin/sh'
+            echo 'PREFIX=/data/Python'
+            echo 'export PYTHONHOME=$PREFIX'
+            echo 'export LD_LIBRARY_PATH=$PREFIX/lib:$LD_LIBRARY_PATH'
+            echo 'exec $PREFIX/bin/python3.13 "$@"'
+        } >"$WRAP"
+        chmod 755 "$WRAP"
+        echo "$WRAP"; return 0
+    fi
+    # 3) 独立 Python 模块（PythonforAndroid）提供的系统包装
+    if [ -f /system/bin/python3 ]; then
         echo /system/bin/python3; return 0
     fi
-    # 3) PATH
+    # 4) PATH
     p="$(command -v python3 2>/dev/null)"
-    if [ -n "$p" ] && [ -x "$p" ]; then echo "$p"; return 0; fi
-    # 4) 其它常见位置
-    for cand in /system/xbin/python3 /data/Python/bin/python3 /data/debian/usr/bin/python3; do
-        if [ -x "$cand" ]; then echo "$cand"; return 0; fi
+    if [ -n "$p" ] && [ -f "$p" ]; then echo "$p"; return 0; fi
+    # 5) 其它常见位置
+    for cand in /system/xbin/python3 /data/debian/usr/bin/python3; do
+        if [ -f "$cand" ]; then echo "$cand"; return 0; fi
     done
     return 1
 }
 
-PY="$(find_python)"
-if [ -z "$PY" ]; then
+PY_SPEC="$(find_python)"
+if [ -z "$PY_SPEC" ]; then
     echo "[!] 未找到 python3 —— 打包与校验都依赖它。"
-    echo "    Android 10+ 通常自带 /system/bin/python3；"
-    echo "    若确实没有，可把独立 python3 放入 $SRC/tools/python3 后重试。"
+    echo "    本模块内置了 Python 运行时（Python.zip → /data/Python），"
+    echo "    请确认模块已通过 service.sh 完成首次解压，或手动运行："
+    echo "      sh \"$SRC/tools/python3\" -c 'print(1)'"
     exit 2
 fi
-echo "[+] 运行时: python3 = $PY"
+
+# 支持 "sh:<脚本>" 形式（FUSE 下无执行位的模块自带脚本）
+case "$PY_SPEC" in
+sh:*)
+    PY_RUN="sh"
+    PY_ARG="${PY_SPEC#sh:}"
+    ;;
+*) PY_RUN="$PY_SPEC"; PY_ARG="" ;;
+esac
+
+echo "[+] 运行时: python3 = ${PY_ARG:-$PY_RUN}"
+
+# 运行自检：确保 zipfile / hashlib 可用（链接正常）
+if ! $PY_RUN $PY_ARG -c 'import sys, zipfile, hashlib' >/dev/null 2>&1; then
+    echo "[!] python3 运行时不可用（缺少 zipfile/hashlib 或链接失败）"
+    exit 2
+fi
 
 # -------------------------------------------------------------
 # 自带工具定位（tools/ 随模块分发；缺失则视为损坏，直接报错）
@@ -133,7 +167,7 @@ while [ "$retry" -lt "$MAX_RETRY" ]; do
     # 1) 打包到临时文件（tools/zippack.py，保留权限位）
     TMPZIP="$WORK/ZhangProtect-Android.zip"
     rm -f "$TMPZIP"
-    if ! "$PY" "$ZIPPACK" "$SRC" "$TMPZIP"; then
+    if ! $PY_RUN $PY_ARG "$ZIPPACK" "$SRC" "$TMPZIP"; then
         echo "[!] 打包失败，重试..."
         continue
     fi
@@ -150,7 +184,7 @@ while [ "$retry" -lt "$MAX_RETRY" ]; do
     echo "[+] 打包完成: $OUT ($(wc -c < "$OUT") 字节)"
 
     # 3) 解压 + SHA256 逐文件校验（tools/zipcheck.py）
-    if "$PY" "$ZIPCHECK" "$OUT" "$SRC" "$WORK/unzip"; then
+    if $PY_RUN $PY_ARG "$ZIPCHECK" "$OUT" "$SRC" "$WORK/unzip"; then
         echo "############ 成功 ############"
         exit 0
     fi

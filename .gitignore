@@ -32,3 +32,6 @@ __pycache__/
 *.pyc
 # 打包产物（由 pack.sh 生成，不入库）
 /ZhangProtect-Android.zip
+# 内置 Python 运行时包（87MB，随模块分发但不入源码仓库；
+# 由 母版目录 持有并在 pack.sh 打包时包含）
+/Python.zip

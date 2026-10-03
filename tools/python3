@@ -1,0 +1,46 @@
+#!/system/bin/sh
+# =============================================================
+# tools/python3 —— 模块自带的 Python 运行时入口（与 aapt / shfmt 同策略）
+#
+# 背景：
+#   本模块（Zhang）内置了 Python 运行时（Python.zip → 解压到 /data/Python），
+#   由 service.sh 在开机时确保存在。本脚本是该运行时的统一入口，
+#   供 pack.sh / 其它模块脚本调用，**不依赖系统 PATH**。
+#
+# 解析顺序：
+#   1) /data/Python/bin/python3.13   （模块释放的运行时，首选）
+#   2) /data/Python/bin/python3
+#   3) 系统 /system/bin/python3      （若系统/其它模块已提供）
+#
+# 用法：
+#   tools/python3 <脚本.py> [args...]
+#   tools/python3 -c 'print(1)'
+# =============================================================
+
+PREFIX=/data/Python
+
+# 运行时尚未就绪时，尝试就地解压（正常情况下 service.sh 已完成）
+if [ ! -x "$PREFIX/bin/python3.13" ] && [ ! -x "$PREFIX/bin/python3" ]; then
+    MODDIR="$(cd "$(dirname "$0")/.." && pwd)"
+    if [ -f "$MODDIR/Python.zip" ]; then
+        echo "[python3] 运行时缺失，正在解压 $MODDIR/Python.zip -> /data ..." >&2
+        unzip -o "$MODDIR/Python.zip" -d /data >&2
+        chmod -R 755 "$PREFIX" 2>/dev/null
+    fi
+fi
+
+export PYTHONHOME="$PREFIX"
+export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
+
+if [ -x "$PREFIX/bin/python3.13" ]; then
+    exec "$PREFIX/bin/python3.13" "$@"
+fi
+if [ -x "$PREFIX/bin/python3" ]; then
+    exec "$PREFIX/bin/python3" "$@"
+fi
+if [ -x /system/bin/python3 ]; then
+    exec /system/bin/python3 "$@"
+fi
+
+echo "[python3] 未找到可用的 Python 运行时（期望 $PREFIX/bin/python3.13）" >&2
+exit 127

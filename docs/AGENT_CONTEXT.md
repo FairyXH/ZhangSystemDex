@@ -398,6 +398,24 @@ SelfTest.rubbishChecks()  10 项只读回归
   临时文件落盘后再 `mv`（避免半成品）、最多 3 次重试、SHA256 逐文件比对
 - 退出码：0=成功 1=校验失败 2=缺 python3
 
+**`pack.sh` v4 + 工具进度输出（2026-10-03 追加）**：
+- 需求：用户反馈「日志要显示完整过程，不能只显示结果，让用户干等结果」。
+- 原状：`zippack.py` / `zipcheck.py` 只在**最后**打印一行汇总，500MB 打包 ~34s
+  全程无输出，MT/终端里像卡死。
+- 改造：
+  - `zippack.py`：新增预扫描（统计文件数 + 原始总体积）；写入阶段每 25 文件打印
+    `[ 82.4%] 75/91 文件  384.7 MB / ~532.7 MB  (24.6 MB/s, 16s)`；三阶段小标题 + 每行 flush。
+  - `zipcheck.py`：解压按条目打印进度；源/解压清单各自打印 SHA256 进度；
+    失败时补「概要」行；每行 flush。
+  - `pack.sh`：统一 `step()` 分隔标题 + 5 阶段（探测 Python→定位工具→前置检查→打包→校验）；
+    Python `-u` 无缓冲运行；打印开始时间与累计耗时；成功/失败均有汇总。
+- 真机验证：91 文件 / 532.7MB → **430,117,015 字节**，34s，全程进度可见；
+  `unzip -t` 零错误；SHA256 逐文件一致（91/91）。
+- **新产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+  - **SHA256 = `6e1a9d690f5efe68dfdcd40ee1c9f6925e764f59c194a5fa800298589559bbe1`**
+  - 关键条目 md5：Main.dex `d5c533e8`、webroot/index.html `3f750826`、
+    tools/zippack.py `46570096`、tools/zipcheck.py `682f9f8c`、pack.sh `73dbb495`。
+
 **真机验证**：`sh pack.sh` 一次通过 —— 90 文件、471,311,706 → 345,646,110 字节、
 耗时 29s、SHA256 全部一致；产物 `unzip -t` 零错误、解压后权限正确还原；
 zip 内无 `__pycache__`。
@@ -491,7 +509,7 @@ zip 内无 `__pycache__`。
 - 真机文件 md5：Main.dex `d5c533e8…`、webroot/index.html `3f750826…`。
 
 **未完成 / 注意**：
-- 本次改动**未重新打包**模块 zip（正式包仍是 `430,108,449` 字节的旧构建）。
-  如需发布，用母版 `pack.sh` 重打包（母版 Main.dex 已同步为新 dex）。
+- ✅ 已按最新源码重新打包：`ZhangProtect-Android.zip`（430,117,015 字节，91 文件，
+  SHA256 `6e1a9d69…`，见 §10.10），含新 Main.dex + 新 webroot + 进度版 pack.sh/tools。
 - 3 个 commit 位于 `origin/main` 之后，视需要 `git push`。
 - 备份：设备 `/data/adb/Zhang/_backup_powerfix_20261003-164603/`（旧 dex+webroot）。

@@ -106,10 +106,12 @@ object RubbishRuleSet {
             roots = listOf(
                 "/data/anr",
                 "/data/tombstones",
-                "/data/system/dropbox",
+                // 注：/data/system/dropbox 已移除——
+                //   1) 用户违禁规则含 deny_path=/data/system（用户意志优先）；
+                //   2) 系统级路径默认只读原则（2026-10-03 事故教训）。
             ),
             switchKey = "rubbish_rule_system_crash_logs",
-            note = "ANR / tombstone / dropbox 崩溃记录",
+            note = "ANR / tombstone 崩溃记录（不含 /data/system/dropbox，受用户违禁规则保护）",
         ),
         CleanRule(
             id = "app_logs",
@@ -153,11 +155,10 @@ object RubbishRuleSet {
             group = RuleGroup.GENERAL,
             risk = RiskLevel.MEDIUM,
             defaultOn = false,
-            mode = MatchMode.GLOB,
+            mode = MatchMode.UNINSTALLED_SCAN,
             roots = listOf("/data/media/<u>/Android/data"),
-            pattern = "*",
             switchKey = "rubbish_rule_uninstalled_leftover",
-            note = "已卸载应用的外部数据目录（运行时判定包是否仍安装）",
+            note = "已卸载应用的外部数据目录（**运行时逐个校验包是否仍安装**，仅清理确认已卸载的）",
         ),
         CleanRule(
             id = "big_files_list",
@@ -306,7 +307,6 @@ object RubbishRuleSet {
                 // 仅保留真正的静态日志/崩溃转储目录
                 "/data/log",
                 "/data/bootchart",
-                "/data/system/dropbox",
                 "/data/anr",
                 "/data/tombstones",
                 "/data/debugging",

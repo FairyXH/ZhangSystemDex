@@ -120,6 +120,23 @@ object RubbishGuard {
     /** 禁止删除的目录层级上限：规范化后路径段数不足此值一律拒绝。 */
     private const val MIN_SEGMENTS = 3
 
+    /**
+     * 活系统运行时目录前缀（**常量，避免高频重复分配**）。
+     *
+     * 这些目录被系统服务持有句柄、边写边用，删除会导致 HAL/服务崩溃、界面黑屏
+     * （2026-10-03 真机事故教训）。命中即无条件拒绝，是审查链的「最后一道防线」。
+     */
+    private val LIVE_SYSTEM_PREFIXES: List<String> = listOf(
+        "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
+        "/data/ramdump", "/data/ss/", "/data/dropbox/", "/data/cache/",
+    )
+
+    /** 判定（已小写的）规范化路径是否命中活系统目录。 */
+    private fun isLiveSystem(lowerCanonical: String): Boolean =
+        LIVE_SYSTEM_PREFIXES.any {
+            lowerCanonical == it.trimEnd('/') || lowerCanonical.startsWith(it)
+        }
+
     /** 用户自定义规则缓存（由 [UserGuardRules] 读入）。 */
     @Volatile
     private var userRules: UserGuardRules = UserGuardRules.EMPTY
@@ -156,12 +173,7 @@ object RubbishGuard {
         }
         if (canonical in FORBIDDEN_EXACT) return true
         // 活系统运行时目录（与 check() 的第 2b 步保持一致）。
-        val lower = canonical.lowercase()
-        val liveSystemPrefixes = listOf(
-            "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
-            "/data/ramdump", "/data/ss/", "/data/dropbox/", "/data/cache/",
-        )
-        if (liveSystemPrefixes.any { lower == it.trimEnd('/') || lower.startsWith(it) }) return true
+        if (isLiveSystem(canonical.lowercase())) return true
         val rules = userRules
         for (deny in rules.denyPaths) {
             if (canonical == deny || canonical.startsWith(deny.trimEnd('/') + "/")) return true
@@ -203,12 +215,7 @@ object RubbishGuard {
         //     /data/vendor（相机/基带/音频 HAL）、/data/misc（传感器/蓝牙运行时）、
         //     system_ce/de（system_server 状态快照）等目录被系统服务持有句柄，
         //     删除会导致 HAL 崩溃、界面黑屏，因此在此**无条件拒绝**。
-        val lowerCanonical = canonical.lowercase()
-        val liveSystemPrefixes = listOf(
-            "/data/vendor/", "/data/misc/", "/data/system_ce/", "/data/system_de/",
-            "/data/ramdump", "/data/ss/", "/data/dropbox/", "/data/cache/",
-        )
-        if (liveSystemPrefixes.any { lowerCanonical == it.trimEnd('/') || lowerCanonical.startsWith(it) }) {
+        if (isLiveSystem(canonical.lowercase())) {
             return Verdict.Reject("命中活系统运行时目录（真机事故防护）: $canonical")
         }
 
@@ -306,6 +313,11 @@ object RubbishGuard {
 
         val verdict = check(rawPath, ruleId)
         if (verdict is Verdict.Reject) {
+            // 已知保护文件（如 .nomedia）被拒属于「正常跳过」，不计入审计拒绝，
+            // 避免日志噪音淹没真正的安全拒绝记录。
+            if (isKnownProtectFile(rawPath, verdict.reason)) {
+                return DeleteResult(0, 0L, emptyList())
+            }
             audit.log(ruleId, "REJECT", rawPath, 0L, verdict.reason)
             return DeleteResult(0, 0L, listOf(Rejected(rawPath, verdict.reason)))
         }
@@ -351,15 +363,32 @@ object RubbishGuard {
     /**
      * 递归删除目录内容。默认只清空目录内容而保留目录本身（[keepSelf]=true），
      * 这与清理语义一致（例如 cache 目录应保留，只清其内文件）。
+     *
+     * 安全说明（重要）：
+     *  - 对**目录自身**的审查采用「宽松模式」：只要求它是受信任的容器的语义
+     *    （落在允许根内、命中禁止项则拒绝），但**不要求满足 MIN_SEGMENTS**
+     *    等面向「删除目标」的约束——因为这里并不删除该目录本身，
+     *    仅删除其**子项**，而每个子项都会走完整 [check]。
+     *  - 例：`/data/anr` 只有 2 段，作为「要删除的目标」应拒绝，
+     *    但作为「要被清空的容器」是合法的（其子项 /data/anr/xxx 才会被逐条审查）。
+     *  - [filesOnly]=true 时**只删除直接子文件，不递归进子目录**（更保守）：
+     *    用于「应用 cache」这类可能被应用挪作他用的目录（有应用把用户配置
+     *    放在 cache/configs/ 下），避免误删子目录中的真实数据。
      */
-    fun safeCleanDirContents(rawPath: String, ruleId: String, keepSelf: Boolean = true): DeleteResult {
+    fun safeCleanDirContents(
+        rawPath: String,
+        ruleId: String,
+        keepSelf: Boolean = true,
+        filesOnly: Boolean = false,
+    ): DeleteResult {
         val dir = File(rawPath)
         if (!dir.isDirectory) return DeleteResult(0, 0L, emptyList())
 
-        val verdict = check(rawPath, ruleId)
-        if (verdict is Verdict.Reject) {
-            audit.log(ruleId, "REJECT", rawPath, 0L, verdict.reason)
-            return DeleteResult(0, 0L, listOf(Rejected(rawPath, verdict.reason)))
+        // 容器审查（宽松）：禁止项命中即拒绝；不做 MIN_SEGMENTS 限制。
+        val containerVerdict = checkContainer(rawPath)
+        if (containerVerdict is Verdict.Reject) {
+            audit.log(ruleId, "REJECT", rawPath, 0L, containerVerdict.reason)
+            return DeleteResult(0, 0L, listOf(Rejected(rawPath, containerVerdict.reason)))
         }
 
         val children = dir.listFiles() ?: return DeleteResult(0, 0L, emptyList())
@@ -367,19 +396,71 @@ object RubbishGuard {
         var bytes = 0L
         val rejected = ArrayList<Rejected>()
         for (child in children) {
+            if (filesOnly && child.isDirectory) continue
             val r = safeDelete(child.path, ruleId)
             files += r.deletedFiles
             bytes += r.deletedBytes
             rejected += r.rejected
         }
         if (!keepSelf) {
-            // 仅在显式要求时删除目录自身，且必须再次通过审查。
+            // 仅在显式要求时删除目录自身，且必须再次通过**完整**审查。
             val self = safeDelete(rawPath, ruleId)
             files += self.deletedFiles
             bytes += self.deletedBytes
             rejected += self.rejected
         }
         return DeleteResult(files, bytes, rejected)
+    }
+
+    /**
+     * 「容器」审查：用于 [safeCleanDirContents] 中对待清空目录自身的判定。
+     *
+     * 与 [check] 的区别：**不施加 MIN_SEGMENTS 与「禁止删除允许根本身」限制**，
+     * 因为该目录本身不会被删除，只有其子项会。仍保留最严格的黑名单与活系统防护。
+     */
+    fun checkContainer(rawPath: String): Verdict {
+        if (rawPath.isBlank()) return Verdict.Reject("路径为空")
+        val canonical: String = try {
+            File(rawPath).canonicalPath
+        } catch (t: Throwable) {
+            return Verdict.Reject("规范化失败: ${t.message}")
+        }
+        if (canonical.indexOf('\u0000') >= 0) return Verdict.Reject("路径含非法字符")
+
+        // 活系统目录：容器也绝不允许（其子项会被删，风险相同）。
+        if (isLiveSystem(canonical.lowercase())) {
+            return Verdict.Reject("命中活系统运行时目录（真机事故防护）: $canonical")
+        }
+        // 前缀黑名单：容器自身若命中，直接拒绝（避免遍历系统目录）。
+        for (bad in FORBIDDEN_PREFIX) {
+            if (canonical == bad || canonical.startsWith(bad + "/")) {
+                val inAllowedRoot = ALLOWED_ROOTS.any { root ->
+                    canonical == root || canonical.startsWith(root + "/")
+                }
+                if (!inAllowedRoot) return Verdict.Reject("命中禁止目录: $bad")
+            }
+        }
+        if (canonical in FORBIDDEN_EXACT && canonical !in ALLOWED_ROOTS) {
+            return Verdict.Reject("命中禁止目录（精确）: $canonical")
+        }
+        // 用户违禁路径（前缀）。
+        for (deny in userRules.denyPaths) {
+            if (canonical == deny || canonical.startsWith(deny.trimEnd('/') + "/")) {
+                return Verdict.Reject("命中用户违禁路径: $deny")
+            }
+        }
+        // 用户违禁词（子串）。容器路径本身也适用。
+        val lower = canonical.lowercase()
+        for (word in userRules.denyWords) {
+            if (lower.contains(word.lowercase())) return Verdict.Reject("命中用户违禁词: $word")
+        }
+        // 必须落在允许根内（或 /data 全域）。
+        val inAllowed = ALLOWED_ROOTS.any { canonical == it || canonical.startsWith(it + "/") }
+        val broadData = ALLOW_BROAD_DATA && canonical.startsWith("/data/")
+        if (!inAllowed && !broadData) {
+            return Verdict.Reject("不在允许根白名单内: $canonical")
+        }
+        return Verdict.Accept
     }
 
     // ------------------------------------------------------------------
@@ -395,8 +476,10 @@ object RubbishGuard {
             // 目录不可读：仅尝试删除自身（可能为空目录）。
             val verdict = check(dir.path, ruleId)
             if (verdict is Verdict.Reject) {
-                rejected += Rejected(dir.path, verdict.reason)
-                audit.log(ruleId, "REJECT", dir.path, 0L, verdict.reason)
+                if (!isKnownProtectFile(dir.path, verdict.reason)) {
+                    rejected += Rejected(dir.path, verdict.reason)
+                    audit.log(ruleId, "REJECT", dir.path, 0L, verdict.reason)
+                }
             } else if (deleteOne(dir, followLink = true)) {
                 files++
                 audit.log(ruleId, "DELETE", dir.path, 0L, "dir(empty)")
@@ -408,8 +491,11 @@ object RubbishGuard {
             // 逐条目重新审查（防软链逃逸与越权）。
             val verdict = check(child.path, ruleId)
             if (verdict is Verdict.Reject) {
-                rejected += Rejected(child.path, verdict.reason)
-                audit.log(ruleId, "REJECT", child.path, 0L, verdict.reason)
+                // 已知保护文件（.nomedia 等）属预期跳过，不记审计、不计拒绝。
+                if (!isKnownProtectFile(child.path, verdict.reason)) {
+                    rejected += Rejected(child.path, verdict.reason)
+                    audit.log(ruleId, "REJECT", child.path, 0L, verdict.reason)
+                }
                 continue
             }
             if (isSymlink(child)) {
@@ -449,30 +535,52 @@ object RubbishGuard {
     /**
      * 实际删除单个路径。
      * [followLink]=false 时只删除链接本身（用 shell `rm -f` 保证不跟随）。
+     *
+     * 返回值以「路径是否真的消失」为最终判据——FUSE / 应用私有存储下
+     * `File.delete()` 可能返回 false 而实际删除成功，反之亦然。
      */
     private fun deleteOne(f: File, followLink: Boolean): Boolean {
         if (!followLink) {
-            // 软链安全删除：Java 的 File.delete 对软链删除链接本身，
-            // 但仍走一次 shell 兜底以覆盖 FUSE 场景。
-            return try {
-                if (f.delete()) return true
-                io.github.fairyxh.zhangsystemdex.core.ShellExecutor.runExit("rm -f '${escape(f.path)}'") == 0
+            try {
+                f.delete()
             } catch (_: Throwable) {
-                io.github.fairyxh.zhangsystemdex.core.ShellExecutor.runExit("rm -f '${escape(f.path)}'") == 0
+            }
+        } else {
+            try {
+                if (!f.delete()) {
+                    io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+                        .runExit("rm -rf '${escape(f.path)}'")
+                }
+            } catch (_: Throwable) {
+                io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+                    .runExit("rm -rf '${escape(f.path)}'")
             }
         }
-        return try {
-            if (f.delete()) return true
-            io.github.fairyxh.zhangsystemdex.core.ShellExecutor.runExit("rm -rf '${escape(f.path)}'") == 0
-        } catch (_: Throwable) {
-            io.github.fairyxh.zhangsystemdex.core.ShellExecutor.runExit("rm -rf '${escape(f.path)}'") == 0
+        // 最终判据：路径是否确实已不存在。
+        if (!f.exists() && !isSymlink(f)) return true
+        // 兜底再试一次 shell（覆盖 FUSE 缓存导致的 exists() 误判）。
+        if (followLink) {
+            io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+                .runExit("rm -rf '${escape(f.path)}'")
         }
+        return !f.exists() && !isSymlink(f)
     }
 
     private fun isSymlink(f: File): Boolean = try {
         java.nio.file.Files.isSymbolicLink(f.toPath())
     } catch (_: Throwable) {
         false
+    }
+
+    /**
+     * 是否为「已知保护文件」被拒（属预期跳过，不必写入审计拒绝）。
+     *
+     * 典型：`.nomedia` 被默认违禁词命中——它本身就是**防止媒体索引扫描**的标记，
+     * 删除它反而有害（会导致相册重新扫描并生成缩略图），因此被拒是正确且预期的。
+     */
+    private fun isKnownProtectFile(rawPath: String, reason: String): Boolean {
+        val name = rawPath.substringAfterLast('/').lowercase()
+        return name == ".nomedia" || name == ".nomedia.temp"
     }
 
     private fun escape(s: String): String = s.replace("'", "'\\''")

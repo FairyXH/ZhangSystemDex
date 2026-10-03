@@ -69,6 +69,14 @@ class RubbishCleaner(private val config: ConfigManager) {
             val deep = scanDeep(rule, maxSamples)
             return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, deep.files, deep.bytes, false, "", deep.samples)
         }
+        // 卸载残留：必须运行时校验「包是否仍安装」，绝不做无差别匹配。
+        if (rule.mode == MatchMode.UNINSTALLED_SCAN) {
+            val leftovers = findUninstalledLeftovers()
+            val samples = leftovers.take(maxSamples).map { it.path }
+            var bytes = 0L
+            leftovers.forEach { bytes += dirSize(it) }
+            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, leftovers.size, bytes, false, "", samples)
+        }
         val samples = ArrayList<String>()
         var files = 0
         var bytes = 0L
@@ -391,6 +399,17 @@ class RubbishCleaner(private val config: ConfigManager) {
         var bytes = 0L
         val rejected = ArrayList<RubbishGuard.Rejected>()
         for (v in victims) {
+            // ★ 目录（空目录）：删除前再确认一次「仍为空」，防 TOCTOU 竞态误删刚写入的内容。
+            if (v.isDirectory) {
+                val children = v.listFiles()
+                if (children == null || children.isNotEmpty()) continue
+                // 空目录经 safeDelete 走 deleteTree，此时已确认无子项，安全。
+                val r = RubbishGuard.safeDelete(v.path, rule.id)
+                files += r.deletedFiles
+                bytes += r.deletedBytes
+                rejected += r.rejected
+                continue
+            }
             val r = RubbishGuard.safeDelete(v.path, rule.id)
             files += r.deletedFiles
             bytes += r.deletedBytes
@@ -499,12 +518,38 @@ class RubbishCleaner(private val config: ConfigManager) {
                 continue
             }
 
+            // 卸载残留：运行时逐个校验包是否仍安装，仅删确认已卸载的。
+            if (rule.mode == MatchMode.UNINSTALLED_SCAN) {
+                val leftovers = findUninstalledLeftovers()
+                if (samples.size < maxSamples) leftovers.take(maxSamples).forEach { samples += it.path }
+                for (dir in leftovers) {
+                    // 二次校验：删除前再确认一次包仍未安装（防 TOCTOU）。
+                    val pkg = dir.name
+                    if (pkg in AppListProvider.allPackages().toSet()) continue
+                    val r = RubbishGuard.safeDelete(dir.path, rule.id)
+                    files += r.deletedFiles
+                    bytes += r.deletedBytes
+                    rejected += r.rejected
+                }
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, rejected)
+                totalFiles += files
+                totalBytes += bytes
+                continue
+            }
+
             for (userId in mediaUserIds()) {
                 for (root in expandRoots(rule, userId)) {
                     for (target in resolveTargets(rule, root)) {
                         if (samples.size < maxSamples) samples += target.path
                         val res: RubbishGuard.DeleteResult = when (rule.mode) {
-                            MatchMode.DIR_CONTENT -> RubbishGuard.safeCleanDirContents(target.path, rule.id)
+                            MatchMode.DIR_CONTENT -> RubbishGuard.safeCleanDirContents(
+                                target.path,
+                                rule.id,
+                                // app_cache：部分应用把用户配置放进 cache/ 子目录
+                                //（如 AGC 相机把滤镜配置放在 cache/sdcard/configs/），
+                                // 因此只清直接子文件，不递归子目录，避免误删真实数据。
+                                filesOnly = rule.id == "app_cache",
+                            )
                             MatchMode.OLDER_THAN -> cleanOlderThan(target, rule)
                             MatchMode.EMPTY_DIR -> cleanEmpty(rule, target)
                             else -> RubbishGuard.safeDelete(target.path, rule.id)
@@ -743,17 +788,56 @@ class RubbishCleaner(private val config: ConfigManager) {
     fun findUninstalledLeftovers(): List<File> {
         val installed = AppListProvider.allPackages().toSet()
         val result = ArrayList<File>()
+        var scanned = 0
+        var skippedInstalled = 0
+        var skippedProtected = 0
         for (uid in mediaUserIds()) {
             val extData = File("/data/media/$uid/Android/data")
             val list = extData.listFiles() ?: continue
             for (d in list) {
+                scanned++
+                if (!d.isDirectory) continue
                 val name = d.name
-                if (name.contains('.') && name !in installed && !name.startsWith(".")) {
-                    result += d
+                // 必须是形如包名的目录；必须确认该包当前**未安装**。
+                if (!name.contains('.')) continue
+                if (name.startsWith(".")) continue
+                if (name in installed) {
+                    skippedInstalled++
+                    continue
                 }
+                // 二次防护：绝不把系统关键包/模块相关目录当残留。
+                if (name.startsWith("com.android.") || name.startsWith("android")) {
+                    skippedProtected++
+                    continue
+                }
+                if (name.startsWith("com.google.android.")) {
+                    skippedProtected++
+                    continue
+                }
+                result += d
             }
         }
+        Logger.i(
+            "RubbishCleaner",
+            "卸载残留判定: 扫描=$scanned 已安装=$skippedInstalled 受保护=$skippedProtected 候选=${result.size}",
+        )
         return result
+    }
+
+    /** 递归统计目录占用字节数（仅用于扫描展示，不做删除）。 */
+    private fun dirSize(dir: File): Long {
+        var total = 0L
+        val stack = ArrayDeque<File>()
+        stack.addLast(dir)
+        var guard = 0
+        while (stack.isNotEmpty() && guard++ < 200000) {
+            val cur = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.isDirectory) stack.addLast(c) else total += c.length()
+            }
+        }
+        return total
     }
 
     // ------------------------------------------------------------------

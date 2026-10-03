@@ -43,6 +43,27 @@ object JunkPatterns {
         "dump", "dumps", "debug", "debugging", "traces", "trace",
     )
 
+    /**
+     * 「强特征」目录：仅凭目录名即可判定其**直接子文件**为垃圾。
+     *
+     * 与 [DIR_JUNK] 的区别：[DIR_JUNK] 中 `dump` / `debug` / `trace` / `crash`
+     * 等词过于宽泛，可能出现在用户数据目录中（如某 App 的 `debug/` 存放导出数据），
+     * 因此这些目录下的文件**仍需文件级特征联合判定**（后缀/名称/魔数），
+     * 不得仅凭目录名删除。只有「语义明确为缓存/日志」的目录才走强特征直通。
+     */
+    private val DIR_JUNK_STRONG: Set<String> = setOf(
+        "cache", "caches", ".cache", "cachedir", "cache2",
+        "code_cache", "image_cache", "http_cache", "disk_cache",
+        "volley", "picasso", "glide", "fresco", "okhttp", "okio",
+        "log", "logs", "logfile", "logfiles", "onelog", "commonlog",
+        "xlog", "tmp", "temp", "temps", ".tmp", "tempfiles",
+        "thumbnails", ".thumbnails", "thumbnail", "imagecache", "imgcache",
+        "thumbcache", "photocache",
+        "adcache", "ad_cache", "analytics", "tracking", "bugly", "umeng",
+        "xweb_cache", "skyline_cache", "webview_cache",
+        "videocache", "video_cache", "diskcache", "download_cache", "filecache", "acache",
+    )
+
     /** 文件名后缀（小写比对）：命中即可清理。 */
     val FILE_JUNK_SUFFIX: List<String> = listOf(
         ".log", ".log.1", ".log.bak", ".log.old",
@@ -53,9 +74,19 @@ object JunkPatterns {
         ".weblog", ".alog", ".xlog", ".ullog",
     )
 
-    /** 文件名（全等或包含，小写比对）：命中即可清理。 */
+    /**
+     * 文件名精确匹配（小写比对）：命中即可清理。
+     *
+     * 注意：**必须精确匹配，不可用 startsWith**——
+     * `core` 若用前缀匹配会误删 `core_backup.json`、`core_data.db` 等用户文件。
+     */
     val FILE_JUNK_NAME: List<String> = listOf(
         "thumbs.db", ".thumbdata", ".trash", "core", "core.txt",
+        "hs_err_pid", "replay_pid",
+    )
+
+    /** 文件名前缀匹配（小写比对）：仅限语义极明确者。 */
+    private val FILE_JUNK_PREFIX: List<String> = listOf(
         "hs_err_pid", "replay_pid",
     )
 
@@ -111,29 +142,49 @@ object JunkPatterns {
      * 判断文件是否为垃圾。
      *
      * [relDir] 是文件所在目录名（用于目录特征），[name] 是文件名。
+     *
+     * 判定顺序（保护优先，逐级收窄）：
+     *  1. 保护文件名 / 保护目录 → 永不删除
+     *  2. 精确垃圾文件名 → 删除
+     *  3. 垃圾后缀 → 删除
+     *  4. 强特征目录下的**直接子文件** → 删除
+     *  5. 零字节文件（需通过保护路径二次校验）→ 删除
+     *  6. 文件头魔数（hprof）→ 删除
+     *
+     * 安全原则：**宁可漏判，不可误伤**。弱特征（如 `dump`/`debug` 目录、零字节）
+     * 必须叠加二次校验，绝不单独放行。
      */
     fun isJunk(name: String, parentDirName: String, file: java.io.File, size: Long): Boolean {
         val lower = name.lowercase()
         val dirLower = parentDirName.lowercase()
+        val pathLower = try {
+            file.path.lowercase()
+        } catch (_: Throwable) {
+            ""
+        }
 
-        // 保护优先
+        // 0) 保护路径二次校验（最高优先级，任何判定前先看）。
+        if (pathLower.isNotEmpty() && isProtectedPath(pathLower)) return false
+
+        // 1) 保护文件名 / 保护目录：永不删除。
         if (lower in PROTECT_FILE) return false
         if (dirLower in PROTECT_DIR) return false
 
-        // 零字节文件（除保护项）
-        if (size == 0L) return true
+        // 2) 精确垃圾文件名。
+        if (lower in FILE_JUNK_NAME) return true
 
-        // 目录特征命中（父目录是缓存/日志目录）
-        if (dirLower in DIR_JUNK) return true
-
-        // 文件名后缀命中
+        // 3) 明确垃圾后缀。
         if (FILE_JUNK_SUFFIX.any { lower.endsWith(it) }) return true
 
-        // 文件名特征命中
-        if (FILE_JUNK_NAME.any { lower == it || lower.startsWith(it) }) return true
+        // 4) 强特征目录下的直接子文件（cache/logs/tmp/… 语义明确）。
+        if (dirLower in DIR_JUNK_STRONG) return true
 
-        // 文件头：Java hprof 堆转储
-        if (lower.contains("hprof") || hasMagic(file, MAGIC_HPROF)) return true
+        // 5) 文件头魔数（Java hprof 堆转储）。
+        if (lower.endsWith(".hprof") || hasMagic(file, MAGIC_HPROF)) return true
+
+        // 6) 零字节文件：需满足「弱垃圾语义」才清（避免误删应用占位/标记文件）。
+        //    仅当父目录命中 DIR_JUNK（含弱特征）或文件名带明显临时语义时才判定。
+        if (size == 0L && looksTemporary(lower)) return true
 
         return false
     }

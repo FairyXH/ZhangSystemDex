@@ -303,7 +303,44 @@ SelfTest.rubbishChecks()  10 项只读回归
 
 **结论**：**系统级目录默认只读**。用户如需清理，必须显式开启且仅限静态日志。
 
-### 10.9 待办 / 可选增强
+### 10.9 安全 review 与修复（2026-10-03 第二轮，清理功能全面加固）
+
+按「清理极其敏感，安全 > 效率」原则对全部清理代码做了一轮系统性 review，
+**发现并修复 7 处缺陷**（其中 2 处为严重误删漏洞）：
+
+| # | 严重度 | 缺陷 | 修复 |
+|---|---|---|---|
+| 1 | 🔴 严重 | `uninstalled_leftover` 规则 `mode=GLOB` + `pattern="*"`，会匹配 `/data/media/<u>/Android/data` 下**全部 360 个应用目录并递归删除**（`findUninstalledLeftovers()` 从未被调用）。用户一旦勾选即毁数据 | 新增 `MatchMode.UNINSTALLED_SCAN`；`scan`/`clean` 均走 `findUninstalledLeftovers()`；删除前**二次校验包仍未安装**（防 TOCTOU）；排除 `com.android.*`/`android*`/`com.google.android.*` |
+| 2 | 🔴 严重 | `JunkPatterns.DIR_JUNK` 含 `dump/debug/trace/crash` 等宽泛词，命中即**无条件删除该目录下所有文件**（不看类型）。用户 `debug/` 里的导出数据会被清 | 拆分 `DIR_JUNK_STRONG`（语义明确的缓存/日志目录才直通）；弱特征目录下文件仍需文件级特征联合判定 |
+| 3 | 🔴 严重 | `FILE_JUNK_NAME` 用 `startsWith("core")` → 误删 `core_backup.json`、`core_data.db` | 改为**精确匹配**；仅 `hs_err_pid`/`replay_pid` 保留前缀语义 |
+| 4 | 🟡 中 | 零字节文件**无条件**判为垃圾（未校验保护路径） | 加 `isProtectedPath` 二次校验 + 要求 `looksTemporary` 语义 |
+| 5 | 🟡 中 | `DIR_CONTENT` 模式对目录自身跑完整 `check`，`/data/anr`（2 段）被「层级过浅」拒绝 → **整个目录内容清不掉**（`system_crash_logs` 长期 0 删除的真因） | 新增 `RubbishGuard.checkContainer()`「宽松容器审查」：不做 MIN_SEGMENTS、不做「允许根本身」限制，但保留活系统防护与黑名单 |
+| 6 | 🟡 中 | `deleteOne()` 以 `File.delete()` 返回值判成败，FUSE/应用私有存储下常误报 FAIL | 最终判据改为「路径是否真的消失」；FAIL 前兜底重试 `rm -rf` |
+| 7 | 🟢 低 | `check()` 每文件重建 `liveSystemPrefixes` list（`deleteTree` 高频调用） | 提为常量 `LIVE_SYSTEM_PREFIXES` + `isLiveSystem()` |
+| 8 | 🟢 低 | `.nomedia` 被拒刷屏审计日志（34+ 条/次） | 新增 `isKnownProtectFile()`：已知保护文件**静默跳过**，不记审计、不计拒绝 |
+
+**额外加固**：
+- `app_cache` 规则改为 `filesOnly=true`（只删直接子文件，**不递归子目录**）——
+  修复 AGC 相机（`com.agc.gcam84`）把 21 个滤镜配置放在 `cache/sdcard/AGC.8.4/configs/`
+  被误删的问题。真机验证：配置**完好保留**。
+- `system_crash_logs` 移除 `/data/system/dropbox`（受用户违禁规则 `deny_path=/data/system`
+  保护，移除避免"规则宣称能清但实际清不掉"的误导）。
+- `system_junk_data` 移除 `/data/system/dropbox`（同上，且系统级路径默认只读）。
+
+**效率现状**（真机实测）：
+- 全量扫描（含 JUNK_SCAN 深度扫描）：**7~9 秒**
+- 全量清理（31 条规则）：**5~11 秒**
+- 扫描缓存 `ScanCache` 使二次扫描仅增量判定变动文件。
+
+**真机验证结果（最终）**：
+- `rejected=0`、审计日志无 REJECT/FAIL（唯一非 DELETE 行为 SESSION 汇总）
+- 关键目录全完好：`/data/adb`、`/data/Python`、`/data/system`、
+  `/data/misc/keystore`、`/data/vendor/camera`(6613)、微信 `MicroMsg`、
+  AGC 滤镜配置(21 个)
+- `uninstalled_leftover` 准确返回 1 个真残留（`com.android64bit.web`），
+  而非修复前的 360 个
+
+### 10.10 待办 / 可选增强
 
 - [ ] 中高风险规则（微信聊天媒体按时间、QQfile_recv 等）尚未在真机做真实删除验证。
 - [ ] `rubbish_rule_big_files_list` 目前复用 OLDER_THAN（ageDays=0），语义上应改为

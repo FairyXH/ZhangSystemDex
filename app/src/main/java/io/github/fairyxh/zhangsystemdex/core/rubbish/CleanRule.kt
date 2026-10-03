@@ -45,6 +45,15 @@ enum class MatchMode {
      * 与 APK_SCAN 的区别：不限定类型，靠多组特征联合判定，适用范围覆盖全部 App。
      */
     JUNK_SCAN,
+
+    /**
+     * 卸载残留扫描：逐个校验子目录对应的包**当前是否仍安装**，
+     * 仅将「已确认卸载」的应用外部数据目录列为候选。
+     *
+     * 安全红线：**绝不允许无差别匹配**（历史缺陷：曾用 GLOB `*` 会删除全部应用数据）。
+     * 判定依赖 [io.github.fairyxh.zhangsystemdex.core.AppListProvider]。
+     */
+    UNINSTALLED_SCAN,
 }
 
 /** 功能分组，用于 WebUI 分区展示。 */

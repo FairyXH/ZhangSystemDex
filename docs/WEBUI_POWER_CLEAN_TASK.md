@@ -65,10 +65,40 @@
 | --- | --- | --- |
 | 后端编译 | `/opt/build.sh`（JDK21 + gradle 9.3.1） | BUILD SUCCESSFUL |
 | 前端静态 | `node --check`（内联脚本）+ id 引用交叉校验 | 语法 OK；42 refs 全在 |
-| 前端运行时（电源） | `linkedom` 执行真实 JS + mock 新 `powerstatus` | **22/22 PASS** |
+| 前端运行时（电源） | `linkedom` 执行真实 JS + mock 新 `powerstatus` | **22/22 PASS**（`/tmp/wuicheck/power_harness.mjs`） |
 | 前端运行时（清理） | 既有 `clean_harness.mjs` | **15/15 PASS** |
 | 前端结构 | 既有 `harness2.mjs` | 13/13 PASS |
-| 真机端到端 | 部署新 dex + 重启 daemon + `curl /api/powerstatus` | 见 AGENT_CONTEXT 记录 |
+| **真机端到端** | 部署新 dex + 新 webroot + 重启 daemon + `curl /api/powerstatus` | **字段全量返回且实时变化** |
+| **真机实时渲染** | `livecheck.mjs` 用真实响应渲染 | 16 格全部真实值，无占位 |
+| **真机自测** | `app_process … selftest` | **PASS 48 / FAIL 0**（修复前 FAIL 2） |
+
+## 3.1 真机实测样例（2026-10-03，充电中且息屏）
+
+```json
+{"ok":true,"level":66,"status":2,"plugged":1,"health":2,"present":true,
+ "temperature":378,"voltage":4187,"currentNow":-1550,
+ "charging":true,"statusText":"充电中","pluggedText":"交流电源","healthText":"良好",
+ "levelPercent":66,"subsystemEnabled":true,"running":true,"eventDriven":true,
+ "screenOn":false,"policyLevel":1,"policyLevelText":"息屏省电",
+ "lastAction":"息屏（电池 66%） (startup)","kernelApplied":false,"hasBgTargets":true,
+ "policyAppliedCount":1,"policyRevertCount":0,"backgroundRestrictCount":1,
+ "lowBatteryEnterCount":0,"failOpenCount":0,"lowBatteryThreshold":20}
+```
+
+对应前端渲染：`电量 66% · 充电中 · 交流电源 · 息屏 · 37.8 °C · 4.152 V · 良好 · -1.0 mA`，
+策略面板：`运行中 · 息屏省电 · 事件驱动 · 未降频 · 应用 1 · 还原 0 · 后台限制 1 · fail-open 0`。
+
+## 3.2 自测暴露并修复的额外缺陷
+
+真机自测（`selftest`）发现两处**既有**缺陷（非本次文案改动引入），一并修复：
+
+1. **`listOnly` 规则在普通清理路径仍会删除**：`big_files_list` 的 note 写“不自动删除”
+   却未设 `listOnly`；且 `RubbishCleaner.clean()` 只在 `isDeepMode` 分支检查
+   `listOnly`，`OLDER_THAN/GLOB/DIR_*` 路径无护栏。
+   → 补 `big_files_list.listOnly=true`，并在 `clean()` 每规则入口加**统一零删除护栏**；
+   新增回归守卫「清理.仅列出规则零删除」。
+2. **OPLUS `dumpsys battery` 字段解析**：`Battery current : -1550` 冒号前有空格，
+   原正则不匹配 → `intField/boolField` 允许冒号前可选空白。
 
 ## 4. 产物
 

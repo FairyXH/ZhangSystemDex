@@ -27,15 +27,13 @@
 
 | 产物 | 位置 | md5 | 说明 |
 | --- | --- | --- | --- |
-| `Main.dex`（**当前，含垃圾清理**）| 模块目录/运行目录/仓库 | `4669cac99679dc41475917edf973cdba` | 2442020B，含 RubbishGuard/Cleaner/RuleSet/AuditLog/JsonBuilder |
-| `Main.dex`（上版，含电源子系统）| 备份 `_backup_clean_*/Main.dex.mod` | `8224b53e578ddda00bb08df900c28829` | 2358752B，含 HttpBackend |
-| `Main.dex`（旧，禁用）| 备份名 `Main.dex.bak.1791001188` | `7460aaa69e082d3c8084854bbf269655` | 0处 HttpBackend，2306316B |
-| `webroot/index.html`（**当前，五 Tab + 清理**）| 打包目录/模块目录/仓库 | `802216c5a95d6efd242ca3a3178e7e49` | 54611B，五 Tab iOS 底栏 UI（概览/开关/电源/清理/设置） |
-| `webroot/index.html`（四 Tab，上一版）| 历史 | `e91f05a8fb2f280d1fefa4e422869f44` | 41302B |
+| `Main.dex`（**当前，含电源/清理修复**）| 模块目录/运行目录/仓库/母版 | `d5c533e802a5fa6b93dbeb5e13ec3648` | 2502608B，含 HttpBackend + 完整电源读数 + listOnly 护栏 |
+| `webroot/index.html`（**当前，五 Tab + 电源/清理完善**）| 模块目录/母版/仓库副本 | `3f750826766decc89d1caf50dbb36818` | 58014B，电源页 16 格 + 清理文案专业化 |
 | `webroot/config.json` | 打包目录/模块目录 | `d01d5fc7f95f27ed10a33d1a16c1c255` | 449B，WebUI X 宿主清单 |
+| `Main.dex`（上版，含电源子系统）| 备份 `_backup_powerfix_*/Main.dex` | `a6e91230ae8d7a3c0226930e9f173913` | 2494640B（仓库曾记录为 a6e91230） |
 
-> 切勿用旧值：`Main.dex` 若为 `7460aaa6...`、或 webroot 用 `4643...` / `a8cb7f03...` 系列即旧包。
-> 设备备份目录：`/data/adb/Zhang/_backup_clean_20261003-140001/`（含旧 dex/webroot/switches.conf）。
+> 历史值：`Main.dex` 旧版 `4669cac9…`（含垃圾清理）、`8224b53e…`（含 HttpBackend）、
+> `7460aaa6…`（旧，禁用）；webroot 旧版 `802216c5…`（五 Tab+清理）、`e91f05a8…`（四 Tab）。
 
 ## 4. 服务与部署机制
 
@@ -59,7 +57,45 @@
 - `构建WebUI.bat`：**同时**抽取并校验 `assets/webroot/index.html` + `assets/webroot/config.json`。
 - `pack.sh`：`precheck()` 要求存在 `webroot/index.html` + `webroot/config.json` + `Main.dex` 且 dex 含 `HttpBackend`，否则拒绝打包；打包后解压并逐文件 SHA256 自检比对（最多 3 次重试）。
 
-## 6.1 WebUI 重构（iOS 风格四 Tab 底栏，已完成）
+## 6.1.1 ⚙ 规范构建流程（2026-10-03 确证，务必用这个）
+
+**构建必须在 Ubuntu 终端用 `/opt/build.sh`，不能用 `./gradlew`。**
+
+- 环境脚本 `/opt/zhangsys-env.sh` / `/opt/android-env.sh` 提供：
+  `JAVA_HOME=/opt/jdk-21.0.12.1+1`（AGP 9.1.1 要求 JDK21）、
+  `GRADLE_USER_HOME=/opt/gradle-home`（预置依赖缓存，离线可构建）、
+  `/opt/gradle-9.3.1/bin/gradle`、`ANDROID_HOME=/opt/android-sdk`。
+- `bash /opt/build.sh`（内部已 source android-env、带 `--init-script /opt/gradle-init.gradle`
+  与 `-Pandroid.aapt2FromMavenOverride=/opt/aapt2-qemu/aapt2`）。一次约 45~100s。
+- **坑**：直接 `sh ./gradlew :app:assembleRelease` 会卡在
+  "single-use Daemon process will be forked" 后无限挂起（proot 下 fork JVM 失败），
+  且 wrapper 默认 `DEFAULT_JVM_OPTS=-Xmx64m` 与 `org.gradle.jvmargs=-Xmx2048m`
+  不一致必然触发 fork。**不要用 gradlew**。
+- 产物 APK：`app/build/outputs/apk/release/app-release-unsigned.apk`。
+- 取 Main.dex：`unzip -o -q <apk> classes.dex -d <dir>`（只有一个 classes.dex）。
+- dex 校验标记：含 `HttpBackend`（14 处）、`SkipMountGuardModule`、`apiPowerStatus`、`PowerOptimizer`。
+
+## 6.1.2 真机部署与自测（2026-10-03 新增）
+
+**跨环境桥**：Ubuntu 写 `/sdcard/Download/Files/_zsd_deploy/`，Android shell 读同路径。
+
+部署步骤（Android shell）：
+```sh
+D=/sdcard/Download/Files/_zsd_deploy
+cp -f "$D/Main.dex.new" /data/adb/modules/Zhang/Main.dex   # 模块目录（开机源）
+cp -f "$D/Main.dex.new" /data/adb/Zhang/Main.dex           # 运行目录（当前进程）
+cp -f "$D/index.html.new" /data/adb/modules/Zhang/webroot/index.html
+sh /data/adb/modules/Zhang/重启Dex.sh                       # 停旧 + service.sh 启新
+```
+- **WebUI 位置**：WebUI X 宿主读**模块目录** `/data/adb/modules/Zhang/webroot/index.html`；
+  母版 `/sdcard/Download/Files/ZhangProtect-Android/webroot/` 为打包源，两处需同步。
+- **自测（不启动 HTTP 后端，安全）**：
+  `cd /data/adb/Zhang && /system/bin/app_process -Djava.class.path=/data/adb/Zhang/Main.dex /system/bin --nice-name=zhangselftest <MainClass> /data/adb/modules/Zhang selftest`
+  （`selftest` 参数 → `SelfTest.run(ctx)` 后退出；含清理审查 17/17 等）。
+- **实时后端**：`curl -s http://127.0.0.1:26437/api/powerstatus`。
+- **真机 dumpsys 格式（OPLUS/ColorOS）**：无 `plugged:` 行（用 `AC/USB/Wireless/Dock powered`）、
+  温度有 `PhoneTemp:` 与 `temperature:` 两行、电流为 `Battery current : <n>`（冒号前有空格）。
+  解析必须兼容这些差异，见 `HttpBackend.intField/boolField`（允许冒号前可选空白）。
 
 - 需求：重构 `webroot/index.html` → ①按功能大类分类；②加底栏；③iOS 页面设计。
 - 信息架构：四个底栏 Tab — **概览(home) / 开关(switch) / 电源(power) / 设置(settings)**。
@@ -426,3 +462,36 @@ zip 内无 `__pycache__`。
 - [ ] WebUI 清理 Tab 的真机可视化确认（本机无 WebView 环境，仅做了无头校验）。
 - [ ] 母版 `webroot/index.html`（54611 字节，含 rubbish UI）比工程内旧副本新，
       工程侧 `webroot/` 已废弃（.gitignore 忽略），正式资源以母版为准。
+
+---
+
+## 11. 任务记录：WebUI 电源读数补全 + 清理文案专业化（2026-10-03）
+
+**需求**：用户反馈「电源页电池读数很多缺失；清理页描述不准确，要专业化，
+去掉『实测……』等开发/测试阶段字样」。
+
+**根因**：见 `docs/WEBUI_POWER_CLEAN_TASK.md`。
+- 电源：后端 `/api/powerstatus` 只吐 4 字段，前端 6 格中 4 格硬编码 “—”；
+  `PowerOptimizer` 已有全量快照但 WebUI 拿不到运行实例。
+- 清理：`RubbishRuleSet` 的 `note` 含 `实测…`、`真机事故教训`、字面 `**`（前端
+  `textContent` 原样显示）。
+
+**改动（3 个 commit，均在 `main` 上，尚未 push）**：
+- `5da06ba` feat(power)：PowerOptimizer 静态实例注册表（attach/detach）；
+  重写 `HttpBackend.apiPowerStatus` → 一次 dumpsys 解析 + 合并快照 + OEM 兼容。
+- `96598ea` refactor(clean)：31 条规则 note 专业化 + 页脚去内部类名 + docs 任务说明。
+- `b01bdcc` fix(clean,power)：listOnly 统一零删除护栏（+ 回归守卫）；
+  intField/boolField 允许冒号前空白（OPLUS `Battery current : n`）。
+- 前端电源页改为 8 格电池 + 8 格策略 + 「最近动作」，重写 `refreshPowerStatus`。
+
+**验证（真机已部署并生效）**：
+- SelfTest：**PASS 48 / FAIL 0**（修复前 FAIL 2）。
+- `/api/powerstatus` 真机返回全量字段，随息屏/充电实时变化。
+- 电源页无头渲染 22/22、清理无头 15/15、结构 13/13 全 PASS。
+- 真机文件 md5：Main.dex `d5c533e8…`、webroot/index.html `3f750826…`。
+
+**未完成 / 注意**：
+- 本次改动**未重新打包**模块 zip（正式包仍是 `430,108,449` 字节的旧构建）。
+  如需发布，用母版 `pack.sh` 重打包（母版 Main.dex 已同步为新 dex）。
+- 3 个 commit 位于 `origin/main` 之后，视需要 `git push`。
+- 备份：设备 `/data/adb/Zhang/_backup_powerfix_20261003-164603/`（旧 dex+webroot）。

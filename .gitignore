@@ -26,3 +26,9 @@ _zsd_deploy/
 /backup_src/
 # 顶层 webroot/ 为旧版 UI 副本（已废弃，正式资源在 app/src/main/assets/webroot/）
 /webroot/
+
+# Python 工具缓存（tools/ 为模块自带打包工具）
+__pycache__/
+*.pyc
+# 打包产物（由 pack.sh 生成，不入库）
+/ZhangProtect-Android.zip

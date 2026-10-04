@@ -671,3 +671,42 @@ zip 内无 `__pycache__`。
 **⚠ 诊断信标保留**：`/api/diag` → `/data/adb/Zhang/log/webui_diag.log`（不依赖 log_enabled），
 后续排查 WebUI 问题可直接查看。
 **注意**：本次**未重新打包 zip**（母版已含新 dex+UI，需要时用 `pack.sh` 重打包）。
+---
+## 17. 新功能：免重启在线更新（OTA，2026-10-04 08:18）
+**需求**：把最新 `Main.dex` / `webroot/index.html` 写入「**已存在的模块目录**」并重启
+daemon 进程即可生效——**无需刷 zip、无需重启设备**。
+**实现**：
+- 后端（`HttpBackend.kt`）新增：
+  - `GET  /api/ota/status`：返回模块目录、当前 dex/UI 大小与 md5、更新源、curl 是否可用。
+  - `POST /api/ota/update`：`curl` 下载最新 dex+UI → **校验 dex 魔数（`dex\n`）** →
+    备份到 `_backup_ota_<时间戳>/` → 写入模块目录（dex 写 `MODDIR/Main.dex`，UI 写
+    `MODDIR/webroot/index.html`）→ 写 `ota_restart.sh` 并用 **`setsid` 完全分离**运行，
+    其中 `停止Dex.sh` → `service.sh` 完成 daemon 重启。
+  - `ConfigManager` 暴露只读 `moduleDir`。
+- 前端：设置页新增「在线更新（免重启）」卡片：**检查 / 一键更新**，更新后自动轮询
+  `/api/ping` 等待 daemon 回来并刷新页面。
+- 脚本：母版 + 仓库新增 `免重启更新.sh`（无 WebUI 时可用；目标固定
+  `/data/adb/modules/Zhang`；含魔数校验、备份、重启）。
+**实测踩坑与修复（关键）**：
+1. **`raw.githubusercontent.com` CDN 缓存滞后**：刚 push 的新 dex 会被当成旧版本下载
+   （实测本地 HEAD=`23361326`，raw 仍返回上一版 `aeff2f93`）。改用
+   **`https://github.com/FairyXH/ZhangSystemDex/raw/main/`**（302 跳转到带 cache-busting
+   的 CDN），实测能取到最新；脚本亦加 `?ts=` 与 `Cache-Control: no-cache`。
+2. **重启进程被连带杀死 / 配置根 dex 被写成 0 字节**：原 `( ... ) &` 子 shell 是 daemon
+   的子进程，`停止Dex.sh` 的 `pkill` 会把它一起杀掉，daemon 不回；且后端直接写
+   `/data/adb/Zhang/Main.dex` 与重启的 `service.sh` 同步产生写竞态。修复：重启逻辑写入
+   `ota_restart.sh` 用 `setsid` 在新会话运行（sleep 2 等旧进程退出再拉起），并**移除**后端
+   对配置根的重复写（一律交由 `service.sh` 同步）。
+**验证**：
+- 真机把模块 dex 换成旧版 `d5c533e8` → `POST /api/ota/update` → dex 更新为最新、
+  daemon 自动重启、配置根 dex 非空、`/api/ping`=pong；`ota_restart.log` 显示
+  `已停止 daemon` → `synced` → `started`。全程无重启设备、无刷 zip。
+- `免重启更新.sh` 同样跑通（旧版→最新）。
+- harness save 17/17、clean 15/15、power 22/22、check_html ALL PASS；
+  真机 SelfTest **49 PASS / 1 FAIL**（唯一 FAIL 为该 ROM 固有的 AppOps 随机项）。
+**产物**：`Main.dex` = `eeb41a01e46a9519a6c7ff4bd742c24e`；
+`webroot/index.html` = `c8b99094c782a86746742dba8a8fb03f`；`免重启更新.sh` = `021096a5dfa74e146990c52899082db0`。
+模块 + 母版 + 仓库 + GitHub 均已同步；daemon 运行中。
+**用法**：设置页 →「在线更新（免重启）」→「一键更新」；或直接执行
+`sh /data/adb/modules/Zhang/免重启更新.sh`（脚本可从仓库下载）。
+**⚠ 提醒**：GitHub raw CDN 有滞后，**push 后请等 1~2 分钟再执行 OTA**，否则可能仍取到上一版。

@@ -858,3 +858,46 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 **⚠ 教训**：sysfs 温度单位不统一（battery=0.1°C、thermal=0.001°C），且 zone 里混有
 非温度信号；**归一化必须在后端做一次**，前端不得再猜单位。Kotlin 块注释里写路径
 `thermal_zone*/temp` 会把 `*/` 当成注释结束符导致编译失败——已注意规避。
+
+---
+
+## 23. 修复：「目标应用运行中强制清理」开关打不开（2026-10-04 09:55）
+
+**现象**：清理页「目标应用运行中强制清理」开关点击后立刻弹回未勾选，像是「打不开」。
+
+**根因（纯前端漏写盘）**：`webroot/index.html` 的 `setCleanSwitch(key, on)`
+（修复后约 1625 行）此前只做：
+```
+await api("/api/reload");  await loadCleanState();  toast(...);
+```
+**从不调用 `/api/switch/set`**。于是点击 → reload（无变化）→ `loadCleanState()`
+从 `/api/rubbish/status` 回读**后端旧值 false** → 把刚勾上的复选框改回 false。
+三个总开关（`swCleanMaster`/`swCleanScreenOff`/`swCleanForce` →
+`rubbish_clean_enable` / `rubbish_clean_screen_off_only` / `rubbish_force_when_running`）
+都受此影响。后端 `apiSwitchSet` 本身正常（真机 `curl` 写盘 OK）。
+
+**修复**：在 `setCleanSwitch` 开头补上（参照 `persistCleanRule`）：
+```js
+await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
+await api("/api/reload").catch(()=>{});
+await loadCleanState();
+```
+
+**验证**：
+- harness `cleanswitch_harness.mjs`（新建，linkedom 驱动真实 `onchange`）：
+  **修复版 7/7 PASS**；**对旧部署版（`6916d20…`）跑同一 harness → 4 FAIL**
+  （缺少 `/api/switch/set`、后端未变、界面被复原），精确复现原 bug。
+- 真机端到端：`POST /api/switch/set {rubbish_force_when_running,true}` →
+  `reload` → `/api/rubbish/status` 的 `forceWhenRunning=true`，`switches.conf` 已写盘
+  （验证后已复位为 false）。
+- SelfTest：**47 PASS / 1 FAIL / 2 WARN / 7 SKIP**（唯一 FAIL 为该 ROM 固有 AppOps 随机项）。
+
+**产物**：`Main.dex` 未变 = `100f4d3b76979e0e1041c18e5b3cb149`；
+`webroot/index.html` = `d16c93a6abd2fbe1ef43a1791608df02`。已部署到 `/data/adb/modules/Zhang`
+并重启 dex。Git：`cb87d6e`。
+
+**⚠ 教训（再次确认）**：凡是「开关」控件，其 `onchange` 必须最终写出**持久化 API**
+（`/api/switch/set`）再回读；只 `reload`+回读会把界面覆盖回旧值，表现为「开关打不开」。
+同类问题已在 §18（清理规则勾选）出现过一次。
+**⚠ harness 陈旧项**：`check_html.mjs` 报 `MISSING DOM ids: ovPortPid` —— 该 id 在当前
+概览页已废弃（line 801 仍引用），属**预存**问题，与本次修复无关，两个版本均报同样结果。

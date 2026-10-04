@@ -901,3 +901,55 @@ await loadCleanState();
 同类问题已在 §18（清理规则勾选）出现过一次。
 **⚠ harness 陈旧项**：`check_html.mjs` 报 `MISSING DOM ids: ovPortPid` —— 该 id 在当前
 概览页已废弃（line 801 仍引用），属**预存**问题，与本次修复无关，两个版本均报同样结果。
+
+---
+
+## 24. 清理扫描算法现状与性能分析（2026-10-04 11:45）
+
+### 扫描算法（现状）
+规则驱动 + 多模式（`core/rubbish/RubbishCleaner.kt`）：
+- **普通模式**（GLOB / DIR_CONTENT / DIR_SELF / EMPTY_DIR / OLDER_THAN / UNINSTALLED_SCAN）：
+  按规则 roots 展开 → 递归 `listFiles()` → 按名/模式/时间匹配。
+- **深度模式**（`scanDeep`，带 `ScanCache` 增量）：
+  - `scanApk`：`collectFiles`（minBytes 预筛）后逐个 `FileIdentifier.isApk`（读文件头魔数，无视扩展名）。
+  - `scanBigFiles`：收集 ≥阈值文件后按大小降序（listOnly）。
+  - `scanDuplicates`：先按 size 分组 → `DUP_CONTENT` 再算 SHA-256（前 4MB 截断）细分 → `pickVictims` 保留最新。
+  - `scanJunk`：栈式遍历（非递归）+ `JunkPatterns.isJunk`（名/后缀/父目录语义/魔数/零字节）。
+- **缓存**：`ScanCache` 按规则存 `<rootDir>/rubbish_index/<ruleId>.idx`（`kind\tpath\tsize\tmtime`），
+  用 `isFresh(path,size,mtime)` 判定复用。
+- **并行度**：**无**（全单线程串行，未用线程池/协程）。
+- **调用**：`apiRubbishScan` 在 HTTP 工作线程同步执行，全量扫描阻塞该请求。
+
+### 实测性能（真机）
+| 项 | 数据 |
+|---|---|
+| `/data/user/0` 顶层目录 | 674 |
+| `/data/user/0` 文件总数 | **565,647** |
+| 纯 `find`（无读取，仅 stat） | **55 s** |
+| `junk_all_apps` 扫描（roots=`/data/user/<u>`） | **>180 s 超时未完成** |
+| `junk_media_apps` 索引大小 | 4.5 MB（正常产出） |
+| `junk_all_apps.idx` | **不存在**（超时未走到 `cache.save`） |
+
+### 发现的真问题（性能未最优，有 4 个瓶颈）
+1. **单线程串行**，无并行：IO 密集却只用 1 个核；`find` 基线已 55s，Kotlin 再加 JVM `File`
+   对象与逐文件 `isDirectory/isFile`（各一次 stat）→ 超 180s。
+2. **缓存只在“全部跑完”后才 `cache.save`**（第 198/260 行）——大范围规则**超时/中断则索引
+   永不落盘**，下次仍全扫，**增量缓存对最大规则完全失效**。
+3. **目录级增量已实现但从未调用**：`ScanCache.Index.dirFresh()`/`stampDir()`/`dirStamps`
+   均无调用点（grep 确认），文档声称的“目录 mtime 未变则整目录复用”**根本没接上**。
+   现状是“逐文件 size+mtime 比对”——对 56 万文件而言，光是列出+stat+查表就极慢。
+4. **默认 roots 过大**：`junk_all_apps` 直接扫整个 `/data/user/<u>`（含 Android/data、obb、
+   各 App 的 files/、databases/ 等一切），`maxDepth=12`；穷举全私有目录本质上是 O(全部文件)。
+
+### 建议优化方向（未实施，待用户拍板）
+- **A. 目录级剪枝（收益最大、风险最低）**：真正接上 `dirFresh`——目录 mtime 未变则整棵子树
+  跳过，只递归 mtime 变化的目录。可把“暖扫”从分钟级降到秒级。
+- **B. 分片+可中断**：扫描按顶层目录分批，边扫边 `cache.save`（或扫完一个 App 存一次），
+  避免超时丢索引；前端显示进度。
+- **C. 并行化**：用固定线程池（如 4）并行遍历互不相交的顶层子树，注意别打爆 emmc/ufs。
+- **D. 收窄默认范围**：`junk_all_apps` 默认只扫“已知垃圾目录语义”（cache/logs/tmp/crash），
+  或按 App 分组让用户勾选，而非无条件递归整个 `/data/user/0`。
+- **E. 预筛**：先按目录名白名单（cache/tmp/logs/crash）命中才深入，其余不动。
+
+**结论**：当前算法“正确性/安全性”没问题（删除全经 RubbishGuard），但**性能未最优**——
+大范围深度扫描严重超时，且增量缓存设计有三处未生效。上面 A+B 是性价比最高的两项。

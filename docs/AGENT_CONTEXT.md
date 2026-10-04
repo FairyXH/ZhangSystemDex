@@ -710,3 +710,22 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 **用法**：设置页 →「在线更新（免重启）」→「一键更新」；或直接执行
 `sh /data/adb/modules/Zhang/免重启更新.sh`（脚本可从仓库下载）。
 **⚠ 提醒**：GitHub raw CDN 有滞后，**push 后请等 1~2 分钟再执行 OTA**，否则可能仍取到上一版。
+---
+## 18. 修复：清理规则开关不持久化（"QQ 接收文件"打开后复原，2026-10-04 08:26）
+**现象**：用户打开「清理」页的「QQ 接收文件」等**规则勾选**，退出 WebUI 再进又复原。
+**诊断证据**：`webui_diag.log` 显示该操作时段只有 `loaded`，**没有任何 `toggle`/`save` 事件**
+（说明勾选处理器压根没走持久化路径）。
+**根因**：`renderCleanCell()` 里规则复选框的 `onchange` 只做
+`CLEAN_SELECTED.add/delete(r.id)`，**仅改内存、不写盘、不提示**——退出页面 `CLEAN_SELECTED`
+重置即复原。（这与 §16 修的是**不同**问题：§16 是清理页三个**总开关**的 mtime 热重载；
+本节是**规则勾选**从不落盘。）
+**修复**：勾选后立即用规则自带 `switchKey` 调 `POST /api/switch/set` 写入 `switches.conf`，
+再 `/api/reload` + toast 提示；失败则回读 `GET /api/rubbish/rules` 的真实 `enabled` 纠正界面。
+（`/api/rubbish/rules` 每条规则本就带 `switchKey` 与 `enabled` 字段，直接复用。）
+**验证**：harness `rule_persist_harness.mjs` → 勾选 `qq_file_recv` 触发
+`/api/switch/set {key:"rubbish_rule_qq_file_recv",value:"true"}` + `/api/reload`（PASS）；
+真机 `false→true` 写盘成功、`rules` 接口 `enabled=true`，还原正常。
+**产物**：UI = `70dba478e7f3adf6c57640ca9d9bceb1`（dex 未变 `eeb41a01`）。
+已通过 `部署母版到已安装.sh` 同步母版→已安装并重启 dex。
+**教训（重要）**：WebUI 里凡是"看起来是个开关"的控件，其 `onchange` **必须**最终调用
+`/api/switch/set`（或 dirty+save）落盘；只改前端内存状态的控件一律会"退出即复原"。

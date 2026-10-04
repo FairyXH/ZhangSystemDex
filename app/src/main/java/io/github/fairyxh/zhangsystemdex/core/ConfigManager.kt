@@ -105,6 +105,9 @@ class ConfigManager(private val modDir: String) {
         if (switchesLastModified != 0L && lm != switchesLastModified) {
             switchesLastModified = lm
             loadSwitches()
+            try { onSwitchesChanged?.invoke() } catch (t: Throwable) {
+                Logger.w("ConfigManager", "onSwitchesChanged 回调失败: ${t.message}")
+            }
             return true
         }
         if (switchesLastModified == 0L) switchesLastModified = lm
@@ -120,13 +123,34 @@ class ConfigManager(private val modDir: String) {
      * unchanged mtime and SKIPS the reload -> `/api/rubbish/status` and friends
      * keep serving the stale value, which made the clean-tab switches look like
      * they "don't work". A control-plane write must be reflected immediately.
+     *
+     * IMPORTANT: this also fires [onSwitchesChanged] so the daemon re-evaluates
+     * which modules should be running. Without that, a switch would be persisted
+     * and readable but its actual ACTION (start/stop a module) would never happen
+     * until the next boot — because [reloadSwitches] advances the mtime that
+     * [reloadSwitchesIfChanged] relies on, so Main's 60s poll would miss it.
      */
     fun reloadSwitches(): Boolean {
         val lm = if (switchesFile.exists()) switchesFile.lastModified() else 0L
         switchesLastModified = lm
         loadSwitches()
+        // Notify listeners (Main's syncModules) so the change takes effect NOW.
+        try {
+            onSwitchesChanged?.invoke()
+        } catch (t: Throwable) {
+            Logger.w("ConfigManager", "onSwitchesChanged 回调失败: ${t.message}")
+        }
         return true
     }
+
+    /**
+     * Invoked synchronously after every successful switches.conf (re)load, both
+     * from the WebUI write path and from Main's periodic change detection.
+     * Main registers this to call `syncModules()` so toggling a switch in the UI
+     * starts/stops the corresponding module immediately (no 60s wait, no reboot).
+     */
+    @Volatile
+    var onSwitchesChanged: (() -> Unit)? = null
 
     private fun loadSwitches() {
         if (!switchesFile.exists()) {

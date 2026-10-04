@@ -200,30 +200,48 @@ object Main {
         // 配置。若它跟随任何功能开关，用户一旦从 UI 里关掉对应功能就会把
         // 自己的后端关掉（死锁）。因此它必须常驻，且只监听 127.0.0.1，
         // 端口取自 config.conf 的 http_port。
+        //
+        // 注意：先定义 syncModules 并注册 ctx.config.onSwitchesChanged，
+        // 再启动 HTTP 后端——否则用户在页面里切换开关后，后端虽已写盘，
+        // 但模块的启停要等主循环 60s（且因 mtime 被提前更新而可能永远不触发）。
+        val running = mutableMapOf<String, DaemonLoop>()
+        val syncLock = Any()
+
+        fun syncModules() {
+            synchronized(syncLock) {
+                for (entry in entries) {
+                    val on = entry.enabled()
+                    val current = running[entry.name]
+                    if (on && current == null) {
+                        val module = entry.factory()
+                        running[entry.name] = module
+                        Logger.i("Main", "功能已启用: ${module.javaClass.simpleName} (${entry.name})")
+                        module.start()
+                    } else if (!on && current != null) {
+                        Logger.i("Main", "功能已禁用: ${current.javaClass.simpleName} (${entry.name})")
+                        current.stop()
+                        running.remove(entry.name)
+                    }
+                }
+                val enabledNames = entries.filter { it.enabled() }.map { it.name }
+                Logger.i("Main", "已启用功能 (${enabledNames.size} 个): ${enabledNames.joinToString(", ")}")
+            }
+        }
+
+        // WebUI 每次写 switches.conf / 调用 /api/reload 都会触发该回调，
+        // 使开关的“动作”（启动/停止模块）瞬时生效，无需等待 60s 或重启设备。
+        ctx.config.onSwitchesChanged = {
+            try {
+                Logger.i("Main", "配置变更触发模块重新同步")
+                syncModules()
+            } catch (t: Throwable) {
+                Logger.e("Main", "配置变更同步失败", t)
+            }
+        }
+
         val httpBackend = HttpBackend(ctx, sw.httpPort)
         httpBackend.start()
         Logger.i("Main", "WebUI 后端已启动：http://127.0.0.1:${httpBackend.activePort()}（仅回环）")
-
-        val running = mutableMapOf<String, DaemonLoop>()
-
-        fun syncModules() {
-            for (entry in entries) {
-                val on = entry.enabled()
-                val current = running[entry.name]
-                if (on && current == null) {
-                    val module = entry.factory()
-                    running[entry.name] = module
-                    Logger.i("Main", "功能已启用: ${module.javaClass.simpleName} (${entry.name})")
-                    module.start()
-                } else if (!on && current != null) {
-                    Logger.i("Main", "功能已禁用: ${current.javaClass.simpleName} (${entry.name})")
-                    current.stop()
-                    running.remove(entry.name)
-                }
-            }
-            val enabledNames = entries.filter { it.enabled() }.map { it.name }
-            Logger.i("Main", "已启用功能 (${enabledNames.size} 个): ${enabledNames.joinToString(", ")}")
-        }
 
         syncModules()
         Logger.i("Main", "守护进程就绪，每 60s 监听 switches.conf")

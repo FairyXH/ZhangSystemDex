@@ -12,6 +12,8 @@ import java.io.File
  * features that default to true. Disabled features are never loaded/started.
  */
 class ConfigManager(private val modDir: String) {
+    /** Public read-only view of the module directory (for OTA / self-update). */
+    val moduleDir: String get() = modDir
     @Volatile
     var rootDir: String = "/data/adb/Zhang"
         private set

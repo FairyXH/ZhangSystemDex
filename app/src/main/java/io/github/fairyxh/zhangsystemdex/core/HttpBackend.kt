@@ -188,6 +188,9 @@ class HttpBackend(
             "/api/switch/set" -> apiSwitchSet(method, body)
             "/api/reload" -> apiReload()
             "/api/diag" -> apiDiag(method, body)
+            // ===== 免重启在线更新（OTA）=====
+            "/api/ota/status" -> apiOtaStatus()
+            "/api/ota/update" -> apiOtaUpdate(method)
             // ===== 垃圾清理 =====
             "/api/rubbish/rules" -> apiRubbishRules()
             "/api/rubbish/scan" -> apiRubbishScan(method, body, dryRun = true)
@@ -569,6 +572,174 @@ class HttpBackend(
     private fun timestampForDiag(): String =
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
             .format(java.util.Date())
+
+    // ------------------------------------------------------------------
+    // 免重启在线更新（OTA）
+    //
+    // 直接把最新 Main.dex / webroot/index.html 写进「已存在的模块目录」并重启
+    // daemon 进程即可生效——无需刷 zip、无需重启设备（模块目录在运行时本就可写，
+    // daemon 同一时刻只从 /data/adb/Zhang/Main.dex 加载）。
+    // ------------------------------------------------------------------
+    private val otaRepoRaw = "https://raw.githubusercontent.com/FairyXH/ZhangSystemDex/main"
+    private val otaDexUrl = "$otaRepoRaw/Main.dex"
+    private val otaUiUrl = "$otaRepoRaw/app/src/main/assets/webroot/index.html"
+    /** modDir 由 ConfigManager 暴露；兜底 /data/adb/modules/Zhang。 */
+    private fun modDirFile(): File {
+        val p = try { ctx.config.moduleDir } catch (_: Throwable) { null }
+        val d = if (p != null) File(p) else null
+        return if (d != null && d.exists()) d else File("/data/adb/modules/Zhang")
+    }
+
+    /** POSIX single-quote a string for safe use in a `/system/bin/sh -c` command. */
+    private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
+    private fun md5Of(f: File): String {
+        return try {
+            val dig = java.security.MessageDigest.getInstance("MD5")
+            f.inputStream().use { ins ->
+                val buf = ByteArray(1 shl 16)
+                while (true) {
+                    val n = ins.read(buf)
+                    if (n <= 0) break
+                    dig.update(buf, 0, n)
+                }
+            }
+            dig.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) { "" }
+    }
+
+    /** 当前版本状态：本地 dex / UI 的大小与 md5，以及仓库地址。 */
+    private fun apiOtaStatus(): String {
+        val mod = modDirFile()
+        val dex = File(mod, "Main.dex")
+        val ui = File(mod, "webroot/index.html")
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"modDir\":").append(quoteJson(mod.absolutePath))
+        sb.append(",\"dexPath\":").append(quoteJson(dex.absolutePath))
+        sb.append(",\"dexSize\":").append(if (dex.exists()) dex.length() else 0L)
+        sb.append(",\"dexMd5\":").append(quoteJson(if (dex.exists()) md5Of(dex) else ""))
+        sb.append(",\"uiSize\":").append(if (ui.exists()) ui.length() else 0L)
+        sb.append(",\"uiMd5\":").append(quoteJson(if (ui.exists()) md5Of(ui) else ""))
+        sb.append(",\"source\":").append(quoteJson(otaDexUrl))
+        sb.append(",\"curl\":").append(ShellExecutor.fileExists("/system/bin/curl"))
+        sb.append("}")
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * 执行免重启更新：
+     *  1. 用系统 curl 下载最新 dex + UI 到模块目录旁的临时文件；
+     *  2. 校验 dex 魔数（dex\n0xx）与非空；
+     *  3. 备份现有文件，原子替换进模块目录，并同步 dex 到 /data/adb/Zhang；
+     *  4. 返回结果，随后在后台（分离进程）重启 daemon —— 新 dex/UI 立即生效，
+     *     无需刷入 zip、无需重启设备。
+     */
+    private fun apiOtaUpdate(method: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val mod = modDirFile()
+        if (!mod.exists()) return jsonError("模块目录不存在: ${mod.absolutePath}")
+        val dex = File(mod, "Main.dex")
+        val ui = File(mod, "webroot/index.html")
+        val tmpDex = File(mod, "Main.dex.ota.tmp")
+        val tmpUi = File(mod, "webroot/index.html.ota.tmp")
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        val backupDir = File(ctx.config.rootDir, "_backup_ota_$stamp")
+        val log = StringBuilder()
+
+        fun dl(url: String, out: File): Boolean {
+            out.parentFile?.mkdirs()
+            // -f: HTTP 错误直接失败；-L 跟随跳转；--max-time 防卡死；重试 2 次。
+            val cmd = "/system/bin/curl -fL --connect-timeout 10 --max-time 120 --retry 2 -s -o " +
+                    shq(out.absolutePath) + " " + shq(url)
+            val code = ShellExecutor.runExit(cmd, 150_000)
+            return code == 0 && out.exists() && out.length() > 0
+        }
+
+        try {
+            // 1. 下载
+            if (!dl(otaDexUrl, tmpDex)) {
+                tmpDex.delete()
+                return jsonError("下载 Main.dex 失败（检查网络/源地址）")
+            }
+            log.append("dex 下载完成(${tmpDex.length()}B); ")
+            val uiOk = dl(otaUiUrl, tmpUi)
+            if (uiOk) log.append("UI 下载完成(${tmpUi.length()}B); ") else log.append("UI 下载失败(跳过); ")
+
+            // 2. 校验 dex 魔数：前 4 字节 "dex\n"，第 7 字节 '0'（035/036/037...）
+            val magic = ByteArray(8)
+            tmpDex.inputStream().use { it.read(magic) }
+            val isDex = magic[0] == 'd'.code.toByte() && magic[1] == 'e'.code.toByte() &&
+                    magic[2] == 'x'.code.toByte() && magic[3] == '\n'.code.toByte()
+            if (!isDex) {
+                tmpDex.delete()
+                return jsonError("下载内容不是合法 dex（魔数校验失败）")
+            }
+
+            // 3. 备份 + 替换
+            backupDir.mkdirs()
+            if (dex.exists()) dex.copyTo(File(backupDir, "Main.dex"), overwrite = true)
+            if (ui.exists()) ui.copyTo(File(backupDir, "index.html"), overwrite = true)
+
+            // dex：先写模块目录，再同步到配置根（与 service.sh 行为一致）
+            if (!tmpDex.renameTo(dex)) {
+                dex.writeBytes(tmpDex.readBytes()); tmpDex.delete()
+            }
+            runCatching { android.system.Os.chmod(dex.absolutePath, 493) } // 0755
+            val rootDex = File(ctx.config.rootDir, "Main.dex")
+            rootDex.writeBytes(dex.readBytes())
+            runCatching { android.system.Os.chmod(rootDex.absolutePath, 493) }
+
+            // UI：写入 webroot
+            if (uiOk) {
+                if (!tmpUi.renameTo(ui)) {
+                    ui.writeBytes(tmpUi.readBytes()); tmpUi.delete()
+                }
+            } else {
+                tmpUi.delete()
+            }
+            log.append("已写入模块目录并备份到 ${backupDir.name}; ")
+
+            // 4. 后台重启 daemon（分离进程，避免随本次响应一起被杀）
+            //    优先用模块内的 service.sh；停止用 pid 精确匹配，避免 pkill 误伤。
+            val svc = File(mod, "service.sh")
+            val stop = File(mod, "停止Dex.sh")
+            val restartCmd = buildString {
+                append("( sleep 1; ")
+                if (stop.exists()) append("/system/bin/sh ").append(shq(stop.absolutePath)).append(" >/dev/null 2>&1; ")
+                append("if [ -f ").append(shq(svc.absolutePath)).append(" ]; then ")
+                append("/system/bin/sh ").append(shq(svc.absolutePath)).append(" >>")
+                append(shq(File(ctx.config.rootDir, "log/ota_restart.log").absolutePath))
+                append(" 2>&1; fi ) &")
+            }
+            ShellExecutor.runBackground(restartCmd)
+            log.append("已触发后台重启; ")
+
+            val sb = StringBuilder()
+            sb.append("{\"ok\":true,\"code\":0")
+            sb.append(",\"dexMd5\":").append(quoteJson(md5Of(dex)))
+            sb.append(",\"uiSize\":").append(if (ui.exists()) ui.length() else 0L)
+            sb.append(",\"backup\":").append(quoteJson(backupDir.absolutePath))
+            sb.append(",\"message\":").append(quoteJson(log.toString()))
+            sb.append("}")
+            return jsonRaw(sb.toString())
+        } catch (t: Throwable) {
+            return jsonError("更新失败: ${t.message}")
+        }
+    }
+
+    private fun quoteJson(s: String): String {
+        val b = StringBuilder("\"")
+        for (c in s) when (c) {
+            '"' -> b.append("\\\"")
+            '\\' -> b.append("\\\\")
+            '\n' -> b.append("\\n")
+            '\r' -> b.append("\\r")
+            '\t' -> b.append("\\t")
+            else -> if (c.code < 0x20) b.append("\\u%04x".format(c.code)) else b.append(c)
+        }
+        return b.append("\"").toString()
+    }
 
     // ------------------------------------------------------------------
     // Rubbish cleaning endpoints

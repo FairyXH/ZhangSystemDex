@@ -827,3 +827,34 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 `webroot/index.html` = `8cf08933d9793e02146ef2206597c842`。已部署并重启 dex。Git：`de29fbd`。
 **⚠ 排障提醒**：部署脚本 `部署母版到已安装.sh` 必须用 **`super_admin:shell`（Android）**
 执行——`super_admin:terminal`（Ubuntu）看不到 `/data/adb`，会报"模块未安装"。
+---
+## 22. 修复：概览「最高温度」显示 6000℃（2026-10-04 09:30）
+**现象**：概览页「最高温度」显示 6000℃ 等离谱值。
+**根因（三层叠加）**：
+1. **前端单位猜测错误**：旧 `tempC()` 逻辑是"`|v|>100000` 才 `/1000`，否则 `/10`"。
+   而 thermal zone 上报 **`60000` = 0.001°C = 60°C**，因 <100000 被当成 0.1°C →
+   渲染成 **6000.0°C**。
+2. **后端未过滤非温度 zone**：直接对所有 `thermal_zone*` 取 max。本机 104 个 zone
+   里混着非温度信号：`vbat`=mV（3986）、`pm8550b-ibat-lvl0`=mA(-93)、
+   `pm8550b-bcl-lvl*`=0、`mmw0/1/2`=-273000（无传感器占位）。
+3. **重复计数**：`/sys/class/thermal` 与 `/sys/devices/virtual/thermal` 是**同一批
+   zone 的两个 sysfs 视图**，两个都扫 → 有效 zone 计数翻倍（76×2=152）。
+**修复**：
+- **后端归一化温度**（HttpBackend）：`system.battery.temperatureC = raw/10`（`dumpsys
+  battery` 是 0.1°C 单位）、`system.thermalMaxC = maxValidMilli/1000`；均为 1 位小数
+  的 °C 字符串，无效/越界（超出 -40..125 或 = -1）返回 `"-1"`。旧字段
+  `temperature`(raw) 保留、`thermalMaxMilliC` 删除。
+- `readThermalMaxC()`：过滤 `v<=0` 与 `v>150000`；按 zone `type` 排除
+  `ibat/vbat/bcl-lvl/current/voltage`；**只扫一个根目录**（优先 `/sys/class/thermal`）。
+  新增 `thermalZoneCount` 暴露有效 zone 数。
+- **前端移除单位猜测**：新增 `fmtTempC(c)`，只格式化后端已归一化的 °C（`-1`/越界
+  → `"—"`）；不再有 `tempC` 旧函数。
+**验证**：
+- 真机：电池温度 **37.0°C**、最高温度 **56.9°C**（zone=76）——正常。
+- harness `temp_harness.mjs` **6/6 PASS**（含 `fmtTempC(-1)→—`、`fmtTempC(6000)→—`）；
+  回归 save(17)/clean(15)/power(22) 全通过。
+**产物**：`Main.dex` = `100f4d3b76979e0e1041c18e5b3cb149`；
+`webroot/index.html` = `6916d2050c2236172d3f47918eae0555`。已部署并重启 dex。Git：`a3d8cde`。
+**⚠ 教训**：sysfs 温度单位不统一（battery=0.1°C、thermal=0.001°C），且 zone 里混有
+非温度信号；**归一化必须在后端做一次**，前端不得再猜单位。Kotlin 块注释里写路径
+`thermal_zone*/temp` 会把 `*/` 当成注释结束符导致编译失败——已注意规避。

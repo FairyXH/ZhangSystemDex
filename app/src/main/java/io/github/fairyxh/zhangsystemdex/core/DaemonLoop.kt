@@ -12,6 +12,14 @@ abstract class DaemonLoop(
 ) : Runnable {
     protected open val name: String get() = this::class.java.simpleName
 
+    /**
+     * Key under which this loop reports its liveness to [RuntimeRegistry].
+     * Main sets this to the ModuleEntry key right after the factory runs, so the
+     * overview page can correlate a running thread with its switch/module.
+     */
+    @Volatile
+    var registryKey: String? = null
+
     private val running = java.util.concurrent.atomic.AtomicBoolean(true)
     private var thread: Thread? = null
 
@@ -43,6 +51,7 @@ abstract class DaemonLoop(
                 }
                 pausedLogged = false
                 tick()
+                registryKey?.let { RuntimeRegistry.markTick(it) }
             } catch (t: Throwable) {
                 Logger.e(name, "周期任务失败", t)
                 sleepSafe(10000)

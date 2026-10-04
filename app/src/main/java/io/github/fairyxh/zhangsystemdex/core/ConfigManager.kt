@@ -98,6 +98,9 @@ class ConfigManager(private val modDir: String) {
     fun getString(key: String, default: String): String =
         switches[key]?.trim()?.takeIf { it.isNotEmpty() } ?: default
 
+    /** All switch keys currently loaded (used by the overview stats API). */
+    fun allSwitchKeys(): List<String> = switches.keys.toList()
+
     /** Re-read switches.conf when its file changed; returns true when reloaded. */
     fun reloadSwitchesIfChanged(): Boolean {
         val f = switchesFile

@@ -185,6 +185,8 @@ class HttpBackend(
             "/api/bglist/read" -> apiReadFile(File(ctx.config.rootDir, "power_bg_stop_list.conf"))
             "/api/bglist/write" -> apiWriteFile(method, body, File(ctx.config.rootDir, "power_bg_stop_list.conf"))
             "/api/powerstatus" -> apiPowerStatus()
+            // ===== 实时总览（概览页数据源，聚合模块/清理/省电/系统）=====
+            "/api/overview" -> apiOverview()
             "/api/switch/set" -> apiSwitchSet(method, body)
             "/api/reload" -> apiReload()
             "/api/diag" -> apiDiag(method, body)
@@ -403,6 +405,298 @@ class HttpBackend(
         body.append(",\"timestamp\":").append(System.currentTimeMillis())
         body.append("}")
         return jsonRaw(body.toString())
+    }
+
+    // ======================================================================
+    // 实时总览（/api/overview）——概览页的单一数据源
+    //
+    // 目标（用户需求）：概览页要"信息越全面越好、要实时"。本接口把后端
+    // 能看到的一切聚合为一份 JSON，供前端每 2 秒轮询一次：
+    //   - modules  各功能模块的真实运行状态（线程级 ground-truth）+ 心跳
+    //   - power    省电子系统实时快照（策略/计数/最近动作）
+    //   - clean    垃圾清理：主开关/规则数/最近一次会话统计/历史累计
+    //   - system   电池/屏幕/内存/存储/负载/开机时长/温度/进程数
+    //   - backend  daemon 进程、端口、dex 校验、运行时长
+    //   - config   配置文件路径与开关总数
+    // ======================================================================
+    private fun apiOverview(): String {
+        val now = System.currentTimeMillis()
+        val bat = readBatteryFacts()
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"timestamp\":").append(now)
+
+        // ---------- backend ----------
+        val dexFile = File(ctx.config.rootDir, "Main.dex")
+        val started = RuntimeRegistry.daemonStartedMs
+        sb.append(",\"backend\":{")
+        sb.append("\"pid\":").append(ProcessUtils.selfPid())
+        sb.append(",\"port\":").append(ctx.config.httpPort)
+        sb.append(",\"uptimeMs\":").append(if (started > 0) now - started else 0L)
+        sb.append(",\"startedMs\":").append(started)
+        sb.append(",\"dexPath\":").append(q(dexFile.path))
+        sb.append(",\"dexSize\":").append(if (dexFile.exists()) dexFile.length() else 0L)
+        sb.append(",\"dexMd5\":").append(q(md5Of(dexFile)))
+        sb.append(",\"configPath\":").append(q(File(ctx.config.rootDir, "switches.conf").path))
+        sb.append(",\"moduleDir\":").append(q(RuntimeRegistry.moduleDir.ifEmpty { ctx.modDir }))
+        sb.append(",\"configRoot\":").append(q(ctx.config.rootDir))
+        sb.append("}")
+
+        // ---------- config ----------
+        sb.append(",\"config\":{")
+        sb.append("\"switchCount\":").append(ctx.config.allSwitchKeys().size)
+        sb.append(",\"logEnabled\":").append(ctx.config.logEnabled)
+        sb.append(",\"powersave\":").append(ctx.config.switch("powersave_enable"))
+        sb.append("}")
+
+        // ---------- modules ----------
+        sb.append(",\"modules\":[")
+        var firstM = true
+        for ((key, st) in RuntimeRegistry.snapshot()) {
+            if (!firstM) sb.append(',')
+            firstM = false
+            sb.append("{\"key\":").append(q(key))
+            sb.append(",\"label\":").append(q(st.label))
+            sb.append(",\"desc\":").append(q(st.desc))
+            sb.append(",\"enabled\":").append(st.enabled)
+            sb.append(",\"running\":").append(st.running)
+            sb.append(",\"tickCount\":").append(st.tickCount)
+            sb.append(",\"lastTickMs\":").append(st.lastTickMs)
+            sb.append(",\"lastTickAgoMs\":").append(if (st.lastTickMs > 0) now - st.lastTickMs else -1L)
+            sb.append(",\"lastAction\":").append(q(st.lastAction))
+            // counters
+            sb.append(",\"counters\":{")
+            var firstC = true
+            for ((ck, cv) in st.counters.entries.sortedBy { it.key }) {
+                if (!firstC) sb.append(',')
+                firstC = false
+                sb.append(q(ck)).append(':').append(cv)
+            }
+            sb.append("}")
+            // extras (numbers/bools/strings)
+            sb.append(",\"extras\":{")
+            var firstE = true
+            for ((ek, ev) in st.extras.entries.sortedBy { it.key }) {
+                if (!firstE) sb.append(',')
+                firstE = false
+                sb.append(q(ek)).append(':')
+                when (ev) {
+                    is Boolean -> sb.append(ev)
+                    is Number -> sb.append(ev)
+                    else -> sb.append(q(ev.toString()))
+                }
+            }
+            sb.append("}")
+            sb.append("}")
+        }
+        sb.append("]")
+
+        // ---------- power ----------
+        val opt = io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer.live()
+        val snap = opt?.snapshot()
+        sb.append(",\"power\":{")
+        sb.append("\"subsystemEnabled\":").append(ctx.config.switch("power_optimize_enable"))
+        sb.append(",\"running\":").append(opt != null)
+        sb.append(",\"eventDriven\":").append(snap?.get("eventDriven") ?: false)
+        sb.append(",\"screenOn\":").append(snap?.get("screenOn") ?: bat.screenOn)
+        sb.append(",\"policyLevel\":").append(snap?.get("level") ?: 0)
+        sb.append(",\"policyLevelText\":").append(q(policyLevelText(snap?.get("level"))))
+        sb.append(",\"kernelApplied\":").append(snap?.get("kernelApplied") ?: false)
+        sb.append(",\"hasBgTargets\":").append(snap?.get("hasBgTargets") ?: false)
+        sb.append(",\"policyAppliedCount\":").append(snap?.get("policyAppliedCount") ?: 0)
+        sb.append(",\"policyRevertCount\":").append(snap?.get("policyRevertCount") ?: 0)
+        sb.append(",\"backgroundRestrictCount\":").append(snap?.get("backgroundRestrictCount") ?: 0)
+        sb.append(",\"lowBatteryEnterCount\":").append(snap?.get("lowBatteryEnterCount") ?: 0)
+        sb.append(",\"failOpenCount\":").append(snap?.get("failOpenCount") ?: 0)
+        sb.append(",\"screenOffCount\":").append(snap?.get("screenOffCount") ?: 0)
+        sb.append(",\"screenOnCount\":").append(snap?.get("screenOnCount") ?: 0)
+        sb.append(",\"lastAction\":").append(q(snap?.get("lastAction")?.toString() ?: ""))
+        sb.append(",\"lowBatteryThreshold\":")
+            .append(ctx.config.getString("power_low_battery_threshold", "20").trim().toIntOrNull() ?: 20)
+        sb.append("}")
+
+        // ---------- clean ----------
+        sb.append(",\"clean\":")
+        sb.append(cleanOverviewJson(now))
+
+        // ---------- system ----------
+        sb.append(",\"system\":")
+        sb.append(systemOverviewJson(bat, now))
+
+        sb.append("}")
+        return jsonRaw(sb.toString())
+    }
+
+    /** Aggregate of everything the clean subsystem can report right now. */
+    private fun cleanOverviewJson(now: Long): String {
+        val sb = StringBuilder()
+        sb.append("{")
+        sb.append("\"masterEnabled\":").append(ctx.config.switch("rubbish_clean_enable"))
+        sb.append(",\"screenOffOnly\":").append(ctx.config.switch("rubbish_clean_screen_off_only"))
+        sb.append(",\"forceWhenRunning\":").append(ctx.config.switch("rubbish_force_when_running"))
+        sb.append(",\"bigFileMb\":").append(ctx.config.getString("rubbish_big_file_mb", "100"))
+        sb.append(",\"auditLog\":").append(q(RubbishGuard.auditLog().filePath()))
+        // Enabled rule count from switches.conf (rubbish_rule_*).
+        val ruleKeys = ctx.config.allSwitchKeys().filter { it.startsWith("rubbish_rule_") }
+        val enabledRules = ruleKeys.count { ctx.config.switch(it) }
+        sb.append(",\"ruleTotal\":").append(ruleKeys.size)
+        sb.append(",\"ruleEnabled\":").append(enabledRules)
+        // Last session stats recorded by the cleaner (via audit log tail).
+        val last = lastCleanSession()
+        sb.append(",\"lastSession\":{")
+        sb.append("\"files\":").append(last?.first ?: 0)
+        sb.append(",\"bytes\":").append(last?.second ?: 0L)
+        sb.append(",\"atMs\":").append(last?.third ?: 0L)
+        sb.append(",\"agoMs\":").append(if (last != null && last.third > 0) now - last.third else -1L)
+        sb.append("}")
+        // Live counters pushed by SystemTuningModule (the clean executor).
+        val mc = RuntimeRegistry.get("system_tuning")
+        sb.append(",\"cleanedFiles\":").append(mc?.counters?.get("cleanFiles") ?: 0L)
+        sb.append(",\"cleanedBytes\":").append(mc?.counters?.get("cleanBytes") ?: 0L)
+        sb.append(",\"cleanRuns\":").append(mc?.counters?.get("cleanRuns") ?: 0L)
+        sb.append(",\"lastCleanAgoMs\":").append(
+            (mc?.extras?.get("lastCleanMs") as? Long)?.let { if (it > 0) now - it else -1L } ?: -1L
+        )
+        sb.append(",\"lastCleanFiles\":").append((mc?.extras?.get("lastCleanFiles") as? Long) ?: 0L)
+        sb.append(",\"lastCleanBytes\":").append((mc?.extras?.get("lastCleanBytes") as? Long) ?: 0L)
+        // Recent audit lines (last 8, most recent first).
+        sb.append(",\"recent\":[")
+        val tail = RubbishGuard.auditLog().tail(8).reversed()
+        tail.forEachIndexed { i, l ->
+            if (i > 0) sb.append(',')
+            sb.append(q(l))
+        }
+        sb.append("]")
+        sb.append("}")
+        return sb.toString()
+    }
+
+    /** Parse the audit log tail for the last "session" total (files/bytes/time). */
+    private fun lastCleanSession(): Triple<Int, Long, Long>? {
+        return try {
+            val lines = RubbishGuard.auditLog().tail(200)
+            for (l in lines.reversed()) {
+                // matches:  "[...] 会话结束 ... 文件=N 字节=M" or "cleaned N files, M bytes"
+                val f = Regex("(?i)(?:已清理|清理|cleaned|文件|files)[^0-9]{0,8}(\\d+)").find(l)
+                val b = Regex("(?i)(?:字节|bytes|B)[^0-9]{0,8}(\\d+)").find(l)
+                val t = parseAuditTime(l)
+                if (f != null && b != null) {
+                    return Triple(f.groupValues[1].toIntOrNull() ?: 0, b.groupValues[1].toLongOrNull() ?: 0L, t)
+                }
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun parseAuditTime(line: String): Long = try {
+        val m = Regex("(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})").find(line)
+        if (m != null) {
+            val cal = java.util.Calendar.getInstance()
+            cal.set(
+                m.groupValues[1].toInt(), m.groupValues[2].toInt() - 1, m.groupValues[3].toInt(),
+                m.groupValues[4].toInt(), m.groupValues[5].toInt(), m.groupValues[6].toInt()
+            )
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            cal.timeInMillis
+        } else 0L
+    } catch (_: Throwable) {
+        0L
+    }
+
+    /** System-wide live facts: battery, memory, storage, load, thermal, uptime. */
+    private fun systemOverviewJson(bat: BatteryFacts, now: Long): String {
+        val sb = StringBuilder()
+        sb.append("{")
+        // battery
+        sb.append("\"battery\":{")
+        sb.append("\"level\":").append(bat.level)
+        sb.append(",\"charging\":").append(bat.charging)
+        sb.append(",\"statusText\":").append(q(bat.statusText))
+        sb.append(",\"pluggedText\":").append(q(bat.pluggedText))
+        sb.append(",\"temperature\":").append(bat.temperature)
+        sb.append(",\"voltage\":").append(bat.voltage)
+        sb.append(",\"currentNow\":").append(bat.currentNow)
+        sb.append(",\"healthText\":").append(q(bat.healthText))
+        sb.append("}")
+        // screen
+        sb.append(",\"screenOn\":").append(bat.screenOn)
+        // memory (MemTotal/MemAvailable in kB)
+        val mem = readMemInfo()
+        sb.append(",\"mem\":{")
+        sb.append("\"totalKb\":").append(mem.first)
+        sb.append(",\"availKb\":").append(mem.second)
+        sb.append(",\"usedKb\":").append(if (mem.first > 0) mem.first - mem.second else 0L)
+        sb.append(",\"usedPercent\":").append(
+            if (mem.first > 0) ((mem.first - mem.second) * 100 / mem.first).toInt() else -1
+        )
+        sb.append("}")
+        // storage of /data
+        val data = File("/data")
+        sb.append(",\"storage\":{")
+        sb.append("\"dataTotal\":").append(data.totalSpace)
+        sb.append(",\"dataFree\":").append(data.usableSpace)
+        sb.append("}")
+        // load / uptime / processes
+        sb.append(",\"load1\":").append(readLoad1())
+        sb.append(",\"uptimeMs\":").append(readUptimeMs())
+        sb.append(",\"procCount\":").append(ProcessUtils.processCount())
+        // thermal (max of all thermal zones, in 0.001 °C)
+        sb.append(",\"thermalMaxMilliC\":").append(readThermalMaxMilliC())
+        sb.append("}")
+        return sb.toString()
+    }
+
+    /** Read MemTotal/MemAvailable (kB) from /proc/meminfo. */
+    private fun readMemInfo(): Pair<Long, Long> {
+        return try {
+            var total = -1L
+            var avail = -1L
+            File("/proc/meminfo").forEachLine { line ->
+                when {
+                    line.startsWith("MemTotal:") -> total = line.filter { it.isDigit() }.toLongOrNull() ?: -1L
+                    line.startsWith("MemAvailable:") -> avail = line.filter { it.isDigit() }.toLongOrNull() ?: -1L
+                }
+            }
+            total to (if (avail >= 0) avail else 0L)
+        } catch (_: Throwable) {
+            -1L to 0L
+        }
+    }
+
+    private fun readLoad1(): Double = try {
+        File("/proc/loadavg").readText().trim().split(" ").firstOrNull()?.toDoubleOrNull() ?: -1.0
+    } catch (_: Throwable) {
+        -1.0
+    }
+
+    private fun readUptimeMs(): Long = try {
+        val secs = File("/proc/uptime").readText().trim().split(" ").firstOrNull()?.toDoubleOrNull() ?: 0.0
+        (secs * 1000).toLong()
+    } catch (_: Throwable) {
+        0L
+    }
+
+    /** Max thermal zone temperature in 0.001 °C (or Int.MIN_VALUE if none). */
+    private fun readThermalMaxMilliC(): Int {
+        return try {
+            var max = Int.MIN_VALUE
+            val roots = listOf(File("/sys/class/thermal"), File("/sys/devices/virtual/thermal"))
+            for (root in roots) {
+                val children = root.listFiles() ?: continue
+                for (c in children) {
+                    if (!c.name.startsWith("thermal_zone")) continue
+                    val tf = File(c, "temp")
+                    if (!tf.exists()) continue
+                    val v = tf.readText().trim().toIntOrNull() ?: continue
+                    if (v > max) max = v
+                }
+            }
+            max
+        } catch (_: Throwable) {
+            Int.MIN_VALUE
+        }
     }
 
     /** Parsed subset of `dumpsys battery` plus the screen state. */

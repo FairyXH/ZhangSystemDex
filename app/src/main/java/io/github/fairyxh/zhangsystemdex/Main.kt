@@ -9,6 +9,7 @@ import io.github.fairyxh.zhangsystemdex.core.HttpBackend
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.PropUtils
 import io.github.fairyxh.zhangsystemdex.core.RootUtils
+import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
@@ -45,6 +46,11 @@ object Main {
     private class ModuleEntry(
         val name: String,
         val enabled: () -> Boolean,
+        /** Human label shown on the overview page. */
+        val label: String = name,
+        /** One-line description shown on the overview page. */
+        val desc: String = "",
+        /** Factory that builds the module loop. Kept LAST so call sites can pass it as a trailing lambda. */
         val factory: () -> DaemonLoop,
     )
 
@@ -144,7 +150,11 @@ object Main {
         val serviceGuard = ServiceGuardModule(ctx)
 
         val entries = listOf(
-            ModuleEntry("module_appops_auth", { enabled("module_appops_auth_enable") }) {
+            ModuleEntry(
+                "module_appops_auth", { enabled("module_appops_auth_enable") },
+                label = "模块 AppOps 授权",
+                desc = "为模块目录 APK 授予运行所需 AppOps",
+            ) {
                 object : DaemonLoop(ctx, 60000L, pauseAware = false) {
                     override val name: String = "ModuleAppOps"
                     override fun tick() {
@@ -153,47 +163,87 @@ object Main {
                     }
                 }
             },
-            ModuleEntry("prop_tuning", { enabled("prop_tuning_enable") }) { AntiDetectionModule(ctx) },
-            ModuleEntry("system_tuning", { enabled("system_tuning_enable") || enabled("heavy_task_enable") }) {
+            ModuleEntry("prop_tuning", { enabled("prop_tuning_enable") }, label = "属性调优", desc = "系统属性与反检测参数下发") {
+                AntiDetectionModule(ctx)
+            },
+            ModuleEntry(
+                "system_tuning", { enabled("system_tuning_enable") || enabled("heavy_task_enable") },
+                label = "系统调优", desc = "周期性性能/电源/服务综合调优",
+            ) {
                 SystemTuningModule(ctx, performance, power, configGen, appManager, serviceGuard, storage, thermal, miui)
             },
-            ModuleEntry("game_pause", { enabled("game_pause_enable") }) { GamePauseModule(ctx) },
+            ModuleEntry("game_pause", { enabled("game_pause_enable") }, label = "游戏暂停", desc = "游戏运行时暂停清理/后台限制") {
+                GamePauseModule(ctx)
+            },
             ModuleEntry(
-                "game_oom_protect",
-                { enabled("game_oom_protect_enable") }
+                "game_oom_protect", { enabled("game_oom_protect_enable") },
+                label = "游戏 OOM 保护", desc = "保活游戏进程，避免被低内存杀手回收",
             ) {
                 GameOomProtectModule(ctx)
             },
-            ModuleEntry("accessibility_guard", { true }) { AccessibilityGuardModule(ctx) },
-            ModuleEntry("service_guard", { enabled("service_guard_enable") || enabled("extra_features_enable") }) {
+            ModuleEntry("accessibility_guard", { true }, label = "无障碍守护", desc = "常驻守护无障碍服务不被系统关闭") {
+                AccessibilityGuardModule(ctx)
+            },
+            ModuleEntry(
+                "service_guard", { enabled("service_guard_enable") || enabled("extra_features_enable") },
+                label = "服务守护", desc = "守护关键系统服务存活",
+            ) {
                 ServiceGuardModule(ctx)
             },
-            ModuleEntry("server_mode", { enabled("server_mode_enable") }) { ServerModeModule(ctx) },
-            ModuleEntry("power", { true }) {
+            ModuleEntry("server_mode", { enabled("server_mode_enable") }, label = "服务器模式", desc = "服务器场景下的调度参数") {
+                ServerModeModule(ctx)
+            },
+            ModuleEntry("power", { true }, label = "电源管理", desc = "电池读数与电源事件订阅") {
                 PowerManagerModule(ctx)
             },
-            // 电源与后台调度优化子系统（新增）：受总闸 powersave_enable 与自身开关双重控制。
+            // 电源与后台调度优化子系统：受总闸 powersave_enable 与自身开关双重控制。
             // 关闭时不创建线程/监听，且会还原所有临时调度状态。
-            ModuleEntry("power_optimize", { enabled("power_optimize_enable") }) {
+            ModuleEntry(
+                "power_optimize", { enabled("power_optimize_enable") },
+                label = "省电优化", desc = "事件驱动省电子系统（降频/后台限制/息屏策略）",
+            ) {
                 PowerOptimizer(ctx, ctx.config)
             },
-            ModuleEntry("memory_clean", { enabled("memory_clean_enable") }) { MemoryModule(ctx) },
-            ModuleEntry("accelerometer_rotation", { enabled("accelerometer_rotation_enable") }) {
+            ModuleEntry("memory_clean", { enabled("memory_clean_enable") }, label = "内存清理", desc = "低内存时回收后台进程") {
+                MemoryModule(ctx)
+            },
+            ModuleEntry(
+                "accelerometer_rotation", { enabled("accelerometer_rotation_enable") },
+                label = "重力感应旋转", desc = "按重力自动旋转屏幕",
+            ) {
                 AccelerometerRotationModule(ctx)
             },
-            ModuleEntry("storage_isolation", { enabled("storage_isolation_enable") }) {
+            ModuleEntry(
+                "storage_isolation", { enabled("storage_isolation_enable") },
+                label = "存储隔离", desc = "痕迹清理/垃圾隔离/配置生成",
+            ) {
                 StorageIsolationModule(ctx)
             },
-            ModuleEntry("hma_config", { enabled("hma_config_enable") }) { ConfigGenModule(ctx, scanner) },
-            ModuleEntry("network_ipv6", { enabled("network_ipv6_disable_enable") }) { NetworkModule(ctx) },
-            // 蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，已内置于 dex 常驻循环）。
-            // 受 bt_offload_guard_enable 开关控制，未启用时不创建线程。
-            ModuleEntry("bt_offload_guard", { enabled("bt_offload_guard_enable") }) {
+            ModuleEntry("hma_config", { enabled("hma_config_enable") }, label = "HMA 配置生成", desc = "HideMyAppList 模板列表写入") {
+                ConfigGenModule(ctx, scanner)
+            },
+            ModuleEntry("network_ipv6", { enabled("network_ipv6_disable_enable") }, label = "禁用 IPv6", desc = "在所有网络接口关闭 IPv6") {
+                NetworkModule(ctx)
+            },
+            // 蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性）。
+            ModuleEntry(
+                "bt_offload_guard", { enabled("bt_offload_guard_enable") },
+                label = "蓝牙 offload 守护", desc = "复位蓝牙音频硬件 offload 属性",
+            ) {
                 BtOffloadGuardModule(ctx)
             },
             // 防护类功能：不受 powersave_enable 影响（省电模式不关闭防护）
-            ModuleEntry("skip_mount_guard", { sw.switch("skip_mount_guard_enable") }) { SkipMountGuardModule(ctx) },
+            ModuleEntry("skip_mount_guard", { sw.switch("skip_mount_guard_enable") }, label = "挂载防护", desc = "删除 skip_mount 等残留文件") {
+                SkipMountGuardModule(ctx)
+            },
         )
+
+        // Publish every module (with its human label) into the runtime registry,
+        // which the WebUI overview page reads through /api/overview.
+        entries.forEach { e -> RuntimeRegistry.register(e.name, e.label, e.desc) }
+        RuntimeRegistry.daemonStartedMs = System.currentTimeMillis()
+        RuntimeRegistry.configRoot = ctx.config.rootDir
+        RuntimeRegistry.moduleDir = modDir
 
         // ---- WebUI 后端（Main.dex 承载）--------------------------------------
         // HTTP 服务是 WebUI 的控制平面：页面加载后立刻需要它来读取/写入所有
@@ -212,15 +262,19 @@ object Main {
                 for (entry in entries) {
                     val on = entry.enabled()
                     val current = running[entry.name]
+                    RuntimeRegistry.setEnabled(entry.name, on)
                     if (on && current == null) {
                         val module = entry.factory()
+                        module.registryKey = entry.name
                         running[entry.name] = module
+                        RuntimeRegistry.setRunning(entry.name, true)
                         Logger.i("Main", "功能已启用: ${module.javaClass.simpleName} (${entry.name})")
                         module.start()
                     } else if (!on && current != null) {
                         Logger.i("Main", "功能已禁用: ${current.javaClass.simpleName} (${entry.name})")
                         current.stop()
                         running.remove(entry.name)
+                        RuntimeRegistry.setRunning(entry.name, false)
                     }
                 }
                 val enabledNames = entries.filter { it.enabled() }.map { it.name }

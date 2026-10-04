@@ -127,4 +127,22 @@ object ProcessUtils {
         if (total <= 0) return 100
         return ((free * 100) / total).toInt()
     }
+
+    /** This daemon's own pid (falls back to -1 if the runtime can't provide it). */
+    fun selfPid(): Int = try {
+        android.os.Process.myPid()
+    } catch (_: Throwable) {
+        try {
+            ProcessHandle.current().pid().toInt()
+        } catch (_: Throwable) {
+            -1
+        }
+    }
+
+    /** Number of running processes (rows in /proc whose name is all digits). */
+    fun processCount(): Int = try {
+        File("/proc").listFiles()?.count { it.isDirectory && it.name.all { c -> c.isDigit() } } ?: -1
+    } catch (_: Throwable) {
+        -1
+    }
 }

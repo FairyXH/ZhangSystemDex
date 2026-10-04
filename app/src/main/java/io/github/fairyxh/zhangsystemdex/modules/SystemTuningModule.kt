@@ -222,6 +222,16 @@ class SystemTuningModule(
                 } else {
                     val s = RubbishCleaner(ctx.config).clean()
                     done += "垃圾清理(${s.totalFiles} 文件/${s.totalBytes} B)"
+                    // Publish live clean stats for the overview page.
+                    io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry.bump("system_tuning", "cleanRuns")
+                    io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry.bump("system_tuning", "cleanFiles", s.totalFiles.toLong())
+                    io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry.bump("system_tuning", "cleanBytes", s.totalBytes)
+                    val st = io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry.get("system_tuning")
+                    st?.let {
+                        it.extras["lastCleanMs"] = System.currentTimeMillis()
+                        it.extras["lastCleanFiles"] = s.totalFiles.toLong()
+                        it.extras["lastCleanBytes"] = s.totalBytes
+                    }
                 }
             }
             val released = syncZhangSetting()

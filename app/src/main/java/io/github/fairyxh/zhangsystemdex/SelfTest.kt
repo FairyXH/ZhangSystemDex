@@ -24,10 +24,14 @@ import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
+import io.github.fairyxh.zhangsystemdex.core.rubbish.CleanRule
+import io.github.fairyxh.zhangsystemdex.core.rubbish.MatchMode
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RiskLevel
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishRuleSet
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleGroup
+import io.github.fairyxh.zhangsystemdex.core.rubbish.ScanCache
 import java.io.File
 
 /**
@@ -724,6 +728,73 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("清理.仅列出规则零删除", Status.FAIL, t.message ?: "")
+        }
+
+        // 6c) 分片并行扫描器计数正确性 + 缓存确定性 —— 回归守卫。
+        //     在临时目录造一棵已知结构的小树，验证：
+        //       - 冷扫（无缓存）计数 == 手工计算值；
+        //       - 暖扫（有缓存 + 目录剪枝）计数与冷扫完全一致；
+        //       - 再次暖扫仍一致（确定性）。
+        try {
+            // 注意：测试树必须放在【非禁止路径】下，否则 RubbishGuard 会整体跳过。
+            // /data/adb 在 FORBIDDEN_PREFIX 中，故改用外部存储真实路径 /data/media/0。
+            val base = File("/data/media/0/.zsd_selftest/scan_case")
+            // 清理旧目录
+            if (base.exists()) base.deleteRecursively()
+            base.mkdirs()
+            // 结构：
+            //   base/cache/a.tmp          (垃圾：.tmp)
+            //   base/cache/deep/b.log     (垃圾：.log)
+            //   base/cache/deep/keep.dat  (非垃圾)
+            //   base/empty_dir/           (空目录 → 垃圾)
+            //   base/plain/readme.txt     (非垃圾)
+            val cache = File(base, "cache"); cache.mkdirs()
+            File(cache, "a.tmp").writeText("x")
+            val deep = File(cache, "deep"); deep.mkdirs()
+            File(deep, "b.log").writeText("yy")
+            File(deep, "keep.dat").writeText("zzz")
+            File(base, "empty_dir").mkdirs()
+            val plain = File(base, "plain"); plain.mkdirs()
+            File(plain, "readme.txt").writeText("hello")
+            // 手工期望：垃圾 = a.tmp + b.log + empty_dir = 3 个（字节 1+2+0=3）
+            val expectFiles = 3
+            val expectBytes = 3L
+
+            // 两次扫描必须得到完全相同的计数（缓存 + 剪枝不得改变结果）。
+            val cleaner = RubbishCleaner(ctx.config)
+            cleaner.forceSingleThreadForTest()
+            val rule = CleanRule(
+                id = "selftest_junk", name = "selftest", group = RuleGroup.DEEP,
+                risk = RiskLevel.LOW, defaultOn = true, mode = MatchMode.JUNK_SCAN,
+                roots = listOf(base.absolutePath), maxDepth = 12, switchKey = "",
+            )
+            val idx1 = ScanCache.Index()
+            val r1 = cleaner.scanJunkForTest(rule, listOf(base), idx1)
+            // 第二次带上第一次的索引（模拟暖扫复用分片聚合缓存）
+            val idx2 = ScanCache.Index()
+            idx2.shardAggs.putAll(idx1.shardAggs)
+            idx2.entries.putAll(idx1.entries)
+            val r2 = cleaner.scanJunkForTest(rule, listOf(base), idx2)
+
+            // 第三次再带第二次的索引（验证确定性：连续暖扫必须仍一致）
+            val idx3 = ScanCache.Index()
+            idx3.shardAggs.putAll(idx2.shardAggs)
+            idx3.entries.putAll(idx2.entries)
+            val r3 = cleaner.scanJunkForTest(rule, listOf(base), idx3)
+
+            val ok = r1.first == expectFiles && r1.second == expectBytes &&
+                r2.first == expectFiles && r2.second == expectBytes &&
+                r3.first == expectFiles && r3.second == expectBytes
+            val dbg = "分片聚合(idx1)=${idx1.shardAggs.size} idx2=${idx2.shardAggs.size} idx3=${idx3.shardAggs.size}"
+            s.add(
+                "清理.并行扫描计数一致",
+                if (ok) Status.PASS else Status.FAIL,
+                "冷扫=${r1.first}文件/${r1.second}字节 暖扫=${r2.first}文件/${r2.second}字节 " +
+                    "再暖=${r3.first}文件/${r3.second}字节 期望=${expectFiles}文件/${expectBytes}字节 | $dbg"
+            )
+            base.deleteRecursively()
+        } catch (t: Throwable) {
+            s.add("清理.并行扫描计数一致", Status.FAIL, t.message ?: "")
         }
 
         // 7) 配置键齐备（低风险规则 + 总开关）。

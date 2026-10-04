@@ -21,6 +21,28 @@ class RubbishCleaner(private val config: ConfigManager) {
     /** 深度扫描缓存（首次全扫，之后仅扫变动位置）。 */
     private val cache = ScanCache(File(config.rootDir))
 
+    /**
+     * 并行扫描器（IDM 风格分片）。并发度可经 `rubbish_scan_threads` 配置
+     * （默认 4，范围 1..8），避免在某些低端存储上打爆随机读。
+     */
+    private val scanner: ParallelScanner by lazy { ParallelScanner(configuredThreads()) }
+
+    /**
+     * 扫描进度：最近一次扫描的（已完成分片, 总分片）。供 `/api/rubbish/scan`
+     * 的异步任务与概览页展示。volatile 保证跨线程可见。
+     */
+    @Volatile
+    var lastScanDone: Int = 0
+        private set
+
+    @Volatile
+    var lastScanTotal: Int = 0
+        private set
+
+    @Volatile
+    var lastScanRule: String = ""
+        private set
+
     data class RuleResult(
         val ruleId: String,
         val name: String,
@@ -106,8 +128,48 @@ class RubbishCleaner(private val config: ConfigManager) {
         return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples)
     }
 
+    /** 测试用：强制单线程扫描（保证 SelfTest 可确定性复现）。 */
+    internal fun forceSingleThreadForTest() { scannerThreadsOverride = 1 }
+
+    /** 读取配置的并发度（1..8，默认 4）。 */
+    private fun configuredThreads(): Int =
+        config.getString("rubbish_scan_threads", "4").toIntOrNull()
+            ?.coerceIn(1, 8) ?: ParallelScanner.DEFAULT_THREADS
+
+    @Volatile
+    private var scannerThreadsOverride: Int = 0
+
+    /**
+     * 测试用：对显式 roots 跑一次 JUNK_SCAN，返回 (文件数, 字节数)。
+     * idx 可复用（第二次即模拟暖扫的「分片复用」）。
+     */
+    internal fun scanJunkForTest(rule: CleanRule, roots: List<File>, idx: ScanCache.Index): Pair<Int, Long> {
+        val visitor = JunkVisitor(rule, idx)
+        val th = if (scannerThreadsOverride > 0) scannerThreadsOverride else configuredThreads()
+        val shards = buildShards(roots)
+        val res = ParallelScanner(th).scan(
+            shards = shards, idx = idx, cache = cache, ruleId = rule.id,
+            visitor = visitor, maxSamples = 3,
+        )
+        return res.hits to res.bytes
+    }
+
+    /**
+     * 把扫描根切成分片：每个 root 的直接子项 = 1 个分片（0 层 IDM 分片）。
+     * root 自身无子项时，root 作为唯一分片。
+     */
+    private fun buildShards(roots: List<File>): List<File> {
+        val shards = ArrayList<File>()
+        for (r in roots) {
+            val children = r.listFiles()
+            if (children == null || children.isEmpty()) shards.add(r)
+            else for (c in children) shards.add(c)
+        }
+        return shards
+    }
+
     // ------------------------------------------------------------------
-    // 深度扫描（文件头识别 + 缓存增量）
+    // 深度扫描（文件头识别 + 分片缓存增量）
     // ------------------------------------------------------------------
 
     private fun isDeepMode(m: MatchMode): Boolean = when (m) {
@@ -119,8 +181,7 @@ class RubbishCleaner(private val config: ConfigManager) {
     private data class DeepResult(val files: Int, val bytes: Long, val samples: List<String>)
 
     /**
-     * 深度扫描入口。结果写入 [ScanCache]：首次全扫（逐文件读文件头/哈希），
-     * 之后仅对「尺寸或 mtime 变化」的文件重新判定，未变文件直接复用缓存。
+     * 深度扫描入口。分片并行 + 分片级缓存复用（首次全扫，之后未变分片直接复用）。
      */
     private fun scanDeep(rule: CleanRule, maxSamples: Int): DeepResult {
         val roots = collectRoots(rule)
@@ -134,69 +195,74 @@ class RubbishCleaner(private val config: ConfigManager) {
     }
 
     /**
-     * 泛化垃圾扫描：按 [JunkPatterns] 特征识别全部 App 的潜在垃圾。
+     * 泛化垃圾扫描：分片并行 + 分片级缓存（IDM 风格）。
      *
-     * 覆盖维度：目录名（cache/logs/tmp/crash...）、文件名后缀（.log/.tmp/.bak...）、
-     * 文件名特征（thumbs.db/core...）、零字节文件、hprof 堆转储。
-     *
-     * 预筛：跳过 [RubbishGuard.isForbiddenPath] 与 [JunkPatterns.isProtectedPath]。
+     * 命中 [JunkPatterns] 特征的文件与空目录计入结果；遍历/删除均受
+     * [RubbishGuard] 与 [JunkPatterns.isProtectedPath] 保护。
      */
     private fun scanJunk(rule: CleanRule, roots: List<File>, maxSamples: Int): DeepResult {
         val idx = cache.load(rule.id)
-        var count = 0
-        var bytes = 0L
-        val samples = ArrayList<String>()
-        val alive = HashSet<String>()
-        val stack = ArrayDeque<File>()
-        roots.forEach { stack.addLast(it) }
-        val visited = HashSet<String>()
+        lastScanRule = rule.id
+        lastScanDone = 0
+        lastScanTotal = 0
+        val visitor = JunkVisitor(rule, idx)
+        val shards = buildShards(roots)
+        val res = scanner.scan(
+            shards = shards,
+            idx = idx,
+            cache = cache,
+            ruleId = rule.id,
+            visitor = visitor,
+            maxSamples = maxSamples,
+            onProgress = { d, t -> lastScanDone = d; lastScanTotal = t },
+        )
+        Logger.i(
+            "RubbishCleaner",
+            "垃圾扫描完成(${rule.id}): 命中=${res.hits} 字节=${res.bytes} " +
+                "分片=${lastScanDone}/${lastScanTotal} 复用=${res.reusedShards}",
+        )
+        return DeepResult(res.hits, res.bytes, res.samples)
+    }
 
-        while (stack.isNotEmpty()) {
-            val cur = stack.removeLast()
-            if (!visited.add(cur.path)) continue
-            if (RubbishGuard.isForbiddenPath(cur.path)) continue
-            if (JunkPatterns.isProtectedPath(cur.path.lowercase())) continue
-            // 深度限制：避免遍历到过深层（默认 8 层）
-            if (rule.maxDepth > 0 && cur.path.split('/').size > rule.maxDepth) continue
+    /**
+     * 泛化垃圾扫描访问器。
+     *  - 文件级增量：`isFresh` 命中 → 复用缓存判定，不重复读文件头；
+     *  - 所有判定受 [RubbishGuard.isForbiddenPath] 与 [JunkPatterns.isProtectedPath] 保护；
+     *  - 删除永不在此处发生。
+     */
+    private inner class JunkVisitor(
+        private val rule: CleanRule,
+        private val idx: ScanCache.Index,
+    ) : ParallelScanner.Visitor {
 
-            val children = cur.listFiles() ?: continue
-            for (c in children) {
-                if (c.name in rule.keep) continue
-                if (RubbishGuard.isForbiddenPath(c.path)) continue
-                if (JunkPatterns.isProtectedPath(c.path.lowercase())) continue
-                if (c.isDirectory) {
-                    // 空目录：直接计为垃圾
-                    if (JunkPatterns.isEmptyDir(c)) {
-                        count++
-                        if (samples.size < maxSamples) samples += c.path
-                    } else {
-                        stack.addLast(c)
-                    }
-                } else if (c.isFile) {
-                    alive += c.path
-                    val size = c.length()
-                    // ★ ageDays 过滤：只清理 N 天以上未修改的文件（防碰到活跃句柄）。
-                    if (rule.ageDays > 0 && !olderThan(c, rule.ageDays)) continue
-                    // 增量：命中缓存则复用
-                    val fresh = idx.isFresh(c.path, size, c.lastModified())
-                    val junk = if (fresh) {
-                        idx.get(c.path)?.kind == 'J'
-                    } else {
-                        val j = JunkPatterns.isJunk(c.name, cur.name, c, size)
-                        idx.put(ScanCache.Entry(if (j) 'J' else 'O', c.path, size, c.lastModified()))
-                        j
-                    }
-                    if (junk) {
-                        count++
-                        bytes += size
-                        if (samples.size < maxSamples) samples += c.path
-                    }
-                }
+        override fun onFile(file: File, parentDirName: String, shard: ScanCache.Shard): Boolean {
+            val size = file.length()
+            // ★ ageDays 过滤：只清理 N 天以上未修改的文件（防碰到活跃句柄）。
+            if (rule.ageDays > 0 && !olderThan(file, rule.ageDays)) return false
+            val mtime = file.lastModified()
+            val fresh = idx.isFresh(file.path, size, mtime)
+            return if (fresh) {
+                idx.get(file.path)?.kind == 'J'
+            } else {
+                val j = JunkPatterns.isJunk(file.name, parentDirName, file, size)
+                // ★ 只落盘「命中(J)」条目：非命中(O)数量巨大（数十万），
+                //    且分片级聚合已能整体复用未变分片，O 条目纯属体积放大。
+                //    未变分片整片跳过；变动分片内重扫其文件（成本=单个 App 子树）。
+                if (j) shard.addEntry(ScanCache.Entry('J', file.path, size, mtime))
+                j
             }
         }
-        pruneIndex(idx, alive)
-        cache.save(rule.id, idx)
-        return DeepResult(count, bytes, samples)
+
+        override fun shouldSkip(child: File, parent: File): Boolean {
+            if (child.name in rule.keep) return true
+            val path = child.path
+            if (RubbishGuard.isForbiddenPath(path)) return true
+            val lower = try { path.lowercase() } catch (_: Throwable) { "" }
+            if (lower.isNotEmpty() && JunkPatterns.isProtectedPath(lower)) return true
+            // 深度限制：避免遍历到过深层
+            if (rule.maxDepth > 0 && path.split('/').size > rule.maxDepth) return true
+            return false
+        }
     }
 
     /** 增量判定单个文件类型（命中缓存则复用，否则读文件头）。 */
@@ -217,27 +283,47 @@ class RubbishCleaner(private val config: ConfigManager) {
 
     /** 递归收集候选文件（按尺寸下限过滤，跳过 keep 与目录）。 */
     private fun collectFiles(rule: CleanRule, roots: List<File>, minBytes: Long): List<File> {
-        val out = ArrayList<File>()
-        val stack = ArrayDeque<File>()
-        roots.forEach { stack.addLast(it) }
-        val visited = HashSet<String>()
-        while (stack.isNotEmpty()) {
-            val cur = stack.removeLast()
-            val key = cur.path
-            if (!visited.add(key)) continue
-            // 纵深防御：扫描阶段即排除「禁止目录」，避免统计虚高与无效候选。
-            if (RubbishGuard.isForbiddenPath(key)) continue
-            val children = cur.listFiles() ?: continue
-            for (c in children) {
-                if (c.name in rule.keep) continue
-                if (c.isDirectory) {
-                    stack.addLast(c)
-                } else if (c.isFile && c.length() >= minBytes) {
-                    if (!RubbishGuard.isForbiddenPath(c.path)) out += c
+        // 小范围走单线程（避免为几十个文件开线程池）；大范围走分片并行。
+        return collectFilesParallel(rule, roots, minBytes)
+    }
+
+    /**
+     * 分片并行收集候选文件（IDM 风格）。
+     *
+     * 与递归串行版语义一致：跳过 keep/禁止路径，只收 ≥minBytes 的普通文件；
+     * 但把顶层子树切成分片并发遍历，显著加快大范围收集。
+     * 收集阶段**不使用缓存**（需全量，且无需增量）。
+     */
+    private fun collectFilesParallel(rule: CleanRule, roots: List<File>, minBytes: Long): List<File> {
+        val out = java.util.Collections.synchronizedList(ArrayList<File>(1024))
+        val visitor = object : ParallelScanner.Visitor {
+            override fun onFile(file: File, parentDirName: String, shard: ScanCache.Shard): Boolean {
+                if (file.length() >= minBytes) {
+                    if (!RubbishGuard.isForbiddenPath(file.path)) out.add(file)
                 }
+                return false
+            }
+            override fun shouldSkip(child: File, parent: File): Boolean {
+                if (child.name in rule.keep) return true
+                val path = child.path
+                if (RubbishGuard.isForbiddenPath(path)) return true
+                if (rule.maxDepth > 0 && path.split('/').size > rule.maxDepth) return true
+                return false
             }
         }
-        return out
+        val shards = buildShards(roots)
+        // 用独立的一次性缓存，避免污染规则索引
+        val tmpCache = ScanCache(File(config.rootDir, "rubbish_index_tmp"))
+        scanner.scan(
+            shards = shards,
+            idx = ScanCache.Index(),
+            cache = tmpCache,
+            ruleId = "__collect_${rule.id}",
+            visitor = visitor,
+            maxSamples = 0,
+            onProgress = { d, t -> lastScanDone = d; lastScanTotal = t },
+        )
+        return synchronized(out) { ArrayList(out) }
     }
 
     /** 全盘/私有 APK 扫描：文件头识别，无视扩展名。 */
@@ -321,8 +407,9 @@ class RubbishCleaner(private val config: ConfigManager) {
 
     /** 从索引中剔除已不存在的路径（增量维护）。 */
     private fun pruneIndex(idx: ScanCache.Index, alive: Set<String>) {
+        if (alive.isEmpty()) return
         val dead = idx.entries.keys.filter { it !in alive }
-        dead.forEach { idx.remove(it) }
+        dead.forEach { idx.entries.remove(it) }
     }
 
     /**

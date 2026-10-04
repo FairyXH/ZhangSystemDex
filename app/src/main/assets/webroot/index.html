@@ -1152,11 +1152,43 @@ function renderCleanCell(r){
   inp.checked = CLEAN_SELECTED.has(r.id);
   inp.onchange = ()=>{
     if (inp.checked) CLEAN_SELECTED.add(r.id); else CLEAN_SELECTED.delete(r.id);
+    // 规则开关必须即时持久化到 switches.conf：以前只改内存 CLEAN_SELECTED，
+    // 退出 UI 就丢，表现为“打开 QQ 接收文件后返回又复原”。
+    persistCleanRule(r, inp);
   };
   const i = document.createElement("i");
   sw.appendChild(inp); sw.appendChild(i);
   cell.appendChild(sw);
   return cell;
+}
+
+/**
+ * 把单条清理规则的勾选状态写入 switches.conf（后端 /api/switch/set）。
+ * 使用规则自带 switchKey；失败时回读后端真实值并纠正界面，避免“看起来生效”。
+ */
+async function persistCleanRule(r, inp){
+  const key = r && r.switchKey;
+  if (!key) return;
+  const on = !!inp.checked;
+  try{
+    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
+    await api("/api/reload").catch(()=>{});
+    toast((r.name || r.id) + (on ? "：已开启" : "：已关闭"), "ok");
+    diag("clean_rule_toggle", { key: key, on: on });
+  }catch(e){
+    toast("保存失败：" + (e.message||e), "err");
+    diag("clean_rule_toggle_fail", { key: key, on: on, err: String(e && e.message || e) });
+    // 失败：回读后端真实值并纠正勾选
+    try{
+      const rr = await api("/api/rubbish/rules");
+      const found = ((rr && rr.rules) || []).find(x=> x.id === r.id);
+      const real = !!(found && found.enabled);
+      if (inp.checked !== real){
+        inp.checked = real;
+        if (real) CLEAN_SELECTED.add(r.id); else CLEAN_SELECTED.delete(r.id);
+      }
+    }catch(_){}
+  }
 }
 
 async function doCleanScan(){

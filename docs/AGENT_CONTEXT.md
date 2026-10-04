@@ -642,3 +642,32 @@ zip 内无 `__pycache__`。
 - 从 zip 解出关键条目 md5 与母版/模块完全一致（dex `c33ab7ae`、UI `f0f19f8e`、config `d01d5fc7`）。
 **对比上一版正式包**（19:53，430,117,507 字节，SHA256 `19fc276a…`）：
 差异为 `Main.dex`（CORS 修复）+ `webroot/index.html`（自动保存）；其余 89 文件不变。
+---
+## 16. 修复：保存很慢很卡 + 清理页开关不工作（2026-10-04 08:02）
+**诊断手段**：本次先部署「诊断信标」版本（新增 `/api/diag`，页面把 loaded/toggle/save/js_error
+事件 POST 回后端，写入 `log/webui_diag.log`，**独立于 `log_enabled`**）。用户复现后日志实证：
+- `{"evt":"loaded","keys":104}` → 页面正常加载；
+- `{"evt":"toggle","key":"module_appops_auth_enable","checked":true,"dirty":1}` → 开关页标脏正常；
+- `save_start`→`save_ok`→`已写入 switches.conf` → 保存链路已通（CORS/PNA 修复有效）。
+于是锁定两个**新**问题（与 CORS 无关）：
+**问题 1：保存很慢很卡**
+- 根因：`HttpBackend extends DaemonLoop(ctx, 1000L)`，`tick()` 每周期只 `accept()` **一个**连接，
+  → HTTP 约 **1 请求/秒**（一次保存含 OPTIONS+POST+reload ≈ 3 秒）。日志时间戳逐条相差 ~1.003s 可证。
+- 修复：`onStart()` 启动**独立 accept 线程**（阻塞 `accept` + `soTimeout=1000`），
+  每连接交给**短命工作线程**处理；`tick()` 改为空操作。响应时间 **~1s → ~3ms**（实测 10 连发均 ~0.003s，并行正常）。
+**问题 2：清理页开关不工作**
+- 根因：`/api/switch/set` 写盘后**未刷新内存配置**；`ConfigManager.reloadSwitchesIfChanged()`
+  依赖 `File.lastModified()`，而 `/data/adb` 的 mtime **只有整秒粒度**，同一秒内「写盘+重载」会被
+  判定 mtime 未变而**跳过重载** → `/api/rubbish/status` 持续返回旧值 → 清理页 3 个开关看起来"没生效/复原"。
+- 修复：新增 `ConfigManager.reloadSwitches()`（**强制**重载，绕过 mtime），
+  在 `apiSwitchSet`、`apiWriteFile`(switches.conf)、`apiReload` 三处调用。
+  实测 `switch/set false → status masterEnabled=false → 文件=false → set true → true` 即时一致。
+- 前端 `setCleanSwitch()`：成功后回读状态 + 提示「已开启/已关闭」，失败回读纠正界面。
+**产物（已部署）**：`Main.dex` = `aeff2f9330e842c1427e6c27875fe079`；
+`webroot/index.html` = `8b37730b28850758a5f942e275306cc3`。模块 + 母版均已同步；daemon 已重启。
+**验证**：harness save 17/17、clean 15/15、power 22/22、check_html ALL PASS；
+真机 SelfTest **98 PASS / 2 FAIL**（2 个 FAIL 均为该 ROM 固有的 AppOps 随机项，与本次改动无关）；
+真机 HTTP 延迟 ~3ms；清理页开关即时生效。
+**⚠ 诊断信标保留**：`/api/diag` → `/data/adb/Zhang/log/webui_diag.log`（不依赖 log_enabled），
+后续排查 WebUI 问题可直接查看。
+**注意**：本次**未重新打包 zip**（母版已含新 dex+UI，需要时用 `pack.sh` 重打包）。

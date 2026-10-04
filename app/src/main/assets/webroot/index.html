@@ -1624,6 +1624,9 @@ async function otaUpdate(){
 
 async function setCleanSwitch(key, on){
   try{
+    // 关键：必须先写盘（/api/switch/set），否则只是界面勾选，
+    // reload + 回读会把界面恢复到后端旧值，表现为“开关打不开”。
+    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
     await api("/api/reload").catch(()=>{});
     // 立即回读并同步三个开关的真实状态，避免“看起来没生效”。
     await loadCleanState();

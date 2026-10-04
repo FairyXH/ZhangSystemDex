@@ -729,3 +729,31 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 已通过 `部署母版到已安装.sh` 同步母版→已安装并重启 dex。
 **教训（重要）**：WebUI 里凡是"看起来是个开关"的控件，其 `onchange` **必须**最终调用
 `/api/switch/set`（或 dirty+save）落盘；只改前端内存状态的控件一律会"退出即复原"。
+---
+## 19. 修复：开关切换的"动作"不生效（引入 onSwitchesChanged 回调，2026-10-04 08:33）
+**背景**：用户确认"开关可以用了，但对应的动作是否真的生效？"——这是关键的正确性问题。
+**发现（真机线程级证据 + 日志）**：开关能写盘、能读回，但**对应模块的启动/停止不会即时发生**。
+实测：打开 `network_ipv6_disable_enable` 后 `/proc/sys/net/ipv6/.../disable_ipv6` 不变、
+无 `NetworkModule` 线程；打开 `max_cpu_enable` 同理。
+**根因（我上次修复引入的回归）**：§16 为解决"写盘后读回旧值"把 `/api/switch/set`、`/api/reload`
+改为调 `reloadSwitches()`（强制重载）。但该函数**只刷新内存配置、不触发 `syncModules()`**；
+而 `Main` 主循环靠 **`reloadSwitchesIfChanged()` 的 mtime 检测**才调用 `syncModules()`——
+`reloadSwitches()` 已经把 `switchesLastModified` 记成新值，主循环于是**认为"无变化"**，
+`syncModules()` **永远不会被调用** → 开关只是被"记住"，动作要等重启 daemon 才生效。
+**修复**：
+- `ConfigManager` 新增 `@Volatile var onSwitchesChanged: (() -> Unit)?`，
+  `reloadSwitches()` 与 `reloadSwitchesIfChanged()` 在重载后都触发它。
+- `Main.main()` 调整顺序：**先定义 `syncModules()`、注册回调，再启动 HttpBackend**，
+  回调内调用 `syncModules()`；并给 `syncModules()` 加 `synchronized(syncLock)` 串行化。
+  这样 WebUI 每次写 switches.conf / `/api/reload` 都会**立即**启停对应模块。
+**验证（最硬的证据 = 线程数实时变化）**：
+- `network_ipv6_disable_enable`：开 → `NetworkModule` 线程 1，关 → 0；
+- `memory_clean_enable`：开 → `MemoryModule` 1，关 → 0。
+均**瞬时**生效，无需 60s、无需重启设备。
+- 真机 SelfTest：49 PASS / 1 FAIL / 2 WARN（FAIL 仍为该 ROM 固有 AppOps 随机项）。
+**产物**：`Main.dex` = `ae9fb306b7751bc6edadb51cad903a02`（含 §18 的 UI `70dba478`）。
+已通过 `部署母版到已安装.sh` 同步并重启 dex。
+**⚠ 架构备忘（新 Agent 必读）**：`Main` 用 `ModuleEntry(name, enabled, factory)` 表驱动
+模块启停；任何新增开关若要"即时生效"，必须确保其 `enabled` 被纳入 `entries`，
+且走 `reloadSwitches()` 路径（已自动触发回调）。运行时排障可用
+`for t in /proc/$(cat /data/adb/Zhang/daemon.pid)/task/*/comm; do cat $t; done` 看模块线程是否在跑。

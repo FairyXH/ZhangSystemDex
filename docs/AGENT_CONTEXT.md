@@ -799,3 +799,31 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 `RuntimeRegistry.get("<entry.name>")?.bump("计数名")` 或 `put("字段", 值)`；
 `/api/overview` 会自动带出它的 `counters`/`extras`，前端模块行也会通用渲染
 `extras`（除 lastClean* 外）。新增开关的 label/desc 在 `Main.kt` 的 `ModuleEntry`。
+---
+## 21. 概览增强：历史累计清理量 + 各模块反馈（2026-10-04 09:20）
+**动机**：§20 的首版里，"清理了多少垃圾"只统计**本次 daemon 运行以来**（内存计数，
+重启归零），且除 `system_tuning` 外多数模块没有实质反馈。
+**后端**：
+- `AuditLog.cumulative()`：从审计日志（当前 + `.1` 滚动备份）聚合历史累计——
+  DELETE 行数=清理文件数、`cols[3]` 的 `<n>B` 求和=释放字节、SESSION 行数=会话数。
+  **跨 daemon 重启仍然可见**（读文件而非内存）。
+  `/api/overview` 的 `clean` 段新增 `totalFiles/totalBytes/totalSessions`。
+- 各模块上报运行时反馈（`RuntimeRegistry`）：
+  - `GameOomProtectModule` → `extras{protectedCount,knownGames,protectedList}`；
+  - `ServiceGuardModule` → `counters{healthRuns}` + `extras{lastHealthMs}`；
+  - `StorageIsolationModule` → `counters{isolated}` + `extras{lastIsolateMs}`。
+**前端**：
+- 清理区块新增「累计清理文件 / 累计释放空间 / 累计清理会话」（取 `total*`）
+  与「本次运行清理」（`cleanRuns 次 / cleanedFiles 文件`）。
+- 模块行新增 `extraLines()`：把 `extras` 用 `EXTRA_LABELS` 映射成中文友好名
+  （保活进程/识别游戏/隔离时间/上次巡检…），时间戳自动 `fmtAgo`、字节自动 `fmtBytes`。
+  计数区还新增"巡检 N 次""隔离 N 项"。
+**验证**：
+- 真机 `/api/overview`：累计清理 **23536 文件 / 1.82 GB / 24 会话**（从审计日志聚合）；
+  模块 extras 正确（game_oom_protect 识别 6 游戏、service_guard 上次巡检、storage_isolation 上次隔离）。
+- harness `overview_harness2.mjs` **30/30 PASS**（含累计量、中文 extras 标签断言）。
+- 真机 SelfTest：49 PASS / 1 FAIL（FAIL 为 ROM 固有 AppOps 随机项，另一轮为 0 FAIL）。
+**产物**：`Main.dex` = `294411005af8befcfc2ddfdf3cd01fdf`；
+`webroot/index.html` = `8cf08933d9793e02146ef2206597c842`。已部署并重启 dex。Git：`de29fbd`。
+**⚠ 排障提醒**：部署脚本 `部署母版到已安装.sh` 必须用 **`super_admin:shell`（Android）**
+执行——`super_admin:terminal`（Ubuntu）看不到 `/data/adb`，会报"模块未安装"。

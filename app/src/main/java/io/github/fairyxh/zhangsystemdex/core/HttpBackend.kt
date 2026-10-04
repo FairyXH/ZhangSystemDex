@@ -580,7 +580,10 @@ class HttpBackend(
     // daemon 进程即可生效——无需刷 zip、无需重启设备（模块目录在运行时本就可写，
     // daemon 同一时刻只从 /data/adb/Zhang/Main.dex 加载）。
     // ------------------------------------------------------------------
-    private val otaRepoRaw = "https://raw.githubusercontent.com/FairyXH/ZhangSystemDex/main"
+    // 使用 github.com/.../raw/main/（302 跳转到带 cache-busting 的 CDN），
+    // 比 raw.githubusercontent.com 更新及时：后者 CDN 缓存可能滞后数分钟~数小时，
+    // 会把刚推送的新 dex 误当成旧版本下载回来。
+    private val otaRepoRaw = "https://github.com/FairyXH/ZhangSystemDex/raw/main"
     private val otaDexUrl = "$otaRepoRaw/Main.dex"
     private val otaUiUrl = "$otaRepoRaw/app/src/main/assets/webroot/index.html"
     /** modDir 由 ConfigManager 暴露；兜底 /data/adb/modules/Zhang。 */
@@ -681,14 +684,12 @@ class HttpBackend(
             if (dex.exists()) dex.copyTo(File(backupDir, "Main.dex"), overwrite = true)
             if (ui.exists()) ui.copyTo(File(backupDir, "index.html"), overwrite = true)
 
-            // dex：先写模块目录，再同步到配置根（与 service.sh 行为一致）
+            // dex：写入模块目录（service.sh 重启时会自动同步到配置根 /data/adb/Zhang，
+            // 因此这里不再重复写配置根，避免与重启产生写竞态/半截文件）。
             if (!tmpDex.renameTo(dex)) {
                 dex.writeBytes(tmpDex.readBytes()); tmpDex.delete()
             }
             runCatching { android.system.Os.chmod(dex.absolutePath, 493) } // 0755
-            val rootDex = File(ctx.config.rootDir, "Main.dex")
-            rootDex.writeBytes(dex.readBytes())
-            runCatching { android.system.Os.chmod(rootDex.absolutePath, 493) }
 
             // UI：写入 webroot
             if (uiOk) {
@@ -700,19 +701,34 @@ class HttpBackend(
             }
             log.append("已写入模块目录并备份到 ${backupDir.name}; ")
 
-            // 4. 后台重启 daemon（分离进程，避免随本次响应一起被杀）
-            //    优先用模块内的 service.sh；停止用 pid 精确匹配，避免 pkill 误伤。
+            // 4. 后台重启 daemon（完全分离的进程，避免随本次响应/旧 daemon 一起被杀）
+            //    关键：把重启逻辑写成临时脚本，用 setsid 在新的会话/进程组中运行，
+            //    这样旧 daemon 被 kill（含 pkill）时不会连带杀掉重启脚本；
+            //    脚本内 sleep 2 等旧进程彻底退出后再拉起，避免端口/pid 竞态。
             val svc = File(mod, "service.sh")
             val stop = File(mod, "停止Dex.sh")
-            val restartCmd = buildString {
-                append("( sleep 1; ")
-                if (stop.exists()) append("/system/bin/sh ").append(shq(stop.absolutePath)).append(" >/dev/null 2>&1; ")
-                append("if [ -f ").append(shq(svc.absolutePath)).append(" ]; then ")
-                append("/system/bin/sh ").append(shq(svc.absolutePath)).append(" >>")
-                append(shq(File(ctx.config.rootDir, "log/ota_restart.log").absolutePath))
-                append(" 2>&1; fi ) &")
+            val rlog = File(ctx.config.rootDir, "log/ota_restart.log")
+            val restartSh = File(ctx.config.rootDir, "ota_restart.sh")
+            val restartBody = buildString {
+                append("#!/system/bin/sh\n")
+                append("exec >>").append(shq(rlog.absolutePath)).append(" 2>&1\n")
+                append("echo \"[OTA] restart begin $(date)\"\n")
+                append("sleep 2\n")
+                if (stop.exists()) append("/system/bin/sh ").append(shq(stop.absolutePath)).append("\n")
+                append("sleep 2\n")
+                append("if [ -f ").append(shq(svc.absolutePath)).append(" ]; then\n")
+                append("  /system/bin/sh ").append(shq(svc.absolutePath)).append("\n")
+                append("else\n")
+                append("  echo '[OTA] service.sh 不存在，无法自动重启'\n")
+                append("fi\n")
+                append("echo \"[OTA] restart done rc=$?\"\n")
             }
-            ShellExecutor.runBackground(restartCmd)
+            restartSh.writeText(restartBody, Charsets.UTF_8)
+            runCatching { android.system.Os.chmod(restartSh.absolutePath, 493) } // 0755
+            // setsid 使其脱离当前会话；nohup 忽略挂断；末尾 & 立即返回。
+            ShellExecutor.runBackground(
+                "setsid /system/bin/sh " + shq(restartSh.absolutePath) + " </dev/null >/dev/null 2>&1 &"
+            )
             log.append("已触发后台重启; ")
 
             val sb = StringBuilder()

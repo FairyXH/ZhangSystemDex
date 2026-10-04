@@ -274,7 +274,8 @@
           <div class="stat"><div class="k">启用规则</div><div class="v" id="ovClRules">—</div></div>
           <div class="stat"><div class="k">累计清理文件</div><div class="v" id="ovClFiles">—</div></div>
           <div class="stat"><div class="k">累计释放空间</div><div class="v" id="ovClBytes">—</div></div>
-          <div class="stat"><div class="k">执行次数</div><div class="v" id="ovClRuns">—</div></div>
+          <div class="stat"><div class="k">累计清理会话</div><div class="v" id="ovClSessions">—</div></div>
+          <div class="stat"><div class="k">本次运行清理</div><div class="v sm" id="ovClRuns">—</div></div>
           <div class="stat"><div class="k">最近一次</div><div class="v sm" id="ovClLast">—</div></div>
         </div>
         <div class="hint" id="ovClRecent" style="margin-top:12px;white-space:pre-wrap">最近审计：—</div>
@@ -948,9 +949,10 @@ async function refreshOverview(){
   const cl = d.clean || {};
   setText("ovClMaster", cl.masterEnabled ? "已开启" : "关闭");
   setText("ovClRules", (cl.ruleEnabled||0) + " / " + (cl.ruleTotal||0));
-  setText("ovClFiles", (cl.cleanedFiles||0) + " 个");
-  setText("ovClBytes", fmtBytes(cl.cleanedBytes||0));
-  setText("ovClRuns", (cl.cleanRuns||0) + " 次");
+  setText("ovClFiles", (cl.totalFiles!=null? cl.totalFiles : (cl.cleanedFiles||0)) + " 个");
+  setText("ovClBytes", fmtBytes(cl.totalBytes!=null? cl.totalBytes : (cl.cleanedBytes||0)));
+  setText("ovClSessions", (cl.totalSessions||0) + " 次");
+  setText("ovClRuns", (cl.cleanRuns||0) + " 次 / " + (cl.cleanedFiles||0) + " 文件");
   const lastCleanDesc = (cl.lastCleanAgoMs>=0)
       ? (fmtAgo(cl.lastCleanAgoMs) + "（" + (cl.lastCleanFiles||0) + " 文件 / " + fmtBytes(cl.lastCleanBytes||0) + "）")
       : "尚未执行";
@@ -961,6 +963,39 @@ async function refreshOverview(){
       ? ("最近审计：\n" + cl.recent.slice(0,6).join("\n"))
       : "最近审计：无记录";
   }
+}
+
+// extras 字段 → 中文友好名 + 值格式化
+const EXTRA_LABELS = {
+  protectedCount: "保活进程",
+  knownGames: "识别游戏",
+  protectedList: "保活对象",
+  knownGamesList: "游戏清单",
+  lastIsolateMs: "隔离时间",
+  lastHealthMs: "上次巡检",
+  lastGuardMs: "上次守护",
+  isolated: "隔离项",
+  total: "总计",
+  lastCleanMs: "_skip", lastCleanFiles: "_skip", lastCleanBytes: "_skip",
+};
+function fmtExtraValue(k, v){
+  if (k.endsWith("Ms") && typeof v === "number" && v > 1e12) return fmtAgo(Date.now() - v);
+  if (typeof v === "number" && /Bytes$/i.test(k)) return fmtBytes(v);
+  return String(v);
+}
+function extraLines(m){
+  const out = [];
+  const ex = m.extras || {};
+  for (const k in ex){
+    const lbl = EXTRA_LABELS[k];
+    if (lbl === "_skip") continue;
+    const v = ex[k];
+    if (lbl) out.push(lbl + " " + fmtExtraValue(k, v));
+    // 未登记且以 *_Ms 结尾的时间戳也友好显示
+    else if (k.endsWith("Ms") && typeof v === "number" && v > 1e12) out.push(k.slice(0,-2) + " " + fmtAgo(Date.now()-v));
+    else out.push(k + "=" + v);
+  }
+  return out;
 }
 
 function renderOverviewModules(mods){
@@ -987,17 +1022,15 @@ function renderOverviewModules(mods){
       heart = (m.tickCount>0) ? ("心跳 " + fmtAgo(m.lastTickAgoMs)) :
               (m.lastTickAgoMs>=0 ? ("心跳 " + fmtAgo(m.lastTickAgoMs)) : "等待首次心跳");
     }
-    // 计数
+    // 计数：清理类专用（更醒目），其余 extras 通用中文渲染
     const counters = [];
     const c = m.counters || {};
     if (c.cleanFiles||c.cleanBytes){ counters.push("清理 "+(c.cleanFiles||0)+" 文件/"+fmtBytes(c.cleanBytes||0)); }
     if (c.cleanRuns){ counters.push("清理 "+(c.cleanRuns)+" 次"); }
-    // extras 通用展示
-    for (const k in (m.extras||{})){
-      if (k === "lastCleanMs" || k === "lastCleanFiles" || k === "lastCleanBytes") continue;
-      const v = m.extras[k];
-      counters.push(k + "=" + v);
-    }
+    if (c.healthRuns){ counters.push("巡检 "+(c.healthRuns)+" 次"); }
+    if (c.isolated){ counters.push("隔离 "+(c.isolated)+" 项"); }
+    // 通用 extras → 中文友好名
+    extraLines(m).forEach(l=> counters.push(l));
     row.innerHTML =
       '<span class="dot '+dotCls+'"></span>' +
       '<div class="mbody">' +

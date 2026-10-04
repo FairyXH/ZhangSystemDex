@@ -88,6 +88,42 @@ class AuditLog {
 
     fun filePath(): String = File(dir, FILE_NAME).path
 
+    /**
+     * Lifetime totals parsed from the audit log (current + one rotated file).
+     * Used by the overview page to show cumulative "how much was cleaned",
+     * which must survive daemon restarts (unlike in-memory counters).
+     *
+     * Returns Triple(files, bytes, sessions):
+     *  - files/bytes: sum of successful DELETE lines ("<n>B" column)
+     *  - sessions:   number of SESSION summary lines
+     */
+    fun cumulative(): Triple<Long, Long, Long> {
+        var files = 0L
+        var bytes = 0L
+        var sessions = 0L
+        for (name in listOf("$FILE_NAME.1", FILE_NAME)) {
+            val f = File(dir, name)
+            if (!f.exists()) continue
+            try {
+                f.forEachLine { line ->
+                    val cols = line.split('\t')
+                    if (cols.size < 3) return@forEachLine
+                    when (cols[1]) {
+                        "DELETE" -> {
+                            files++
+                            // columns: [0]=ts [1]=DELETE [2]="[ruleId]" [3]="1234B" [4]=path
+                            val b = cols.getOrNull(3)?.removeSuffix("B")?.toLongOrNull()
+                            if (b != null && b > 0) bytes += b
+                        }
+                        "SESSION" -> sessions++
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        return Triple(files, bytes, sessions)
+    }
+
     private fun timestamp(): String =
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
 

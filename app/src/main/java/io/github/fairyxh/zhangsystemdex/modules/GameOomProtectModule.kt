@@ -4,6 +4,7 @@ import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
+import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 /**
  * Game OOM protect module.
@@ -60,6 +61,12 @@ class GameOomProtectModule(
         }
         protectedGames.clear()
         protectedGames.addAll(currentProtected)
+        // Publish live telemetry for the overview page.
+        RuntimeRegistry.put("game_oom_protect", "protectedCount", currentProtected.size)
+        RuntimeRegistry.put("game_oom_protect", "knownGames", games.size)
+        if (currentProtected.isNotEmpty()) {
+            RuntimeRegistry.put("game_oom_protect", "protectedList", currentProtected.joinToString(","))
+        }
         if (currentProtected.isEmpty()
             && protectedGames.isNotEmpty()
         ) {

@@ -5,6 +5,7 @@ import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import org.json.JSONArray
 import org.json.JSONObject
@@ -72,17 +73,20 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
         try {
             val cleanedDir = File(ctx.config.rootDir, "CleanedRubbish")
             cleanedDir.mkdirs()
+            var isolated = 0
             // Safe part: quarantine module-directory leftovers only.
             val modDir = File(ctx.modDir)
             for (suffix in listOf("bak", "out")) {
                 modDir.listFiles { f -> f.name.endsWith(".$suffix") }?.forEach { f ->
                     FileUtils.mvQuoted(f.path, File(cleanedDir, f.name).path)
+                    isolated++
                 }
             }
             val special = setOf("disable", "remove")
             for (f in modDir.listFiles() ?: return) {
                 if (f.name in special) {
                     FileUtils.mvQuoted(f.path, File(cleanedDir, f.name).path)
+                    isolated++
                 }
             }
             // HIGH RISK: moves non-standard user directories under /data/media/*.
@@ -95,8 +99,13 @@ class StorageIsolationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAw
                     FileUtils.chattr(f.path, "-AacDdijsStu")
                     val dest = File(cleanedDir, f.name)
                     FileUtils.mvQuoted(f.path, dest.path)
+                    isolated++
                     Logger.w(name, "已隔离 ${f.path} -> ${dest.path}")
                 }
+            }
+            if (isolated > 0) {
+                RuntimeRegistry.bump("storage_isolation", "isolated", isolated.toLong())
+                RuntimeRegistry.put("storage_isolation", "lastIsolateMs", System.currentTimeMillis())
             }
         } catch (t: Throwable) {
             Logger.w(name, "隔离失败: ${t.message}")

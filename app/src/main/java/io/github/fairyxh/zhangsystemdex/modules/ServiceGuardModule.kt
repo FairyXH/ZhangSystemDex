@@ -6,6 +6,7 @@ import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
 import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import java.io.File
@@ -35,6 +36,8 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
         if (serviceGuardOn) {
             healthLoop()
             keepBluetooth()
+            RuntimeRegistry.bump("service_guard", "healthRuns")
+            RuntimeRegistry.put("service_guard", "lastHealthMs", System.currentTimeMillis())
         }
         if (addOpen) {
             nfcGuard()

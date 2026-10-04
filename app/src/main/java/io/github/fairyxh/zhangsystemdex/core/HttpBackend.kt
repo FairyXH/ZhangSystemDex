@@ -559,6 +559,11 @@ class HttpBackend(
         )
         sb.append(",\"lastCleanFiles\":").append((mc?.extras?.get("lastCleanFiles") as? Long) ?: 0L)
         sb.append(",\"lastCleanBytes\":").append((mc?.extras?.get("lastCleanBytes") as? Long) ?: 0L)
+        // Lifetime totals from the audit log (survive daemon restarts).
+        val cum = RubbishGuard.auditLog().cumulative()
+        sb.append(",\"totalFiles\":").append(cum.first)
+        sb.append(",\"totalBytes\":").append(cum.second)
+        sb.append(",\"totalSessions\":").append(cum.third)
         // Recent audit lines (last 8, most recent first).
         sb.append(",\"recent\":[")
         val tail = RubbishGuard.auditLog().tail(8).reversed()

@@ -880,12 +880,17 @@ function fmtAgo(ms){
   return fmtDuration(ms) + "前";
 }
 function setText(id, v){ const el = $("#"+id); if (el) el.textContent = (v==null||v==="")?"—":v; }
-function tempC(milliC){
-  if (milliC == null || milliC === -2147483648) return "—";
-  // 电池温度与 thermal zone 都是 0.001 °C 或 0.1 °C 的整数；这里按 0.1 处理常见值。
-  const v = Number(milliC);
-  if (Math.abs(v) > 100000) return (v/1000).toFixed(1) + "°C";
-  return (v/10).toFixed(1) + "°C";
+/**
+ * 把后端已归一化的摄氏温度(number 或数字字符串)格式化为 "xx.x°C"。
+ * 后端约定：无效/缺失 = -1 或 null，此时显示 "—"。
+ * 注意：不再在前端做单位猜测（那会导致 60000 被当成 6000℃ 的 bug）。
+ */
+function fmtTempC(c){
+  if (c == null || c === "") return "—";
+  const v = Number(c);
+  // 后端约定 -1 = 无效；物理上环境温度不会低于 -40 或高于 125。
+  if (!isFinite(v) || v === -1 || v < -40 || v > 125) return "—";
+  return v.toFixed(1) + "°C";
 }
 
 async function refreshOverview(){
@@ -917,13 +922,13 @@ async function refreshOverview(){
   setText("ovBatt", (bat.level>=0? bat.level+"%" : "—") + (bat.charging? " ⚡":""));
   setText("ovPlug", bat.pluggedText);
   setText("ovScreen", sys.screenOn ? "点亮" : "息屏");
-  setText("ovBattTemp", tempC(bat.temperature));
+  setText("ovBattTemp", fmtTempC(bat.temperatureC));
   const mem = sys.mem || {};
   setText("ovMem", (mem.usedPercent>=0? mem.usedPercent+"%" : "—"));
   setText("ovMemDetail", mem.totalKb>0 ? (fmtBytes(mem.usedKb*1024)+" / "+fmtBytes(mem.totalKb*1024)) : "—");
   setText("ovStorage", fmtBytes(sys.storage ? sys.storage.dataFree : 0));
   setText("ovLoad", (sys.load1>=0? sys.load1.toFixed(2) : "—"));
-  setText("ovThermal", tempC(sys.thermalMaxMilliC));
+  setText("ovThermal", fmtTempC(sys.thermalMaxC));
   setText("ovProc", sys.procCount);
   setText("ovSysUptime", fmtDuration(sys.uptimeMs));
   setText("ovPowersave", (d.config && d.config.powersave) ? "已开启" : "关闭");

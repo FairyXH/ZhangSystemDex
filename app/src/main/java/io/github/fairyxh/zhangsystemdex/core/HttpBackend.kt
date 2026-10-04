@@ -620,7 +620,8 @@ class HttpBackend(
         sb.append(",\"charging\":").append(bat.charging)
         sb.append(",\"statusText\":").append(q(bat.statusText))
         sb.append(",\"pluggedText\":").append(q(bat.pluggedText))
-        sb.append(",\"temperature\":").append(bat.temperature)
+        sb.append(",\"temperature\":").append(bat.temperature)          // raw (0.1 °C)
+        sb.append(",\"temperatureC\":").append(fmtTempC(bat.temperature, 10.0)) // normalized °C
         sb.append(",\"voltage\":").append(bat.voltage)
         sb.append(",\"currentNow\":").append(bat.currentNow)
         sb.append(",\"healthText\":").append(q(bat.healthText))
@@ -647,10 +648,86 @@ class HttpBackend(
         sb.append(",\"load1\":").append(readLoad1())
         sb.append(",\"uptimeMs\":").append(readUptimeMs())
         sb.append(",\"procCount\":").append(ProcessUtils.processCount())
-        // thermal (max of all thermal zones, in 0.001 °C)
-        sb.append(",\"thermalMaxMilliC\":").append(readThermalMaxMilliC())
+        // thermal: pick the max VALID zone temperature, already normalized to °C.
+        sb.append(",\"thermalMaxC\":").append(readThermalMaxC())
+        sb.append(",\"thermalZoneCount\":").append(thermalValidZoneCount)
         sb.append("}")
         return sb.toString()
+    }
+
+    /**
+     * Format a raw temperature reading as normalized °C with 1 decimal, or `-1`
+     * when the value is missing/invalid. `divisor` converts from the sensor's
+     * unit to °C (e.g. 10.0 for `dumpsys battery` which reports 0.1 °C units).
+     *
+     * Sentinel handling: `Int.MIN_VALUE` (no reading) and any physically absurd
+     * value (outside -40..125 °C) map to -1 so the UI shows "—" instead of a
+     * garbage number like 6000 ℃.
+     */
+    private fun fmtTempC(raw: Int, divisor: Double): String {
+        if (raw == Int.MIN_VALUE) return "-1"
+        val c = raw / divisor
+        if (c < -40.0 || c > 125.0) return "-1"
+        return String.format(java.util.Locale.US, "%.1f", c)
+    }
+
+    /** Number of thermal zones that contributed a valid temperature. */
+    private var thermalValidZoneCount: Int = 0
+
+    /**
+     * Max VALID thermal-zone temperature in °C (1 decimal), or -1 if none.
+     *
+     * Why the filtering: the Linux thermal framework documents the per-zone
+     * `temp` file as millidegrees C (0.001 °C), but on this device many zones
+     * are NOT temperatures at all and must be ignored:
+     *   - `vbat` reports millivolts (e.g. 3986), `pm8550b-ibat-lvl0` reports mA
+     *     (e.g. -93), several `bcl-lvl*` report 0;
+     *   - `mmw0/1/2` report -273000 (a "no sensor" placeholder).
+     * Taking a naive max over all zones produced nonsense (and the frontend's old
+     * unit-guessing turned 60000 into "6000 ℃"). We therefore only accept values
+     * that convert to a plausible temperature, and also skip zones whose type
+     * names are known non-temperature signals.
+     */
+    private fun readThermalMaxC(): String {
+        thermalValidZoneCount = 0
+        var maxMilli = Int.MIN_VALUE
+        try {
+            // /sys/class/thermal and /sys/devices/virtual/thermal expose the SAME
+            // zones (they are two sysfs views). Scanning both double-counts them,
+            // so pick whichever exists, preferring the class symlink.
+            val root = if (File("/sys/class/thermal").isDirectory) File("/sys/class/thermal")
+                       else File("/sys/devices/virtual/thermal")
+            val children = root.listFiles() ?: return fmtTempC(Int.MIN_VALUE, 1000.0)
+            for (c in children) {
+                if (!c.name.startsWith("thermal_zone")) continue
+                val tf = File(c, "temp")
+                if (!tf.exists()) continue
+                val v = tf.readText().trim().toIntOrNull() ?: continue
+                // Reject placeholders / non-temperature signals.
+                if (v <= 0) continue                       // 0 or -273000 placeholders, mV/mA garbage
+                // millidegrees: accept 1..150000 → 0.001..150 °C
+                if (v > 150000) continue
+                val type = try {
+                    File(c, "type").readText().trim()
+                } catch (_: Throwable) {
+                    ""
+                }
+                if (!isTemperatureZone(type)) continue
+                thermalValidZoneCount++
+                if (v > maxMilli) maxMilli = v
+            }
+        } catch (_: Throwable) {
+        }
+        return fmtTempC(maxMilli, 1000.0)
+    }
+
+    /** Heuristic: exclude zone types that are known non-temperature signals. */
+    private fun isTemperatureZone(type: String): Boolean {
+        val t = type.lowercase()
+        // Battery current / voltage rails and charge-level buckets are not temps.
+        if (t.contains("ibat") || t.contains("vbat") || t.contains("bcl-lvl")) return false
+        if (t.contains("current") || t.contains("voltage")) return false
+        return true
     }
 
     /** Read MemTotal/MemAvailable (kB) from /proc/meminfo. */
@@ -681,27 +758,6 @@ class HttpBackend(
         (secs * 1000).toLong()
     } catch (_: Throwable) {
         0L
-    }
-
-    /** Max thermal zone temperature in 0.001 °C (or Int.MIN_VALUE if none). */
-    private fun readThermalMaxMilliC(): Int {
-        return try {
-            var max = Int.MIN_VALUE
-            val roots = listOf(File("/sys/class/thermal"), File("/sys/devices/virtual/thermal"))
-            for (root in roots) {
-                val children = root.listFiles() ?: continue
-                for (c in children) {
-                    if (!c.name.startsWith("thermal_zone")) continue
-                    val tf = File(c, "temp")
-                    if (!tf.exists()) continue
-                    val v = tf.readText().trim().toIntOrNull() ?: continue
-                    if (v > max) max = v
-                }
-            }
-            max
-        } catch (_: Throwable) {
-            Int.MIN_VALUE
-        }
     }
 
     /** Parsed subset of `dumpsys battery` plus the screen state. */

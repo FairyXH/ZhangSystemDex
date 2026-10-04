@@ -390,6 +390,24 @@ async function api(path, body){
 
 function shq(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 
+/* ------------------------------------------------------------------ *
+ * 诊断信标：把关键客户端事件回传后端（/api/diag），便于从 daemon 侧
+ * 观察 WebView 内真实行为。使用 keepalive，不阻塞交互，失败静默。
+ * ------------------------------------------------------------------ */
+function diag(evt, data){
+  try{
+    fetch(apiBase() + "/api/diag", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(Object.assign({ evt: evt, ua: (navigator && navigator.userAgent) || "" }, data || {})),
+      keepalive: true
+    }).catch(function(){});
+  }catch(_){}
+}
+window.addEventListener("error", function(e){
+  diag("js_error", { message: String(e && e.message), src: String(e && e.filename), line: e && e.lineno });
+});
+
 
 /* ------------------------------------------------------------------ *
  * 声明式配置：功能大类 → 底栏 Tab 映射
@@ -647,6 +665,7 @@ async function load(){
   setStatus("");
   renderAll();
   setBusy(false);
+  diag("loaded", { keys: lines.length, ptr: $("#ovDirty") ? "ok" : "noDirtyEl" });
 }
 
 function setStatus(html, isErr){
@@ -806,6 +825,7 @@ function renderCell(key, opts){
     inp.onchange = ()=>{
       setValue(key, inp.checked ? "true" : "false", SWITCH_DESCRIPTIONS[key]);
       markDirty(key, cell);
+      diag("toggle", { key: key, checked: !!inp.checked, dirty: dirtyKeys.size, loaded: loaded });
     };
     const i = document.createElement("i");
     sw.appendChild(inp); sw.appendChild(i);
@@ -832,6 +852,7 @@ function renderCell(key, opts){
       }
       setValue(key, v, SWITCH_DESCRIPTIONS[key]);
       markDirty(key, cell);
+      diag("value", { key: key, val: v, dirty: dirtyKeys.size, loaded: loaded });
     };
     wrap.appendChild(inp);
     if (meta.unit){
@@ -894,6 +915,7 @@ async function save(opts){
   if (!loaded){ if (!opts.auto) toast("配置尚未加载完成", "err"); return; }
   if (dirtyKeys.size === 0){ if (!opts.auto) toast("没有需要保存的改动", "err"); return; }
   setBusy(true);
+  diag("save_start", { auto: !!opts.auto, dirty: dirtyKeys.size, bytes: (lines.join("\n").length) });
   const text = lines.join("\n") + "\n";
   const file = ROOT_DIR + "/switches.conf";
   try{
@@ -905,11 +927,13 @@ async function save(opts){
       dirtyKeys = new Set();
       $$(".cell.modified").forEach(c=> c.classList.remove("modified"));
       toast(opts.auto ? "已自动保存" : "已保存，daemon 将在 60 秒内自动生效", "ok");
+      diag("save_ok", { auto: !!opts.auto });
       setBusy(false);
       // 重新加载以确认磁盘真实内容（load 会重置 dirty 并刷新导航按钮）
       await load();
     } else {
       toast("保存失败：后端未确认写入", "err");
+      diag("save_fail", { reason: "backend_no_confirm" });
       setBusy(false);
     }
   }catch(e){
@@ -1223,7 +1247,16 @@ async function setCleanSwitch(key, on){
   try{
     await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
     await api("/api/reload").catch(()=>{});
-  }catch(e){ toast("保存失败：" + (e.message||e), "err"); }
+    // 立即回读并同步三个开关的真实状态，避免“看起来没生效”。
+    await loadCleanState();
+    toast(on ? "已开启" : "已关闭", "ok");
+    diag("clean_toggle", { key: key, on: !!on });
+  }catch(e){
+    toast("保存失败：" + (e.message||e), "err");
+    diag("clean_toggle_fail", { key: key, on: !!on, err: String(e && e.message || e) });
+    // 失败则回读后端真实值，纠正被误置的界面状态
+    try{ await loadCleanState(); }catch(_){}
+  }
 }
 
 

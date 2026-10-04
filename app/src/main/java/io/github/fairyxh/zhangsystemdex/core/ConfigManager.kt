@@ -109,6 +109,23 @@ class ConfigManager(private val modDir: String) {
         return false
     }
 
+    /**
+     * Force an immediate in-memory reload, bypassing the mtime check.
+     *
+     * Why: `/data/adb` is often tmpfs/overlayfs where `File.lastModified()` has
+     * whole-second granularity. A WebUI toggle writes the file and reloads within
+     * the same second as a previous reload, so `reloadSwitchesIfChanged()` sees an
+     * unchanged mtime and SKIPS the reload -> `/api/rubbish/status` and friends
+     * keep serving the stale value, which made the clean-tab switches look like
+     * they "don't work". A control-plane write must be reflected immediately.
+     */
+    fun reloadSwitches(): Boolean {
+        val lm = if (switchesFile.exists()) switchesFile.lastModified() else 0L
+        switchesLastModified = lm
+        loadSwitches()
+        return true
+    }
+
     private fun loadSwitches() {
         if (!switchesFile.exists()) {
             writeSwitches()

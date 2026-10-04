@@ -40,6 +40,13 @@ class HttpBackend(
 
     private var server: ServerSocket? = null
 
+    /** Dedicated accept thread: the periodic DaemonLoop tick is far too slow for
+     *  HTTP (1 request/second). We run our own blocking accept loop so the WebUI
+     *  is snappy, and hand each connection to a short-lived worker thread so one
+     *  slow request (e.g. a big rubbish scan) never blocks the others. */
+    @Volatile
+    private var acceptThread: Thread? = null
+
     @Volatile
     private var boundPort: Int = port
 
@@ -49,46 +56,58 @@ class HttpBackend(
     override fun onStart() {
         try {
             // Bind to loopback only: never reachable from Wi-Fi/mobile network.
-            val ss = ServerSocket(port, 64, InetAddress.getByName("127.0.0.1"))
+            val ss = ServerSocket(port, 128, InetAddress.getByName("127.0.0.1"))
+            ss.soTimeout = 1000
             server = ss
             boundPort = ss.localPort
             Logger.i(name, "HTTP 后端已监听 http://127.0.0.1:$boundPort （仅回环）")
+            startAcceptLoop(ss)
         } catch (t: Throwable) {
             Logger.e(name, "HTTP 后端监听失败（端口 $port）", t)
         }
     }
 
+    private fun startAcceptLoop(ss: ServerSocket) {
+        if (acceptThread != null) return
+        val t = Thread({
+            while (server === ss && !ss.isClosed) {
+                val sock = try {
+                    ss.accept()
+                } catch (_: java.net.SocketTimeoutException) {
+                    continue
+                } catch (_: Throwable) {
+                    break
+                }
+                // One short-lived thread per connection: concurrent + non-blocking.
+                Thread({
+                    try {
+                        handle(sock)
+                    } catch (e: Throwable) {
+                        Logger.w(name, "处理请求失败: ${e.message}")
+                    } finally {
+                        try { sock.close() } catch (_: Throwable) {}
+                    }
+                }, "HttpConn").apply { isDaemon = true }.start()
+            }
+        }, "HttpAccept")
+        t.isDaemon = true
+        acceptThread = t
+        t.start()
+    }
+
     override fun onStop() {
-        try {
-            server?.close()
-        } catch (_: Throwable) {
-        }
+        try { server?.close() } catch (_: Throwable) {}
         server = null
+        acceptThread = null
         Logger.i(name, "HTTP 后端已停止")
     }
 
     override fun tick() {
-        val ss = server ?: run {
-            // Bind failed earlier (port in use). Retry lazily every tick.
-            onStart()
-            return
-        }
-        try {
-            val sock = ss.accept()
-            try {
-                handle(sock)
-            } catch (t: Throwable) {
-                Logger.w(name, "处理请求失败: ${t.message}")
-            } finally {
-                try {
-                    sock.close()
-                } catch (_: Throwable) {
-                }
-            }
-        } catch (t: Throwable) {
-            // accept() throws when the socket is closed on shutdown: ignore.
-            if (server != null) Logger.w(name, "accept 失败: ${t.message}")
-        }
+        // No-op: accept is handled by the dedicated accept thread started in
+        // onStart(). The DaemonLoop tick only exists because the base class
+        // requires it. (Previously this single accept() per 1000ms tick made the
+        // WebUI take ~1s per request -> "保存很慢很卡".)
+        if (server == null) onStart()
     }
 
     // ------------------------------------------------------------------
@@ -168,6 +187,7 @@ class HttpBackend(
             "/api/powerstatus" -> apiPowerStatus()
             "/api/switch/set" -> apiSwitchSet(method, body)
             "/api/reload" -> apiReload()
+            "/api/diag" -> apiDiag(method, body)
             // ===== 垃圾清理 =====
             "/api/rubbish/rules" -> apiRubbishRules()
             "/api/rubbish/scan" -> apiRubbishScan(method, body, dryRun = true)
@@ -260,6 +280,12 @@ class HttpBackend(
                 tmp.delete()
             }
             Logger.i(name, "已写入 ${f.absolutePath} (${content.length} chars)")
+            // Main save path writes switches.conf: force an immediate in-memory
+            // reload so the daemon picks the change up without waiting for the
+            // 60s mtime-gated cycle (which can be skipped due to 1s mtime granularity).
+            if (f.name == "switches.conf") {
+                try { ctx.config.reloadSwitches() } catch (_: Throwable) {}
+            }
             jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"OK\"}")
         } catch (t: Throwable) {
             jsonError("写入失败: ${t.message}")
@@ -299,6 +325,9 @@ class HttpBackend(
                 f.writeText(text, Charsets.UTF_8)
                 tmp.delete()
             }
+            // Force a synchronous in-memory reload so /api/rubbish/status etc.
+            // reflect the change immediately (mtime has 1s granularity on /data/adb).
+            ctx.config.reloadSwitches()
             jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"OK\"}")
         } catch (t: Throwable) {
             jsonError("保存失败: ${t.message}")
@@ -514,10 +543,32 @@ class HttpBackend(
 
     /** Force an immediate switches.conf reload + module resync without waiting 60s. */
     private fun apiReload(): String {
-        val changed = ctx.config.reloadSwitchesIfChanged()
-        // Touch the file mtime comparison is done by daemon; we just report.
-        return jsonRaw("{\"ok\":true,\"reloaded\":$changed}")
+        // Force (not mtime-gated): WebUI writes then reloads within the same second,
+        // and /data/adb mtime granularity would otherwise skip the reload.
+        ctx.config.reloadSwitches()
+        return jsonRaw("{\"ok\":true,\"reloaded\":true}")
     }
+    /**
+     * Diagnostic sink for the WebUI. The page POSTs small JSON blobs describing
+     * client-side events (toggle, error, page-load) so we can see — from the
+     * daemon side — what really happens inside the WebView, independent of the
+     * `log_enabled` master switch: diagnostics are ALWAYS written to a dedicated
+     * `webui_diag.log` so they survive even when normal logging is off.
+     */
+    private fun apiDiag(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        try {
+            val line = timestampForDiag() + " " + body.replace("\n", " ")
+            val dir = File(ctx.config.rootDir, "log")
+            dir.mkdirs()
+            File(dir, "webui_diag.log").appendText(line + "\n")
+        } catch (_: Throwable) {
+        }
+        return jsonRaw("{\"ok\":true}")
+    }
+    private fun timestampForDiag(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+            .format(java.util.Date())
 
     // ------------------------------------------------------------------
     // Rubbish cleaning endpoints

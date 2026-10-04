@@ -757,3 +757,45 @@ daemon 进程即可生效——**无需刷 zip、无需重启设备**。
 模块启停；任何新增开关若要"即时生效"，必须确保其 `enabled` 被纳入 `entries`，
 且走 `reloadSwitches()` 路径（已自动触发回调）。运行时排障可用
 `for t in /proc/$(cat /data/adb/Zhang/daemon.pid)/task/*/comm; do cat $t; done` 看模块线程是否在跑。
+---
+## 20. 概览页「实时总览」（2026-10-04 08:55）
+**需求**：概览页显示尽可能全面的实时信息——各功能运行状态、清理了多少垃圾、
+省电运行如何等，且要"实时"。
+**后端：新增 `GET /api/overview`（HttpBackend.kt）** 一次性聚合返回：
+- `modules[]`：每个模块 `key/label/desc/enabled/running/tickCount/lastTickAgoMs/
+  lastAction/counters/extras`。**`running` 是线程级真相**（模块线程是否在跑），
+  与 `enabled`（开关是否打开）区分开。
+- `power{}`：省电子系统快照（`policyLevel/Text`、各类计数、`lastAction`、
+  `lowBatteryThreshold`、`screenOffCount/screenOnCount`）。
+- `clean{}`：`masterEnabled`、`ruleTotal/ruleEnabled`、`lastSession`、
+  累计 `cleanedFiles/cleanedBytes/cleanRuns`、`lastCleanAgoMs`、`recent[]`（审计尾部）。
+- `system{}`：`battery{}`、`screenOn`、`mem{}`（totalKv/availKb/usedKb/usedPercent）、
+  `storage{dataTotal,dataFree}`、`load1`、`uptimeMs`、`procCount`、`thermalMaxMilliC`。
+- `backend{}`：`pid/port/uptimeMs/dexMd5/dexSize/moduleDir/configRoot`。
+- `config{}`：`switchCount/logEnabled/powersave`。
+**新增 `core/RuntimeRegistry.kt`（全局运行时状态注册表）**：跨线程共享模块运行态。
+- `Main` 启动时把每个 `ModuleEntry` 注册进表（带 label/desc）；`syncModules()`
+  里 `setEnabled/setRunning`；模块启动时 `module.registryKey = entry.name`。
+- `DaemonLoop` 每轮 `tick()` 成功后自动 `RuntimeRegistry.markTick(key)` 上报心跳。
+- `SystemTuningModule` 执行清理后 `bump("cleanFiles"/"cleanBytes"/"cleanRuns")`
+  并写 `extras["lastCleanMs"]` 等，供概览展示"清理了多少垃圾"。
+- 辅助：`ProcessUtils.selfPid()/processCount()`、`ConfigManager.allSwitchKeys()`。
+**前端：重写概览页（index.html）**：
+- 区块：实时总览（后端/daemon/配置/改动/dex 版本）→ 系统实时状态（12 项）→
+  功能模块运行状态（列表，运行中绿点+心跳+计数，按 运行>启用>停止 排序）→
+  省电优化运行状况 → 垃圾清理运行状况（含最近审计）→ 快速开关。
+- `refreshOverview()` 每 **2 秒** 轮询 `/api/overview`；`document.hidden` 或
+  非概览 Tab 时**暂停刷新**（省电）；切回概览 Tab 立即刷新一次。
+- 新增工具函数 `fmtDuration/fmtAgo/setText/tempC`；CSS 新增 `.live-dot`/`.ovmod` 等。
+**验证**：
+- 真机 `GET /api/overview` 返回真实数据（pid/uptime/dex md5/电池 81%/内存 79%/
+  load 9.51/950 进程/温度 77.1°C/清理审计行/模块心跳 tickCount）。
+- 无头 harness `overview_harness.mjs`（linkedom，mock overview JSON）**27/27 PASS**；
+  回归 `save_harness`(17) / `clean_harness`(15) / `power_harness`(22) 全通过。
+**产物**：`Main.dex` = `3ecc23c6bc1ce431cd968bfa1ec4bbb2`（2,533,308 B）；
+`webroot/index.html` = `4549c5729d522f5e6229394093090c64`。已通过 `部署母版到已安装.sh`
+部署并重启 dex。Git：`51f8cd6`。
+**⚠ 扩展点（新 Agent 必读）**：任何模块要往概览暴露更多信息，只需
+`RuntimeRegistry.get("<entry.name>")?.bump("计数名")` 或 `put("字段", 值)`；
+`/api/overview` 会自动带出它的 `counters`/`extras`，前端模块行也会通用渲染
+`extras`（除 lastClean* 外）。新增开关的 label/desc 在 `Main.kt` 的 `ModuleEntry`。

@@ -462,6 +462,9 @@ class AppManagerModule(private val ctx: DexContext) {
      *  - 每次会改变包状态前，滚动备份 `packages.xml` 一次。
      */
     private fun disableApp(pkg: String) {
+        // 安全/效率：不存在的包直接跳过——对其查询/停用只会产生无意义的 shell 调用
+        // 与「Unknown package」告警噪声（会淹没真实问题），且绝不触碰包数据库。
+        if (!AppListProvider.installed(pkg)) return
         // 幂等：已经是「停用」状态则直接返回，杜绝重复改写包数据库。
         val state = FrameworkOps.applicationEnabledState(pkg)
         if (state == android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||

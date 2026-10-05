@@ -54,6 +54,14 @@ class RubbishCleaner(private val config: ConfigManager) {
         val skipReason: String,
         val samples: List<String>,
         val rejected: List<RubbishGuard.Rejected> = emptyList(),
+        /**
+         * 该规则是否「仅列出不删」（[CleanRule.listOnly]）。
+         * 关键：listOnly 规则统计到的是「值得人工复核的文件占用」，
+         * 并非「可回收空间」。汇总的 totalFiles/totalBytes 必须排除它们，
+         * 否则像 `big_files_private`（整个 /data/user 下 >50MB 文件，
+         * 含游戏资源、微信数据库等正常数据）会把「可清理」虚高到数十 GB。
+         */
+        val listOnly: Boolean = false,
     )
 
     data class Summary(
@@ -75,8 +83,12 @@ class RubbishCleaner(private val config: ConfigManager) {
         for (rule in rules) {
             val r = scanRule(rule, maxSamples)
             results += r
-            totalFiles += r.files
-            totalBytes += r.bytes
+            // ★ 仅列出不删（listOnly）的规则不计入「可清理」总量：
+            //   它们统计的是可复核的大文件占用，而非可回收空间。
+            if (!rule.listOnly) {
+                totalFiles += r.files
+                totalBytes += r.bytes
+            }
         }
         return Summary(results, totalFiles, totalBytes, dryRun = true)
     }
@@ -84,12 +96,12 @@ class RubbishCleaner(private val config: ConfigManager) {
     private fun scanRule(rule: CleanRule, maxSamples: Int): RuleResult {
         val skip = shouldSkipForRunning(rule)
         if (skip != null) {
-            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList())
+            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList(), listOnly = rule.listOnly)
         }
         // 深度扫描模式：走专用实现（带缓存增量）
         if (isDeepMode(rule.mode)) {
             val deep = scanDeep(rule, maxSamples)
-            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, deep.files, deep.bytes, false, "", deep.samples)
+            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, deep.files, deep.bytes, false, "", deep.samples, listOnly = rule.listOnly)
         }
         // 卸载残留：必须运行时校验「包是否仍安装」，绝不做无差别匹配。
         if (rule.mode == MatchMode.UNINSTALLED_SCAN) {
@@ -97,7 +109,7 @@ class RubbishCleaner(private val config: ConfigManager) {
             val samples = leftovers.take(maxSamples).map { it.path }
             var bytes = 0L
             leftovers.forEach { bytes += dirSize(it) }
-            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, leftovers.size, bytes, false, "", samples)
+            return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, leftovers.size, bytes, false, "", samples, listOnly = rule.listOnly)
         }
         val samples = ArrayList<String>()
         var files = 0
@@ -125,7 +137,7 @@ class RubbishCleaner(private val config: ConfigManager) {
                 }
             }
         }
-        return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples)
+        return RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, listOnly = rule.listOnly)
     }
 
     /** 测试用：强制单线程扫描（保证 SelfTest 可确定性复现）。 */
@@ -584,14 +596,14 @@ class RubbishCleaner(private val config: ConfigManager) {
         for (rule in rules) {
             val skip = shouldSkipForRunning(rule)
             if (skip != null) {
-                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList())
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList(), listOnly = rule.listOnly)
                 continue
             }
             // 只读规则（listOnly）：clean() 绝不删除，直接以空结果返回。
             // 这是所有模式（含 OLDER_THAN/GLOB/DIR_*）的统一兜底，避免仅靠
             // cleanDeep 分支检查而遗漏普通模式。
             if (rule.listOnly) {
-                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, "仅列出（不删除）", emptyList())
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, "仅列出（不删除）", emptyList(), listOnly = true)
                 continue
             }
             handledRules += rule.id
@@ -953,6 +965,7 @@ class RubbishCleaner(private val config: ConfigManager) {
                     key("risk"); value(r.risk.name); comma()
                     key("files"); value(r.files); comma()
                     key("bytes"); value(r.bytes); comma()
+                    key("listOnly"); value(r.listOnly); comma()
                     key("skipped"); value(r.skipped); comma()
                     key("skipReason"); value(r.skipReason); comma()
                     key("rejectedCount"); value(r.rejected.size); comma()

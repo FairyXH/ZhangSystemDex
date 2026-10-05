@@ -1144,3 +1144,26 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 - `Main.dex` = `ef26d8fca55df8e84c9776d0ecaac0d0`（2,573,624 B，含 HMA 白名单化 + 此前暖扫修复 + AppManager 修复）
 - 已同步：模块目录（两处）、仓库根 Main.dex、母版、zip。**取代** §32 的 zip（84de99b6…）。
 **SelfTest**：54 PASS / 1 FAIL（AppOps 环境项）/ 2 WARN / 7 SKIP（total 64）。
+---
+## 35. 修复：清理页「扫描」虚高到 34.3GB（listOnly 污染可清理总量）（2026-10-05）
+**现象**：WebUI 清理页扫描显示「可清理 28382 文件 · 34.3GB」。
+**根因**：`RubbishCleaner.scan()` 汇总时把**所有**规则（含 `listOnly=true` 的仅列出规则）
+的 files/bytes 无差别累加进 `Summary.totalFiles/totalBytes`。
+其中 `big_files_private`（扫描整个 `/data/user/<u>` 下 >50MB 文件，仅列出不删）
+单条就报 **34,955,159,800 B**，占总量 94%——命中的是游戏资源/微信数据库等正常数据。
+**修复**：
+- `RubbishCleaner.kt`：`RuleResult` 增 `listOnly` 字段；`scan()` 汇总 `if (!rule.listOnly)` 才累加
+  （`clean()` 的 listOnly 分支本就 `continue`，无需改）；`summaryToJson` 输出 `listOnly`。
+- `app/src/main/assets/webroot/index.html`（= 母版 index.html）：扫描结果里 listOnly 规则显示
+  「仅列出 N 文件 · X（不计入可清理）」。
+**实时验证**（重启 dex，POST /api/rubbish/scan 同一规则集合）：
+- 修复前 TOTAL = 34,924,859,619 B（34.9GB）→ 修复后 TOTAL = **1,821,617,647 B（约 1.82GB）**。
+- `big_files_private` 仍返回 275 文件 / 34.9GB，带 `listOnly:true`，不再计入 TOTAL。
+**产物**：`Main.dex` md5 **`ae15d5380cc9e5e9cff0655d17add0bf`**（2,574,036 B）；
+`webroot/index.html` md5 **`ebfef0a0c10bde7b77b35c0bc5b8ec51`**（89,721 B）。
+已部署：模块目录 Main.dex + /data/adb/Zhang/Main.dex + 模块 webroot/index.html；
+仓库根 Main.dex、`app/src/main/assets/webroot/index.html`、母版 webroot 均已同步。
+**SelfTest**：清理.* 12 PASS / 0 FAIL（列 0 删除守卫、审查 17/17 均过）；
+全局 54 PASS / 1 FAIL（既存 AppOps WRITE_SETTINGS，与本改动无关）/ 2 WARN / 7 SKIP。
+**教训**：汇总口径必须区分「只读/信息型」与「可回收」两类规则；新增 listOnly 规则自动豁免。
+详见 `docs/incidents/2026-10-05_rubbish_scan_total_inflated.md`。

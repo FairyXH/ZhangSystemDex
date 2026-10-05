@@ -172,6 +172,23 @@
   .risk.high{background:rgba(255,59,48,.18);color:var(--err)}
   .cleanrule .size{color:var(--dim);font-size:12px;font-family:ui-monospace,monospace;margin-top:2px}
   .cleanrule .note{color:var(--dim);font-size:11.5px;margin-top:2px;line-height:1.35}
+  /* ---------- OOM 保护名单 ---------- */
+  .oomapps{background:var(--grouped);border-radius:var(--radius);overflow:hidden;
+    max-height:320px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .oomapps .oapp{display:flex;align-items:center;gap:10px;padding:9px 16px;position:relative}
+  .oomapps .oapp + .oapp::before{content:"";position:absolute;left:16px;right:0;top:0;height:1px;background:var(--sep)}
+  .oomapps .oapp .oname{flex:1;min-width:0}
+  .oomapps .oapp .opkg{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .oomapps .oapp .osys{font-size:10px;color:var(--dim);border:1px solid var(--sep);border-radius:5px;padding:0 5px;margin-left:6px}
+  .oomapps .oempty{color:var(--dim);padding:20px 16px;text-align:center;font-size:13px}
+  .oomedit{width:100%;box-sizing:border-box;min-height:150px;margin-top:10px;
+    border:0;border-radius:var(--radius);background:var(--grouped);color:var(--txt);
+    font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.5;padding:12px 14px;resize:vertical}
+  .txt{background:var(--grouped);border:0;border-radius:9px;padding:7px 10px;color:var(--txt);
+    font-size:13px;font-family:inherit}
+  .oomapps::-webkit-scrollbar{width:6px}
+  .oomapps::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:3px}
   .grouphdr{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;
     padding:14px 4px 7px;font-weight:600}
   .modal{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.45);display:none;
@@ -351,6 +368,42 @@
     <div class="section"><div class="stitle">调优循环参数</div>
       <div class="list" id="tuningList"></div>
       <div class="sfoot">留空使用默认值；修改后建议重启 daemon 生效。</div></div>
+    <div class="section"><div class="stitle">OOM 保护名单</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#af52de">🛡</div>
+          <div class="body"><div class="k">OOM 保护总开关</div>
+            <div class="d">保活名单内应用：提升 oom_score_adj 与进程优先级；安全上限 -900，不超过系统核心；关闭时自动还原</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swOomMaster"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#34c759">📋</div>
+          <div class="body"><div class="k">受保护进程</div>
+            <div class="d" id="oomStatus">—</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnOomRefresh">刷新</button></div></div>
+      </div>
+      <div class="sfoot">
+        <b>安全约束：</b>列表应用的 oom_score_adj 被钳制到 -900（system_server 同级），
+        永不越过系统核心；仅温和提升，不做 RT 抢占。名单以「一行一个包名」保存，<code>#</code> 开头为注释。
+      </div>
+    </div>
+    <div class="section"><div class="stitle">OOM 保护名单 · 应用选择器</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#0a84ff">🔎</div>
+          <div class="body"><div class="k">搜索应用</div>
+            <div class="d">按包名或应用名过滤，勾选即加入名单</div></div>
+          <div class="val"><input class="txt" id="oomSearch" placeholder="搜索…" style="width:150px"></div></div>
+      </div>
+      <div id="oomAppList" class="oomapps"></div>
+      <div class="sfoot">勾选的应用会写入下方名单（一行一个包名）。系统应用默认隐藏，可在搜索框输入 <code>@sys</code> 显示。</div>
+    </div>
+    <div class="section"><div class="stitle">OOM 保护名单 · 手动编辑</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#8e8e93">✎</div>
+          <div class="body"><div class="k">名单（一行一个包名）</div>
+            <div class="d" id="oomFileHint">正在读取…</div></div>
+          <div class="val"><button class="btn sm primary" id="btnOomSave">保存</button></div></div>
+      </div>
+      <textarea id="oomText" class="oomedit" spellcheck="false" placeholder="com.ai.assistance.operit"></textarea>
+      <div class="sfoot">默认内置 <code>com.ai.assistance.operit</code>。保存后立即生效（无需重启）；非法行会被自动过滤。</div>
+    </div>
     <div class="section"><div class="stitle">服务器模式外部命令</div>
       <div class="list" id="extcmdList"></div>
       <div class="sfoot">字符串配置项，留空则跳过。</div></div>
@@ -1329,6 +1382,125 @@ async function saveBgList(){
 }
 
 /* ------------------------------------------------------------------ *
+ * OOM 保护名单：总开关 / 状态 / 应用选择器 / 手动编辑
+ * ------------------------------------------------------------------ */
+let OOM_APPS = [];        // /api/oom/apps 返回的应用清单
+let OOM_SELECTED = new Set(); // 选择器当前勾选（= 名单包名集合）
+
+// 是否显示系统应用：搜索框输入 @sys 时开启。
+let OOM_SHOW_SYS = false;
+
+function oomParseList(text){
+  const out = [];
+  const seen = new Set();
+  String(text || "").replace(/\r\n/g, "\n").split("\n").forEach(function(line){
+    let s = line.trim();
+    if (!s || s.charAt(0) === "#") return;
+    s = s.split("#")[0].trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(s)) return;
+    if (seen.has(s)) return;
+    seen.add(s); out.push(s);
+  });
+  return out;
+}
+function oomRenderText(){
+  $("#oomText").value = OOM_SELECTED.size ? (Array.from(OOM_SELECTED).join("\n") + "\n") : "";
+}
+function renderOomApps(){
+  const host = $("#oomAppList");
+  if (!host) return;
+  const q = ($("#oomSearch") && $("#oomSearch").value || "").trim().toLowerCase();
+  OOM_SHOW_SYS = q === "@sys" || q.indexOf("@sys") >= 0;
+  const kw = q.replace("@sys", "").trim();
+  const shown = OOM_APPS.filter(function(a){
+    if (!OOM_SHOW_SYS && a.system) return false;
+    if (!kw) return true;
+    return a.pkg.toLowerCase().indexOf(kw) >= 0;
+  });
+  if (!shown.length){ host.innerHTML = '<div class="oempty">没有匹配的应用</div>'; return; }
+  const frag = document.createDocumentFragment();
+  shown.forEach(function(a){
+    const row = document.createElement("div");
+    row.className = "oapp";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = OOM_SELECTED.has(a.pkg);
+    cb.onchange = function(){
+      if (cb.checked) OOM_SELECTED.add(a.pkg); else OOM_SELECTED.delete(a.pkg);
+      oomRenderText();
+    };
+    const body = document.createElement("div");
+    body.className = "oname";
+    const pk = document.createElement("div");
+    pk.className = "opkg";
+    pk.textContent = a.pkg;
+    body.appendChild(pk);
+    if (a.system){
+      const tag = document.createElement("span");
+      tag.className = "osys"; tag.textContent = "系统";
+      pk.appendChild(tag);
+    }
+    row.appendChild(cb); row.appendChild(body);
+    frag.appendChild(row);
+  });
+  host.innerHTML = "";
+  host.appendChild(frag);
+}
+async function loadOom(){
+  // 状态（总开关 + 受保护进程）
+  try{
+    const st = await api("/api/oom/status");
+    const m = $("#swOomMaster");
+    if (m) m.checked = !!(st && st.enabled);
+    const prot = (st && st.protected) || [];
+    const el = $("#oomStatus");
+    if (el) el.textContent = prot.length
+      ? ("当前保护 " + prot.length + " 个应用：" + prot.join("、"))
+      : "当前没有运行中的受保护进程";
+  }catch(e){ /* 后端未就绪时静默 */ }
+  // 名单文本
+  try{
+    const r = await api("/api/oom/read");
+    OOM_SELECTED = new Set(oomParseList((r && r.content) || ""));
+    oomRenderText();
+    const h = $("#oomFileHint");
+    if (h) h.textContent = (r && r.path) ? ("文件：" + r.path) : "文件：—";
+  }catch(e){ toast("读取 OOM 名单失败：" + (e && e.message ? e.message : e), "err"); }
+  // 应用选择器
+  try{
+    if (!OOM_APPS.length){
+      const r = await api("/api/oom/apps");
+      OOM_APPS = (r && r.apps) || [];
+    }
+    renderOomApps();
+  }catch(e){
+    const host = $("#oomAppList");
+    if (host) host.innerHTML = '<div class="oempty">无法读取应用清单：' + esc(String(e.message||e)) + '</div>';
+  }
+}
+async function saveOom(){
+  const text = ($("#oomText") && $("#oomText").value) || "";
+  const normalized = oomParseList(text);
+  try{
+    const r = await api("/api/oom/write", { content: normalized.join("\n") + "\n" });
+    OOM_SELECTED = new Set((r && r.packages) || normalized);
+    oomRenderText();
+    renderOomApps();
+    toast("OOM 名单已保存（" + OOM_SELECTED.size + " 项）", "ok");
+  }catch(e){
+    toast("保存失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
+async function setOomSwitch(key, on){
+  try{
+    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
+    toast(on ? "OOM 保护已开启" : "OOM 保护已关闭（还原中）", "ok");
+  }catch(e){
+    toast("切换失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * 底栏 Tab 切换
  * ------------------------------------------------------------------ */
 const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", clean:"清理", settings:"设置" };
@@ -1342,6 +1514,7 @@ function switchTab(name){
   if (name === "home") refreshOverview();
   if (name === "power") refreshPowerStatus();
   if (name === "clean") loadCleanState();
+  if (name === "settings") loadOom();
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
 }
@@ -1661,6 +1834,11 @@ function bind(){
   // 在线更新（免重启）
   const boc = $("#btnOtaCheck");  if (boc) boc.onclick = otaCheck;
   const bou = $("#btnOtaUpdate"); if (bou) bou.onclick = otaUpdate;
+  // OOM 保护名单
+  const oom = $("#swOomMaster"); if (oom) oom.onchange = ()=> setOomSwitch("oom_protect_enable", oom.checked);
+  const oomR = $("#btnOomRefresh"); if (oomR) oomR.onclick = loadOom;
+  const oomS = $("#btnOomSave"); if (oomS) oomS.onclick = saveOom;
+  const oomQ = $("#oomSearch"); if (oomQ) oomQ.oninput = renderOomApps;
   $$(".tab").forEach(t=> t.onclick = ()=> switchTab(t.dataset.tab));
 }
 

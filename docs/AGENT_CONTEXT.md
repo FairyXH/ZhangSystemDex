@@ -1081,3 +1081,12 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 否则 `重启Dex.sh`（→`service.sh`）会用模块目录里的旧 dex 覆盖。
 **日志配置陷阱**：daemon 实际读 `/data/adb/Zhang/config.conf`（root_dir），
 不是 `/data/adb/modules/Zhang/config.conf`；调 `log_enabled` 要改前者。
+
+---
+## 31. 重建发布：含暖扫命中率修复的 zip（2026-10-05 10:2x）
+**产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,197,503 字节**，100 文件，pack 30s，内置 SHA256 逐文件比对 100/100 一致。
+- **SHA256 = `7200199f6f5758f9be1c7199a5cd39243da965d66c76bffd45bc83d28d29971e`**
+- `unzip -t` 零错误；zip 内 `Main.dex` = `6eb2d5a15a3a0742c06c1cb278fd6e8a`（含 §30 暖扫修复）。
+- 母版 `webroot/index.html` = `063d57cf47646555ca607bbdaa4ea7cc`（不变）。
+**取代**：§29 的 zip（SHA256 7188a43f…）已被本版取代，勿再使用旧包。

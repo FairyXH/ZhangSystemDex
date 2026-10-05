@@ -25,6 +25,7 @@ import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.NetworkModule
+import io.github.fairyxh.zhangsystemdex.modules.OnlineRuleModule
 import io.github.fairyxh.zhangsystemdex.modules.PerformanceModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServerModeModule
@@ -242,6 +243,13 @@ object Main {
             // 防护类功能：不受 powersave_enable 影响（省电模式不关闭防护）
             ModuleEntry("skip_mount_guard", { sw.switch("skip_mount_guard_enable") }, label = "挂载防护", desc = "删除 skip_mount 等残留文件") {
                 SkipMountGuardModule(ctx)
+            },
+            // 在线规则订阅：定时拉取用户配置的规则直链（多套），失败不影响主清理。
+            ModuleEntry(
+                "online_rules", { sw.switch("online_rules_enable") },
+                label = "在线规则订阅", desc = "定期拉取规则直链（多套），合并进清理规则",
+            ) {
+                OnlineRuleModule(ctx)
             },
         )
 

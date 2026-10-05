@@ -1,10 +1,14 @@
 package io.github.fairyxh.zhangsystemdex.core
 
 import io.github.fairyxh.zhangsystemdex.core.rubbish.JsonBuilder
+import io.github.fairyxh.zhangsystemdex.core.rubbish.OnlineRuleStore
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishProgress
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDoc
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDocCodec
 import io.github.fairyxh.zhangsystemdex.core.rubbish.UserGuardRules
+import io.github.fairyxh.zhangsystemdex.modules.OnlineRuleModule
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -205,6 +209,19 @@ class HttpBackend(
             "/api/rubbish/history" -> apiRubbishHistory(query)
             "/api/rubbish/guard/read" -> apiRubbishGuardRead()
             "/api/rubbish/guard/write" -> apiRubbishGuardWrite(method, body)
+            // ===== 在线规则（多源直链 + 定期拉取）=====
+            "/api/rules/online/list" -> apiOnlineList()
+            "/api/rules/online/add" -> apiOnlineAdd(method, body)
+            "/api/rules/online/update" -> apiOnlineUpdate(method, body)
+            "/api/rules/online/remove" -> apiOnlineRemove(method, body)
+            "/api/rules/online/fetch" -> apiOnlineFetch(method, body)
+            "/api/rules/online/content" -> apiOnlineContent(query)
+            // ===== 规则编辑器（校验/导入/导出/用户规则）=====
+            "/api/rules/validate" -> apiRulesValidate(method, body)
+            "/api/rules/user/get" -> apiUserRulesGet()
+            "/api/rules/user/set" -> apiUserRulesSet(method, body)
+            "/api/rules/user/export" -> apiRulesExport()
+            "/api/rules/import" -> apiRulesImport(method, body)
             // ===== OOM 保护名单 =====
             "/api/oom/read" -> apiOomRead()
             "/api/oom/write" -> apiOomWrite(method, body)
@@ -1295,6 +1312,266 @@ class HttpBackend(
         } catch (t: Throwable) {
             jsonError("写入失败: ${t.message}")
         }
+    }
+
+    // ==================================================================
+    // 在线规则 / 规则编辑器
+    //
+    // 数据全部落在 {rootDir}/online_rules/ 与 {rootDir}/user_rules.json，
+    // 通过 [OnlineRuleStore] 读写（含 JSON 校验、只增不删合并、大小/超时限制）。
+    //
+    // 安全：所有来自这里的规则在扫描/删除时仍经 RubbishGuard 与
+    // JunkPatterns.isProtectedPath 审查——数据驱动不降低安全性。
+    // ==================================================================
+
+    private fun rulesRoot(): File = File(ctx.config.rootDir)
+
+    /** 使 RubbishCleaner 的规则合并缓存失效（规则变更后必须调用）。 */
+    private fun invalidateRuleCache() {
+        try { cleaner().invalidateRuleCache() } catch (_: Throwable) {}
+    }
+
+    /** 列出所有订阅源（含状态/上次拉取/规则数），并附带总览计数。 */
+    private fun apiOnlineList(): String {
+        val sources = OnlineRuleStore.listSources(rulesRoot())
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"masterEnabled\":").append(ctx.config.switch(OnlineRuleModule.SWITCH_KEY))
+        sb.append(",\"dir\":").append(q(File(rulesRoot(), OnlineRuleStore.DIR_NAME).path))
+        sb.append(",\"sources\":[")
+        sources.forEachIndexed { i, s ->
+            if (i > 0) sb.append(',')
+            sb.append('{')
+            sb.append("\"id\":").append(q(s.id))
+            sb.append(",\"name\":").append(q(s.name))
+            sb.append(",\"url\":").append(q(s.url))
+            sb.append(",\"enabled\":").append(s.enabled)
+            sb.append(",\"intervalHours\":").append(s.intervalHours)
+            sb.append(",\"lastFetchMs\":").append(s.lastFetchMs)
+            sb.append(",\"lastStatus\":").append(q(s.lastStatus))
+            sb.append(",\"lastError\":").append(q(s.lastError))
+            sb.append(",\"ruleCount\":").append(s.ruleCount)
+            sb.append(",\"sha256\":").append(q(s.sha256))
+            sb.append(",\"hasCache\":").append(OnlineRuleStore.readSourceContent(rulesRoot(), s.id) != null)
+            sb.append('}')
+        }
+        sb.append("]}")
+        return jsonRaw(sb.toString())
+    }
+
+    /** 新增订阅源：{name,url,intervalHours,enabled}，创建后立即尝试拉取一次。 */
+    private fun apiOnlineAdd(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val name = obj["name"]?.trim().orEmpty()
+        val url = obj["url"]?.trim().orEmpty()
+        if (url.isEmpty()) return jsonError("缺少 url")
+        if (!OnlineRuleStore.isHttpUrl(url)) return jsonError("URL 必须是 http(s) 直链")
+        val interval = (obj["intervalHours"]?.toIntOrNull() ?: 24).coerceIn(1, 24 * 30)
+        val enabled = obj["enabled"]?.equals("true", true) ?: obj["enabled"]?.equals("1") ?: true
+        val id = OnlineRuleStore.addSource(rulesRoot(), name, url, interval, enabled)
+            ?: return jsonError("新增失败（URL 非法）")
+        // 立即拉取一次，让用户马上看到结果（失败不影响创建，源仍保留、状态为 FAILED）。
+        val (ok, count, err) = OnlineRuleStore.fetchSource(rulesRoot(), id)
+        invalidateRuleCache()
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0,\"id\":").append(q(id))
+        sb.append(",\"fetched\":").append(ok)
+        sb.append(",\"ruleCount\":").append(count)
+        sb.append(",\"message\":").append(q(if (ok) "已创建并拉取成功" else "已创建，但拉取失败: $err"))
+        sb.append("}")
+        return jsonRaw(sb.toString())
+    }
+
+    /** 更新订阅源：{id,name?,url?,enabled?,intervalHours?}。 */
+    private fun apiOnlineUpdate(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val id = obj["id"]?.trim().orEmpty()
+        if (id.isEmpty()) return jsonError("缺少 id")
+        val url = obj["url"]?.trim()?.takeIf { it.isNotEmpty() }
+        if (url != null && !OnlineRuleStore.isHttpUrl(url)) return jsonError("URL 必须是 http(s) 直链")
+        val enabled = when {
+            obj.containsKey("enabled") -> obj["enabled"]!!.equals("true", true) || obj["enabled"] == "1"
+            else -> null
+        }
+        val ok = OnlineRuleStore.updateSource(
+            rulesRoot(), id,
+            name = obj["name"]?.trim()?.takeIf { it.isNotEmpty() },
+            url = url,
+            enabled = enabled,
+            intervalHours = obj["intervalHours"]?.toIntOrNull(),
+        )
+        if (!ok) return jsonError("更新失败（源不存在或 URL 非法）")
+        invalidateRuleCache()
+        return jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"OK\"}")
+    }
+
+    /** 删除订阅源（连同其缓存目录）。 */
+    private fun apiOnlineRemove(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val id = obj["id"]?.trim().orEmpty()
+        if (id.isEmpty()) return jsonError("缺少 id")
+        if (!OnlineRuleStore.removeSource(rulesRoot(), id)) return jsonError("源不存在")
+        invalidateRuleCache()
+        return jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"已删除\"}")
+    }
+
+    /** 立即拉取一个源（失败保留旧缓存）。 */
+    private fun apiOnlineFetch(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val id = obj["id"]?.trim().orEmpty()
+        if (id.isEmpty()) return jsonError("缺少 id")
+        val (ok, count, err) = OnlineRuleStore.fetchSource(rulesRoot(), id)
+        invalidateRuleCache()
+        val sb = StringBuilder()
+        sb.append("{\"ok\":").append(ok)
+        sb.append(",\"code\":").append(if (ok) 0 else 1)
+        sb.append(",\"ruleCount\":").append(count)
+        sb.append(",\"message\":").append(q(if (ok) "拉取成功，共 $count 条规则" else err))
+        sb.append("}")
+        return jsonRaw(sb.toString())
+    }
+
+    /** 读取某源缓存原文（供编辑器「从在线源导入」）。 */
+    private fun apiOnlineContent(query: Map<String, String>): String {
+        val id = query["id"]?.trim().orEmpty()
+        if (id.isEmpty()) return jsonError("缺少 id")
+        val text = OnlineRuleStore.readSourceContent(rulesRoot(), id)
+            ?: return jsonError("该源暂无缓存，请先拉取")
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("id"); value(id); comma()
+            key("content"); value(text)
+        }
+        return jsonRaw(sb)
+    }
+
+    /** 校验规则 JSON：返回规范化后的 JSON（编辑器「校验」按钮）。 */
+    private fun apiRulesValidate(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val json = extractRuleText(body) ?: return jsonError("请求体不是 JSON")
+        return when (val r = RuleDocCodec.parse(json, strict = true)) {
+            is RuleDoc.Result.Err -> jsonRaw(
+                "{\"ok\":false,\"code\":1,\"message\":${q(r.message)}}"
+            )
+            is RuleDoc.Result.Ok -> {
+                val normalized = RuleDocCodec.encode(r.doc)
+                val sb = StringBuilder()
+                sb.append("{\"ok\":true,\"code\":0")
+                sb.append(",\"name\":").append(q(r.doc.name))
+                sb.append(",\"groups\":").append(r.doc.groups.size)
+                sb.append(",\"normalized\":").append(q(normalized))
+                sb.append("}")
+                jsonRaw(sb.toString())
+            }
+        }
+    }
+
+    /** 读取用户本地规则原文（无则返回空模板）。 */
+    private fun apiUserRulesGet(): String {
+        val text = OnlineRuleStore.readUserRules(rulesRoot())
+            ?: RuleDocCodec.encode(RuleDoc.Doc(name = "我的规则", description = "本地自定义规则"))
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("path"); value(OnlineRuleStore.userRulesFile(rulesRoot()).path); comma()
+            key("content"); value(text)
+        }
+        return jsonRaw(sb)
+    }
+
+    /** 保存用户本地规则（严格校验后落盘）。 */
+    private fun apiUserRulesSet(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val json = extractRuleText(body) ?: return jsonError("请求体不是 JSON")
+        val err = OnlineRuleStore.saveUserRules(rulesRoot(), json)
+        if (err != null) return jsonError(err)
+        invalidateRuleCache()
+        return jsonRaw("{\"ok\":true,\"code\":0,\"message\":\"用户规则已保存\"}")
+    }
+
+    /**
+     * 导出合并规则（内建 + 在线 + 用户），供编辑器查看/修改后另存。
+     *
+     * 可选 `?scope=user|online|all`（默认 all）；仅 all 会包含内建规则。
+     */
+    private fun apiRulesExport(): String {
+        val doc = RuleDoc.Doc(
+            name = "ZhangProtect 规则导出",
+            author = "ZhangSystemDex",
+            description = "内建 + 在线 + 用户规则合并导出（可编辑后另存为用户规则）",
+            groups = cleaner().exportGroups(),
+        )
+        val text = RuleDocCodec.encode(doc)
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("groups"); value(doc.groups.size); comma()
+            key("content"); value(text)
+        }
+        return jsonRaw(sb)
+    }
+
+    /**
+     * 导入规则：{json, target} target = "user"（默认）或 "online:<srcId>"。
+     *
+     * - user：严格校验后写入 user_rules.json；
+     * - online：写入该源缓存（覆盖，属于用户主动的显式操作）。
+     */
+    private fun apiRulesImport(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val json = extractRuleText(body) ?: return jsonError("请求体不是 JSON")
+        val obj = if (body.trimStart().startsWith("{")) MiniJson.parseObject(body) else null
+        val target = obj?.get("target")?.trim().orEmpty().ifEmpty { "user" }
+
+        val parsed = RuleDocCodec.parse(json, strict = true)
+        if (parsed is RuleDoc.Result.Err) return jsonError("规则校验失败: ${parsed.message}")
+        val doc = (parsed as RuleDoc.Result.Ok).doc
+
+        if (target.startsWith("online:")) {
+            val srcId = target.substringAfter("online:").trim()
+            if (srcId.isEmpty()) return jsonError("缺少源 id")
+            if (OnlineRuleStore.findSource(rulesRoot(), srcId) == null) return jsonError("源不存在")
+            val f = File(File(File(rulesRoot(), OnlineRuleStore.DIR_NAME), srcId), "rules.json")
+            return try {
+                f.parentFile?.mkdirs()
+                f.writeText(json, Charsets.UTF_8)
+                invalidateRuleCache()
+                jsonRaw("{\"ok\":true,\"code\":0,\"groups\":${doc.groups.size},\"message\":\"已导入到在线源\"}")
+            } catch (t: Throwable) {
+                jsonError("写入失败: ${t.message}")
+            }
+        }
+
+        val err = OnlineRuleStore.saveUserRules(rulesRoot(), RuleDocCodec.encode(doc))
+        if (err != null) return jsonError(err)
+        invalidateRuleCache()
+        return jsonRaw("{\"ok\":true,\"code\":0,\"groups\":${doc.groups.size},\"message\":\"已导入为用户规则\"}")
+    }
+
+    /**
+     * 从请求体中提取规则 JSON 文本。
+     *
+     * 支持两种形式：
+     *  - `{"content":"<规则JSON字符串>"}`（WebUI 编辑器提交）；
+     *  - 直接以 `{"version":...` / `{"groups":[...]}` 开头的原始规则文档
+     *    （读取整个 body，因为 MiniJson 是扁平解析器，无法处理嵌套 groups）。
+     */
+    private fun extractRuleText(body: String): String? {
+        val t = body.trim()
+        if (t.isEmpty()) return null
+        // 原始规则文档：直接返回整个 body。
+        if (t.startsWith("{") && (t.contains("\"groups\"") || t.contains("\"version\""))) {
+            // 但若它是包装体（含 content 键且不含 groups），走下面分支。
+            if (!t.contains("\"groups\"")) {
+                MiniJson.parseObject(t)?.let { m -> m["content"]?.let { return it } }
+            } else {
+                return t
+            }
+        }
+        val obj = MiniJson.parseObject(t) ?: return null
+        return obj["content"]
     }
 
     // ==================================================================

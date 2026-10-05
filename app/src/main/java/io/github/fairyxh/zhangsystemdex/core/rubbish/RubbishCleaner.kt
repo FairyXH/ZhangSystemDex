@@ -950,12 +950,66 @@ class RubbishCleaner(private val config: ConfigManager) {
     // ------------------------------------------------------------------
 
     private fun selectRules(ruleIds: List<String>): List<CleanRule> {
-        val all = RubbishRuleSet.ALL
+        // 内建规则 + 在线规则 + 用户本地规则（数据驱动，只增不删）。
+        // 合并顺序：内建优先，其后为在线/用户规则；id 前缀已保证不冲突。
+        val all = allRulesMerged()
         if (ruleIds.isEmpty()) {
-            return all.filter { it.switchKey.isNotEmpty() && config.switch(it.switchKey) }
+            // 空选择 = 全部「非内建开关控制」的规则：内建按 switchKey 开关，
+            // 在线/用户规则的 switchKey 为空（随总开关），因此一并纳入。
+            return all.filter { it.switchKey.isEmpty() || config.switch(it.switchKey) }
         }
         val set = ruleIds.toSet()
         return all.filter { it.id in set }
+    }
+
+    /**
+     * 内建 + 在线 + 用户规则合并表（结果缓存 5 秒，避免每规则/每预览重复读盘）。
+     *
+     * 在线/用户规则来自 [OnlineRuleStore]；解析失败或缺失时静默跳过（不影响内建）。
+     */
+    private fun allRulesMerged(): List<CleanRule> {
+        val now = System.currentTimeMillis()
+        val cached = mergedCache
+        if (cached != null && now - mergedCacheAt < 5000L) return cached
+        val merged = ArrayList<CleanRule>(RubbishRuleSet.ALL.size + 16)
+        merged += RubbishRuleSet.ALL
+        try {
+            val extra = OnlineRuleStore.allRules(File(config.rootDir))
+            if (extra.isNotEmpty()) {
+                // 去重：按 id 与 (roots+mode+name) 双重判定，避免重复规则重复扫描。
+                val seen = merged.map { it.id }.toHashSet()
+                val sig = merged.map { ruleSignature(it) }.toHashSet()
+                for (r in extra) {
+                    if (r.id in seen) continue
+                    val s = ruleSignature(r)
+                    if (s in sig) continue
+                    seen += r.id
+                    sig += s
+                    merged += r
+                }
+            }
+        } catch (t: Throwable) {
+            Logger.w("RubbishCleaner", "在线/用户规则合并失败: ${t.message}")
+        }
+        mergedCache = merged
+        mergedCacheAt = now
+        return merged
+    }
+
+    /** 规则签名：用于跨来源去重（同 root+mode+pattern 视为同一规则）。 */
+    private fun ruleSignature(r: CleanRule): String =
+        r.mode.name + "|" + r.roots.joinToString(",") + "|" + r.pattern
+
+    @Volatile
+    private var mergedCache: List<CleanRule>? = null
+
+    @Volatile
+    private var mergedCacheAt: Long = 0L
+
+    /** 使合并缓存失效（在线规则更新/保存用户规则后调用）。 */
+    fun invalidateRuleCache() {
+        mergedCache = null
+        mergedCacheAt = 0L
     }
 
     /** 选中规则数（供进度显示总数；不触发任何扫描）。 */
@@ -1182,8 +1236,10 @@ class RubbishCleaner(private val config: ConfigManager) {
     /** 规则表 + 当前开关状态（供 WebUI 渲染清理 Tab）。 */
     fun rulesToJson(): String = JsonBuilder.obj {
         key("ok"); value(true); comma()
+        // 列出「内建 + 在线 + 用户」合并后的全部规则，并标注来源，
+        // 便于 WebUI 区分展示（在线/用户规则由数据驱动，可随时增删）。
         key("rules"); raw(JsonBuilder.arr {
-            RubbishRuleSet.ALL.forEachIndexed { i, r ->
+            allRulesMerged().forEachIndexed { i, r ->
                 if (i > 0) comma()
                 raw(JsonBuilder.obj {
                     key("id"); value(r.id); comma()
@@ -1194,9 +1250,44 @@ class RubbishCleaner(private val config: ConfigManager) {
                     key("defaultOn"); value(r.defaultOn); comma()
                     key("enabled"); value(if (r.switchKey.isEmpty()) false else config.switch(r.switchKey)); comma()
                     key("switchKey"); value(r.switchKey); comma()
+                    key("mode"); value(r.mode.name); comma()
+                    key("source"); value(ruleSource(r.id)); comma()
                     key("note"); value(r.note)
                 })
             }
         })
     }
+
+    /**
+     * 规则来源：internal（内建 RubbishRuleSet）/ online（在线订阅）/ user（本地用户规则）。
+     * 依据 id 前缀判定——在线规则 `ol_`、用户规则 `ur_`（见 [OnlineRuleStore]）。
+     */
+    private fun ruleSource(id: String): String = when {
+        id.startsWith("ol_") -> "online"
+        id.startsWith("ur_") -> "user"
+        else -> "internal"
+    }
+
+    /**
+     * 导出合并规则为 [RuleDoc.Group] 列表（供 WebUI 规则编辑器展示/导出 JSON）。
+     *
+     * 覆盖内建 + 在线 + 用户三来源；`mode`/`risk`/`roots`/`keep` 等完整保留，
+     * 使导出的 JSON 再导入后可等价还原（schema 见 [RuleDocCodec]）。
+     */
+    fun exportGroups(): List<RuleDoc.Group> =
+        allRulesMerged().map { r ->
+            RuleDoc.Group(
+                name = r.name,
+                enabled = true,
+                mode = r.mode,
+                risk = r.risk,
+                defaultOn = r.defaultOn,
+                roots = r.roots,
+                pattern = r.pattern,
+                ageDays = r.ageDays,
+                keep = r.keep,
+                note = r.note,
+                uiGroup = r.group,
+            )
+        }
 }

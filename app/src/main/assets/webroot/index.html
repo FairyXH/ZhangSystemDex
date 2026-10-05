@@ -65,20 +65,46 @@
     letter-spacing:.4px;padding:0 4px 7px;font-weight:500}
   .section>.sfoot{font-size:12.5px;color:var(--dim);padding:7px 4px 0;line-height:1.45}
   .list{background:var(--grouped);border-radius:var(--radius);overflow:hidden}
+  /* 允许卡片内部换行：窄屏下「正文」与「操作区」可落到不同行，
+     避免操作控件（开关/按钮）把正文挤压到 1 个汉字宽。 */
   .cell{display:flex;align-items:center;gap:12px;padding:11px 16px;position:relative;
-    background:var(--grouped)}
+    background:var(--grouped);flex-wrap:wrap}
   .cell+.cell::before{content:"";position:absolute;left:16px;right:0;top:0;
     height:1px;background:var(--sep);transform:scaleY(.6)}
   .cell .ic{width:29px;height:29px;border-radius:7px;flex:0 0 auto;display:flex;
     align-items:center;justify-content:center;font-size:16px;color:#fff}
-  .cell .body{flex:1;min-width:0}
+  /* 正文区域：显式 basis + 允许收缩；长 URL 可换行、可截断，绝不撑破卡片。 */
+  .cell .body{flex:1 1 200px;min-width:0;overflow-wrap:anywhere;word-break:break-word}
   .cell .k{font-size:15px;font-weight:500;word-break:break-word}
   .cell .k.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
-  .cell .d{color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.35}
+  .cell .d{color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.35;
+    overflow-wrap:anywhere;word-break:break-word}
+  /* URL 行：单行省略，避免超长直链把卡片撑高/撑宽（可点「编辑」看完整值）。 */
+  .cell .d.url{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+    max-width:100%;direction:ltr}
+  /* 窄屏放宽为可换行，优先保证可读性而非省略。 */
+  @media (max-width:560px){
+    .cell .d.url{white-space:normal;overflow-wrap:anywhere}
+  }
   .cell.danger .k{color:var(--warn)}
   .cell.danger .d::before{content:"⚠️ ";}
   .cell.modified .k::after{content:" ●";color:var(--acc2);font-size:10px;vertical-align:middle}
-  .cell .val{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  /* 操作区：允许换行，且用 margin-left:auto 保持靠右；min-width:0 防溢出。 */
+  .cell .val{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;
+    flex:0 1 auto;max-width:100%;margin-left:auto}
+  /* 操作区自身的「一行内不换行、整块可换行」的按钮条（用于规则源等复杂卡片）。 */
+  .cell .val .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  /* ===== 复杂操作卡片（规则源）：窄屏下操作区独占第二行 ===== */
+  .cell.actrow{row-gap:8px}
+  .cell.actrow .val{flex-basis:100%;width:100%;justify-content:flex-start;margin-left:0;
+    padding-top:2px}
+  .cell.actrow .val .sw{margin-right:2px}
+  /* 桌面/宽屏：操作区回到右侧同一行，正文优先占宽。 */
+  @media (min-width:560px){
+    .cell.actrow .val{flex:0 1 auto;flex-basis:auto;width:auto;justify-content:flex-end;
+      margin-left:auto;padding-top:0}
+  }
   .cell input.vin{width:74px;text-align:right;background:var(--card2);border:1px solid var(--line);
     color:var(--fg);border-radius:8px;padding:6px 9px;font-size:15px;
     font-family:ui-monospace,monospace}
@@ -487,7 +513,6 @@
       <div class="sfoot">所有删除均经过中心化安全审查（路径规范化、白名单与违禁规则校验），
         违禁规则可在「审查规则」中自定义。</div>
     </div>
-    <div id="cleanGroups"></div>
 
     <!-- ============ 在线规则（多源直链 + 定期拉取）============ -->
     <div class="section" id="onlinePanel" style="display:none">
@@ -542,6 +567,9 @@
         <div class="d" id="edMeta" style="margin-top:4px;color:var(--dim);font-size:12px"></div>
       </div>
     </div>
+
+    <!-- 规则分组列表（扫描/清理命中项）放在在线规则与编辑器之后 -->
+    <div id="cleanGroups"></div>
   </section>
 </main>
 
@@ -1997,18 +2025,20 @@ function renderOnlineSources(){
   OL_SOURCES.forEach(s=>{
     const status = s.lastStatus === "SUCCESS" ? "成功" : (s.lastStatus === "FAILED" ? "失败" : "未拉取");
     const stColor = s.lastStatus === "SUCCESS" ? "#30d158" : (s.lastStatus === "FAILED" ? "#ff453a" : "#8e8e93");
-    h += '<div class="cell">'
+    h += '<div class="cell actrow">'
       +   '<div class="ic" style="background:' + stColor + '">⇩</div>'
       +   '<div class="body"><div class="k">' + esc(s.name || "规则源") + '</div>'
-      +     '<div class="d">' + esc(s.url) + '</div>'
+      +     '<div class="d url">' + esc(s.url) + '</div>'
       +     '<div class="d">状态：' + status + ' · 规则 ' + (s.ruleCount||0) + ' 条 · 间隔 ' + (s.intervalHours||24) + 'h'
       +       ' · 上次 ' + esc(fmtTime(s.lastFetchMs)) + (s.lastError ? (' · ' + esc(s.lastError)) : '') + '</div></div>'
       +   '<div class="val">'
       +     '<label class="sw"><input type="checkbox" data-olen="' + esc(s.id) + '"' + (s.enabled ? ' checked' : '') + '><i></i></label>'
-      +     '<button class="btn sm ghost" data-olfetch="' + esc(s.id) + '">拉取</button>'
-      +     '<button class="btn sm ghost" data-oled="' + esc(s.id) + '">编辑</button>'
-      +     '<button class="btn sm ghost" data-olimp="' + esc(s.id) + '">导入到编辑器</button>'
-      +     '<button class="btn sm ghost" data-olrm="' + esc(s.id) + '">删除</button>'
+      +     '<div class="btns">'
+      +       '<button class="btn sm ghost" data-olfetch="' + esc(s.id) + '">拉取</button>'
+      +       '<button class="btn sm ghost" data-oled="' + esc(s.id) + '">编辑</button>'
+      +       '<button class="btn sm ghost" data-olimp="' + esc(s.id) + '">导入到编辑器</button>'
+      +       '<button class="btn sm ghost" data-olrm="' + esc(s.id) + '">删除</button>'
+      +     '</div>'
       +   '</div></div>';
   });
   h += '</div></div>';

@@ -953,3 +953,75 @@ await loadCleanState();
 
 **结论**：当前算法“正确性/安全性”没问题（删除全经 RubbishGuard），但**性能未最优**——
 大范围深度扫描严重超时，且增量缓存设计有三处未生效。上面 A+B 是性价比最高的两项。
+
+---
+## 25. 性能优化：清理深度扫描 A+B+C（2026-10-04，已真机验证）
+**目标**：解决 §24 记录的 `junk_all_apps` 深度扫描超时（>180s）。
+**已实施三项（commit `069cadb`）**：
+- **A. 分片并行扫描**：新增 `core/rubbish/ParallelScanner.kt`——顶层子项切分为独立分片，
+  无锁并发队列 + `rubbish_scan_threads`（1..8，默认 4）线程遍历，互不相交子树。
+- **B. 分片级增量缓存**：重写 `ScanCache`——以「分片聚合(ShardAgg)」替代「每目录聚合」，
+  索引体积 **33MB → ~50KB**；仅落盘命中(J)条目，剔除海量非命中(O)条目导致的写放大；
+  索引格式转义路径中的制表符/换行（修复文件名含 `\t` 导致的行错位）。
+- **C. 多线程 IDM 式分片**：扫描边进行边落盘索引，避免超时丢索引。
+**真机实测**：`junk_all_apps` 冷扫 **54s → 暖扫 4s**（约 13x）；索引 33MB → 50KB。
+**验证**：SelfTest 新增「清理.并行扫描计数一致」——冷/暖/再暖 均 3文件/3字节（确定性）。
+**注意**：`rubbish_scan_threads` 为新增键（默认 4），过大可能打爆 emmc/ufs。
+
+---
+## 26. 新功能：OOM 保护名单（2026-10-04/05，已真机验证）
+**需求**（用户原文）：新增 oom 保护名单，应用选择器 + 手动编辑列表（一行一个包名）；
+像保护游戏 oom 一样把列表应用 oom=-1000、提高进程优先级，但**不超过系统自身**；
+处理好内存泄露（无法释放）；默认内置 `com.ai.assistance.operit`。
+**实现**：
+- `core/OomProtectList.kt`：名单文件 `oom_protect.conf`（一行一包名，`#` 注释），
+  `normalize()` 过滤注释/空行/重复/非法包名；`DEFAULT_PACKAGE=com.ai.assistance.operit`。
+- `modules/OomProtectModule.kt`（DaemonLoop 5s）：
+  - **安全钳制** `clampOom(v)=v.coerceIn(-900,1000)`——用户应用最激进只到 **-900**
+    （system_server 同级，永不越过 init），`SAFE_FLOOR=-900`；主进程默认请求 -1000→钳到 -900，
+    子进程 -700；主进程温和 `renice(-10)`，不做 RT 抢占。
+  - **内存泄露/无法释放处理**：`lastAdj`（pid→上次值，避免重复写）每轮只保留存活 pid；
+    `touchedPids` 记录改动过的 pid，移出名单或关闭时**还原为 0**（仅存活进程）；
+    `onStop` 清空全部结构。
+- HTTP：`/api/oom/read|write|status|apps`（HttpBackend）。
+- 开关：`oom_protect_enable`（**默认 true**，登记于 `SWITCH_DESCRIPTIONS` + `SPECIAL_DEFAULT_TRUE`
+  + `ensureMissing()` 显式默认行）。
+- WebUI：设置页新增「OOM 保护名单」三区块（总开关+受保护状态 / 应用选择器 / 手动编辑 textarea）。
+**真机验证**（自建测试模块目录启动 daemon）：
+- 开启后 operit `oom_score_adj=-900`（钳制生效）；关闭后**还原为 0**。
+- `/api/oom/{read,write,status,apps}` 输出**合法 JSON**（python json.load 校验 VALID）。
+- SelfTest：`OOM.安全钳制/名单归一化/名单读写往返/默认内置包名/配置键齐备` **5/5 PASS**。
+**已修的关键 bug（前后端联调发现）**：`JsonBuilder.arr` **不自动插入逗号**，
+原 `apiOomWrite/apiOomStatus/apiOomApps` 生成 `[\"a\"\"b\"]`/`[{}{}]` 非法 JSON；
+已统一改用 `jsonStrArray()` / 显式 `comma()`（commit `11f7d92`）。**改动 JSON 数组务必注意此点**。
+
+---
+## 27. ⚠ 事故：重启锁屏卡死（package.xml 损坏）与包状态改写加固（2026-10-05）
+**现象**：用户开启大量清理功能后重启，**锁屏输入密码后卡死无法进入**；TWRP 删除模块 +
+`/data/system/package.xml` 后恢复。**模块目录被删，当前未重装**（母版完好）。
+**根因（源码走查）**：仅「改写包状态」的操作会导致该症状，锁定：
+1. `AppManagerModule.disableApp()` 原含 `pm uninstall <pkg>`（**全用户卸载**）+ disable，
+   且被 `SystemTuningModule.heavyTick()` **周期反复触发** → packages.xml 高频重写；
+2. `SystemTuningModule` **无条件** `pm uninstall --user 0 com.oplus.appdetail`（每个常规周期）；
+3. `chattr +i` 无存在性校验。
+**加固（commit `401c47b`，已构建通过）**：
+- `disableApp`：**移除全用户 `pm uninstall`**，改仅 `disable-user`（可逆）；新增**幂等判断**
+  （`FrameworkOps.applicationEnabledState()`，已禁用则跳过）→ 杜绝重复改写。
+- `uninstallAppDetailOnce()`：仅当包存在时执行**一次**（进程生命周期去重）。
+- `chattr` 前校验文件存在，失败静默。
+- 新增 `core/PackageStateBackup.kt`：首次改写包状态前滚动备份 packages.xml 等到 `<root>/backup/`。
+**详细复盘**：`docs/incidents/2026-10-05_boot_hang_package_xml.md`。
+**教训**：包状态改写类操作（uninstall/disable）**永远不要**在周期任务里裸跑；
+开机阶段（post-fs-data/service）**绝不做**包卸载/禁用。
+**当前设备状态**：`/data/adb/modules/Zhang` 已删除（未重装）；`/data/adb/Zhang` 配置根保留；
+母版 `/data/media/0/Download/Files/ZhangProtect-Android/` 已更新为最新 dex + webroot。
+重装路径：用户自行用母版 `pack.sh` 打 zip 或直接部署目录。
+
+---
+## 28. 当前构建/部署关键值（2026-10-05）
+- `Main.dex`（含 OOM + 安全加固 + JSON 修复）= md5 `83b3e6d06d8f444e579ab305666da1db`（2,571,408 B）。
+- `webroot/index.html`（含 OOM UI）= md5 `063d57cf47646555ca607bbdaa4ea7cc`。
+- 已同步：母版 `Main.dex` + `webroot/index.html`（见 §27）。
+- Git 最新 4 commit：`069cadb`（清理性能 A+B+C）→ `401c47b`（安全加固）→
+  `7194cf4`（OOM WebUI）→ `11f7d92`（OOM JSON 修复）。
+- **未 push**（本地 main 领先 origin/main 4 个 commit）。

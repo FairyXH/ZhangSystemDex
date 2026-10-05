@@ -1205,3 +1205,47 @@ SelfTest 清理.* 12 PASS/0 FAIL；全局 54/1/2/7（同前，唯一 FAIL 为既
   `CZ|size|path` 文本协议、专项引擎隔离、云规则隐私黑名单。
 - **我们的优势**：`safeDelete` 唯一审查入口 + `UserGuardRules` + `AuditLog` 比 CZero（无集中审查）更安全，应保留。
 **无代码改动**，本项仅产出分析文档。后续如需落地上述借鉴项须另开任务。
+
+## 38. 落地「在线规则（多源直链+定期拉取）+ 规则编辑器（导入/导出 JSON）」（2026-10-05）
+
+**需求（用户）**：既然有在线规则，我们的在线规则怎么制定？要有界面让用户手动输入规则链接直链；
+直链定期自动拉取、支持多套在线规则；另有规则编辑器界面可导出 JSON 规则。
+
+**已实现（4 个 commit）**：
+- `6d72622` 数据层：
+  - `core/rubbish/RuleDoc.kt`：`RuleDoc`(Doc/Group/Result) + `RuleDocCodec`
+    （`validatePath`/`parse`/`encode`/`toCleanRule`）。schema `{version,name,author,description,groups[{name,enabled,mode,risk,defaultOn,roots,pattern,ageDays,keep,note,uiGroup}]}`。
+    校验红线：绝对路径、禁 `..`、禁根、长度 ≤400、GLOB 必带 pattern。
+  - `core/rubbish/OnlineRuleStore.kt`：多源订阅。布局 `{rootDir}/online_rules/index.json`
+    + `online_rules/<id>/rules.json` + `{rootDir}/user_rules.json`。`addSource/updateSource/removeSource`、
+    `fetchSource/fetchDue`（`HttpURLConnection`，connect 8s/read 12s，响应 ≤2MB，失败保留旧缓存）、
+    `allRules()`（在线 id 前缀 `ol_<srcId>_`、用户 `ur_`；switchKey 空=随总开关）、`readUserRules/saveUserRules`。
+- `d9490b4` 集成与 API：
+  - `RubbishCleaner`：`selectRules()` 改为 `allRulesMerged()`（内建+在线+用户，按 id 与 `mode|roots|pattern` 去重，
+    5s 缓存 + `invalidateRuleCache()`）；`rulesToJson()` 输出合并表并加 `mode`/`source`(internal|online|user)；
+    新增 `exportGroups()`。
+  - `modules/OnlineRuleModule.kt`：`DaemonLoop`，5min 检查一次，`fetchDue()`，异常隔离。
+  - `Main.kt`：注册 `online_rules` 模块条目（受 `online_rules_enable` 控制）。
+  - `HttpBackend`：新增 11 个端点 `/api/rules/online/{list,add,update,remove,fetch,content}`、
+    `/api/rules/{validate,user/get,user/set,user/export,import}`。
+    ⚠ 注意 `MiniJson` 只支持**扁平** map，嵌套规则 JSON 由 `extractRuleText()` 原样透传后交 `RuleDocCodec` 解析。
+- `d744cd1` WebUI：清理 Tab 新增「在线规则」「规则编辑器」按钮 + 两个面板（源列表/启停/拉取/编辑/删除/新增；
+  编辑器 校验/从在线源导入/导入/导出/复制/下载 JSON/保存为用户规则）。
+  **真源是 `app/src/main/assets/webroot/index.html`；`webroot/` 只是交付副本且被 .gitignore**（重要坑，见下）。
+- `ConfigManager`：登记 `online_rules_enable`（默认 false）+ `ensureParamLines()` 补齐旧配置缺失键。
+- `SelfTest`：`onlineRuleChecks()`（schema 往返、校验红线、GLOB、源增删、URL、导出往返、配置键）。
+
+**验证**：`./gradlew compileDebugKotlin --offline` **BUILD SUCCESSFUL**（含 `--rerun-tasks` 全量）；
+`node --check` 对 assets 与 webroot 的 script 提取均 **JS_SYNTAX_OK**。
+`./gradlew assembleDebug` 在本 proot 环境 **失败于 AAPT2 daemon startup**（环境问题，非代码）。
+
+**坑 / 注意事项（新 Agent 必读）**：
+1. **WebUI 双文件**：改 UI 必须改 `app/src/main/assets/webroot/index.html`（打包进 APK assets、被 git 跟踪），
+   再 `cp` 到 `webroot/index.html`（交付副本、gitignore）。只改 `webroot/` 不会进入 APK、也不会被提交。
+   两者在本轮之前**已存在内容差异**（webroot 105373B vs assets 96652B），本轮采用「以 assets 为基线、逐个锚点移植增量」处理，未互相覆盖。
+2. `super_admin:terminal` 会话可能卡死（所有命令 `exitCode:-1` 空输出）：用 `background:"true"` 起新会话，
+   再用 `super_admin:terminal_wait` + `terminal_getscreen`（注意名字不是 `terminal_terminal_getscreen`）。
+3. 管道 `cmd | tail` 后的 `$?` 是 tail 的退出码，需 `cmd > log 2>&1; echo $?` 才准。
+
+**未做（可选后续）**：OTA 发布 zip 重打包（`pack.sh`/`构建WebUI.bat`）、真机端到端验证（加源→拉取→扫描命中）、
+在线规则签名校验（当前仅 JSON schema + 路径红线，未做发布者签名）。

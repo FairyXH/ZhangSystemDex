@@ -1,5 +1,10 @@
 # 计划：在线规则（多源直链 + 定期拉取）+ 规则编辑器（导入/导出 JSON）
 
+> **状态：已实施完成（2026-10-05）**。commit `6d72622`（数据层）→ `d9490b4`（集成/模块/API）→ `d744cd1`（WebUI）。
+> Kotlin 编译通过（`compileDebugKotlin` BUILD SUCCESSFUL），assets/webroot 的 JS 通过 `node --check`。
+> 详见 `docs/AGENT_CONTEXT.md` §38。`assembleDebug` 在本 proot 环境因 AAPT2 daemon 启动失败而中断（环境问题）。
+> 注意：WebUI 真源为 `app/src/main/assets/webroot/index.html`（`webroot/` 为交付副本，已 gitignore）。
+
 > 需求（2026-10-05）：既然有在线规则，我们的在线规则怎么制定？
 > - 有专门界面让用户手动输入**规则链接直链**；
 > - 直链**定期自动拉取**，支持**多套**在线规则；

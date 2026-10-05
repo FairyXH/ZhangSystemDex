@@ -1345,3 +1345,53 @@ tail -20 /data/adb/Zhang/log/rubbish_clean.log
 `/data/adb/modules/Zhang/webroot/index.html`（**改 assets 真源后必须手动同步到此处**，见 §39）。
 
 **部署核对**：源与部署 md5 一致 `a748f93b7fcb5104d1842554f9be70f6`，114196 字节，无临时探针残留。
+
+---
+
+## §41 最终验收：部署 → 全功能测试 → pack → git push（2026-10-05）
+
+**执行链**：部署最新 dex → 端到端功能测试 → pack.sh 打包 → git push（13 commits）。
+
+### 关键坑：shell 环境被 LD_LIBRARY_PATH 污染（务必牢记）
+测试中途 `super_admin:shell` 突然**所有命令无输出/报 `CANNOT LINK EXECUTABLE ... libcrypto.so`**，
+一度误判 daemon 已死。**真因**：之前用 `export LD_LIBRARY_PATH=/data/Python/lib:...` 测试 Android
+侧 python，污染了 shell 会话的全局环境，导致 `/system/bin/ls` `curl` `nc` 等**全部动态链接失败**。
+**解法**：每条 shell 命令开头加 `unset LD_LIBRARY_PATH LD_PRELOAD; export PATH=/system/bin:/system/xbin;`。
+用绝对路径 `/system/bin/ls` 也不能绕过（LD_LIBRARY_PATH 仍生效），必须 unset。
+
+### 环境可达性结论（用于起本地规则源）
+- Ubuntu(proot) 与 Android **网络命名空间独立**：Android 侧连不上 proot 的 `127.0.0.1:<port>`。
+- Android 侧可用 HTTP 服务器：`/data/Python/bin/python3.13`（需 `PYTHONHOME=/data/Python LD_LIBRARY_PATH=/data/Python/lib`）、
+  `/system/bin/python3`（交互受限）。**最可靠**：`toybox nc` 循环响应（脚本见下）。
+  `busybox httpd` **不可用**（exit 127，KSU busybox 未编译 httpd）。
+- 一次性 HTTP 源（nc 版）：
+  ```sh
+  # /data/local/tmp/ncserv.sh
+  B=$(cat /data/local/tmp/htdocs/rules.json); L=$(printf '%s' "$B" | wc -c)
+  while true; do { printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$L" "$B"; } | nc -l -p 18932 -q1; done
+  ```
+  后台常驻：`(/system/bin/sh /data/local/tmp/ncserv.sh >/dev/null 2>&1 &)`
+
+### 全功能测试结果（全部通过）
+- 基础接口：ping/overview/paths/rubbish-status/ota-status/history/guard-read ✅
+- 规则表：31 内置（全有 switchKey，模式覆盖 DIR_CONTENT/GLOB/JUNK_SCAN/OLDER_THAN/APK_SCAN/DIR_SELF/
+  EMPTY_DIR/UNINSTALLED_SCAN/BIG_FILE_SCAN/DUP_CONTENT/DUP_SAME_SIZE）✅
+- 校验红线：合法/拒相对路径/拒 `..`/GLOB 缺 pattern ✅
+- preview：多规则全返回、单规则正常 ✅
+- **真实清理**：造 `ZSD_FINAL_SUB/{inner/zero.txt, emptydir}` → clean 后 audit 依序
+  `DELETE emptydir(dir) → zero.txt(file) → inner(dir) → ZSD_FINAL_SUB(dir)`，目录彻底消失 ✅
+- 用户规则：set/get/export/合并/import ✅
+- **在线规则端到端**：本地 nc 源 add → `fetched:true ruleCount:1` → list `SUCCESS sha256=00bdd395...`
+  → 合并进规则表（`ol_src_f5d5831d_0`）→ preview 命中 3 个真实文件（`<u>` 展开正确）→ content 可取内容 ✅
+- WebUI（SukiSU WebUIX，1264px 物理宽）：规则源卡片名称/URL/状态行宽 **791px**、按钮自动换行、无溢出；
+  面板已上移（onlinePanel 在 cleanGroups 之前）；在线/用户规则可见并已合并 ✅
+
+### 打包（pack.sh v4）
+- 在**模块目录**运行：`cd /data/adb/modules/Zhang && sh pack.sh`
+- 产物：`/data/adb/modules/ZhangProtect-Android.zip`，**430,386,994 字节（410.4 MB）**，压缩率 76.9%
+- SHA256 逐文件校验 108 文件全部一致，退出码 0。
+
+### Git push
+- 仓库 `Main.dex` 原为旧版（2591388B / d31ddd5c）→ 更新为部署版（3074184B / 91556594）后提交。
+- `git push origin main`：`b5e3b79..6aa4998`，**13 个提交**，退出码 0。
+- 远端 `refs/heads/main = 6aa4998f335df7220d36fa86c6c3c3b1d86b895`，本地与远端一致，工作区干净。

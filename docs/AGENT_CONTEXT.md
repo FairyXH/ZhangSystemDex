@@ -1312,3 +1312,36 @@ curl -s -X POST $API/api/rubbish/preview -d '{"rules":"empty_dirs","max":5}' -H 
 curl -s -X POST $API/api/rubbish/clean   -d '{"rules":"empty_dirs"}' -H 'Content-Type: application/json'
 tail -20 /data/adb/Zhang/log/rubbish_clean.log
 ```
+
+---
+
+## §40 WebUI 规则源卡片移动端布局修复 + 面板上移（2026-10-05，commit `5ac66c6`）
+
+**需求**：①在线规则/编辑器面板移到上方（原来在 #cleanGroups 之后，需长距离滚动）；
+②修复移动端规则源卡片严重布局异常（正文被操作控件挤压到 ~1 汉字宽、逐字竖排；按钮横向溢出被裁切）。
+
+**根因**：
+- `.cell .val{flex:0 0 auto}` 且内部不换行，5 个控件（开关 51px + 拉取/编辑/导入到编辑器/删除）
+  总宽超过窄屏；`.cell` 无 `flex-wrap`，`.val` 又不收缩 → `.body` 被压缩到 ~15px（1 字）。
+
+**修复（响应式，非缩字体）**：
+- `.cell` 加 `flex-wrap:wrap`；`.body` → `flex:1 1 200px;min-width:0` + `overflow-wrap:anywhere`。
+- `.val` → `flex:0 1 auto;flex-wrap:wrap;max-width:100%;margin-left:auto`。
+- 新增 `.cell.actrow`（规则源专用）：窄屏 `.val{flex-basis:100%;width:100%}` 独占第二行并换行；
+  `@media(min-width:560px)` 恢复右侧同行。按钮包 `.btns` 容器统一换行。
+- `.cell .d.url`：宽屏单行省略号；`@media(max-width:560px)` 改可换行。
+- `#cleanGroups` 移到 `onlinePanel`/`editorPanel` 之后。
+
+**真机验证（SukiSU Ultra 的 WebUIX Activity，包名 com.sukisu.ultra，屏幕 1264px 物理宽）**：
+- 打开路径：`monkey -p com.sukisu.ultra`（或点模块卡片）→ 底栏「🧹清理」→「在线规则」按钮。
+- UI 层次实测（android view hierarchy 是权威渲染数据）：名称/URL/状态行宽度**均 791px**
+  （原约 15px）；状态行「状态：成功 · 规则 2 条 · 间隔 24h · 上次 …」横向完整；
+  拉取/编辑/导入到编辑器 同行，删除自动换行到下一行；卡片右边界 1155 在容器 1211 内，无横向溢出。
+- OCR 截图复核一致。
+
+**验证方法（可复用）**：本机无标准浏览器/jsdom/chromium，无法用 headless 验证；
+可靠路径是 SukiSU WebUI（真机 WebView）+ `Automatic_ui_base` 的 `get_page_info`（读渲染后 UI 层次）
++ `daily_life:take_screenshot`（OCR 复核）。WebUI 加载的是
+`/data/adb/modules/Zhang/webroot/index.html`（**改 assets 真源后必须手动同步到此处**，见 §39）。
+
+**部署核对**：源与部署 md5 一致 `a748f93b7fcb5104d1842554f9be70f6`，114196 字节，无临时探针残留。

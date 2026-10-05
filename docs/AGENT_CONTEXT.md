@@ -1118,3 +1118,20 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 - `AntiDetectionModule.removeHmaResidue()`：每 5 分钟递归删除 `/data/system` 下名称含
   hide/hma/applist 的目录。当前无匹配项（无副作用），但属高敏路径，未动。
 - `StorageIsolationModule`：/data/media 用户目录搬移（显式 HIGH RISK），受 storage_isolation_enable 门控（当前关闭）。
+
+---
+## 33. 高危路径白名单化：HMA 残留清理（2026-10-05，commit cbfb75f）
+**背景**：用户要求把高危路径加入白名单，主要清理安卓/ColorOS 目录，避免模糊匹配误删。
+**原实现（危险）**：`AntiDetectionModule.removeHmaResidue()` 按「文件名含 hide/hma/applist」
+  **模糊匹配** + `deleteRecursive` 删除 `/data/system` 下匹配**目录**。问题：
+- 误删风险：`hmac_key`（含 hma）、任何含 applist/hide 字样的厂商目录都会被命中；
+- 实际无效：真正的目标 `hidemyandroid_applist.conf` 是**文件**，旧代码只匹配目录 → 根本清不掉。
+**新实现（精确白名单）**：
+- 白名单仅含确切路径：`/data/system/hidemyandroid_applist.conf`、`/data/adb/modules/hidemyapplist`；
+- 删除前 `isWhitelisted()` 双重校验（等于白名单项或其子路径），文件/目录分别处理，单项失败不影响其它；
+- 白名单与判定抽为 companion 纯函数，SelfTest 新增「HMA白名单精确性」正/反例断言。
+**实测（本机 /data/system）**：
+- 真实匹配仅 `hidemyandroid_applist.conf`（文件）；`hmac_key` 是**误报**（佐证必须精确匹配）。
+- 反例保护完好：`packages.xml`、`users/0/package-restrictions.xml`、`sensor_service/hmac_key`、
+  ColorOS 目录 `shortx_*`/`thanos_*` 均未被触碰。
+- SelfTest：**54 PASS**（新增项 PASS，误放反例=[]），HMA conf 被正确清理。

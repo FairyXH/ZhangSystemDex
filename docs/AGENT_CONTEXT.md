@@ -1090,3 +1090,31 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 - `unzip -t` 零错误；zip 内 `Main.dex` = `6eb2d5a15a3a0742c06c1cb278fd6e8a`（含 §30 暖扫修复）。
 - 母版 `webroot/index.html` = `063d57cf47646555ca607bbdaa4ea7cc`（不变）。
 **取代**：§29 的 zip（SHA256 7188a43f…）已被本版取代，勿再使用旧包。
+
+---
+## 32. 回归续测 + 修复 + 发布（2026-10-05 11:2x）
+### 本轮回归测试覆盖
+- 模块运行态：overview 27 项模块全部正常加载/运行（oom_protect、game_oom、system_tuning、service_guard 等）。
+- OOM 保护名单：热加载新包/移除包均正确（-900/-700 ↔ 还原 0）；safety clamp 生效。
+- 清理分片缓存：junk_all_apps 冷 72s→暖 <1s（777/777）；app_cache/system_junk_data/uninstalled_leftover 等冷暖计数一致。
+- HTTP 安全：越界读写（/proc、/data/system）被拒；/api/paths|ping|overview|oom/*|rubbish/* 正常。
+- WebUI：JS 经 node --check 语法通过。
+
+### 本轮修复
+1. **fix(appmanager)**: `disableApp` 入口增加 `AppListProvider.installed()` 判断，
+   跳过不存在的包，消除每维护周期重复的 `Unknown package` 告警噪声（真实存在的包仍正常停用）。
+2. **关键发现：仓库 Main.dex 陈旧会破坏 OTA**——`otaDexUrl` 指向 `repo/Main.dex`，
+   而仓库里该文件停留在 10-04（md5 100f4d3b），OTA 会把设备降级回旧版（丢 OOM/暖扫/安全加固）。
+   已在本次发布把它更新为当前构建 `105b0252`。**今后每次发版必须同步仓库 Main.dex 与 assets/webroot。**
+
+### 本次发布产物
+- `/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,197,579 字节**，100 文件；内置 SHA256 逐文件 **100/100 一致**；`unzip -t` 零错误。
+- **SHA256 = `84de99b67caa6216c329dc15c00dcd2bbc9bfb68e3b82116bd5dfc5af9e735f1`**
+- `Main.dex` = `105b025251244b328d8926f3a252343c`（2,571,676 B）
+- `webroot/index.html` = `063d57cf47646555ca607bbdaa4ea7cc`（不变）
+
+### 关于既有高危路径（未改，因有开关且当前关闭）
+- `AntiDetectionModule.removeHmaResidue()`：每 5 分钟递归删除 `/data/system` 下名称含
+  hide/hma/applist 的目录。当前无匹配项（无副作用），但属高敏路径，未动。
+- `StorageIsolationModule`：/data/media 用户目录搬移（显式 HIGH RISK），受 storage_isolation_enable 门控（当前关闭）。

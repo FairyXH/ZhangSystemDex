@@ -1249,3 +1249,66 @@ SelfTest 清理.* 12 PASS/0 FAIL；全局 54/1/2/7（同前，唯一 FAIL 为既
 
 **未做（可选后续）**：OTA 发布 zip 重打包（`pack.sh`/`构建WebUI.bat`）、真机端到端验证（加源→拉取→扫描命中）、
 在线规则签名校验（当前仅 JSON schema + 路径红线，未做发布者签名）。
+
+---
+
+## §39 端到端验证与删除缺陷修复（2026-10-05）
+
+**触发**：用户要求「验证功能是否全部完整，包括 WebUI 界面；确保清理功能确实按规则走、有内置规则」。
+
+### 构建 / 部署链路（本 proot 环境唯一可行路径）
+- `assembleDebug/Release` 因 **AAPT2 无法启动**（缺 `/lib64/ld-linux-x86-64.so.2`）失败，仅影响资源打包，不影响 dex。
+- 用 `d8` 直接从 Kotlin class 产物生成 dex：
+  ```
+  D8=/opt/android-sdk/build-tools/36.0.0/d8
+  AJ=/opt/android-sdk/platforms/android-37.1/android.jar
+  KS=<kotlin-stdlib-2.2.21.jar>   # 必须作为【输入】而非 --lib，否则 stdlib 不打包
+  CLS=app/build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes
+  mkdir -p /tmp/dex   # ⚠ d8 要求 --output 目录【预先存在】
+  $D8 --min-api 34 --output /tmp/dex --lib $AJ $KS $(find $CLS -name '*.class')
+  ```
+  产物约 3,074,0xx 字节（含 stdlib 与全部新类）。
+- 部署：`cp` dex 到 `/data/adb/modules/Zhang/Main.dex` 与 `/data/adb/Zhang/Main.dex`，
+  再 `cd /data/adb/modules/Zhang && sh 停止Dex.sh && sh service.sh`；端口固定 **26437**。
+- **UI 部署坑**：WebUI 从 `/data/adb/modules/Zhang/webroot/index.html` 加载（HttpBackend 的 `File(mod,"webroot/index.html")`），
+  另有 `system/webroot/index.html` 副本；构建 dex **不会**同步 UI，必须手动把
+  `app/src/main/assets/webroot/index.html`（真源，112278B）拷到这两处。本轮发现部署副本曾是旧版（96652B，不含在线规则 UI）并已修正。
+
+### 发现并修复的代码缺陷（commit `2659450`）
+- **现象**：`POST /api/rubbish/clean {"rules":"empty_dirs"}` 返回 `files=0`，目标空目录残留，审计日志
+  无任何 DELETE/REJECT 记录（静默失败）。
+- **根因**：`RubbishGuard.deleteTree()` 只递归删除目录**内容**，**从不删除传入的目录自身**；
+  对空目录（`listFiles()` 返回空数组而非 null）直接跳过，导致 `cleanEmpty`/`cleanDeep` 的空目录删除全部失效。
+- **修复**：`deleteTree(dir, ruleId, deleteSelf=false)` 新增 `deleteSelf`；`safeDelete()` 对目录传 `true`
+  实现彻底删除；递归子目录由内部统一删自身；删除失败时新增 **FAIL 审计 + rejected**（消除静默）。
+  `safeCleanDirContents` 仍传默认 `false`，保持「保留容器」语义不变。
+
+### 端到端验证结果（真机 dex 部署后实测）
+- **内置规则 31 条**（`source=internal`，switchKey 无空）；在线 1 + 用户 1，合并表 **33 条**。
+- `preview` 多规则不再只返回首条（历史缺陷已消解）。
+- 在线规则端到端：`add`→`fetch`→合并→`preview` 命中真实文件（`<u>` 占位符展开正确）。
+- 校验红线 4 例（相对路径 / `..` / GLOB 缺 pattern / 合法）全部正确。
+- `user/set`、`user/export`、`import`（user 与 online 两种 target）均可用。
+- **删除实测**：造 `ZSD_T2_SUB/inner/zero.txt` → clean 后 audit 依序
+  `DELETE zero.txt(file) → inner(dir) → ZSD_T2_SUB(dir)`，目录彻底消失；空目录 `Operit/skills` 被真实删除。
+- **WebUI 验证**：UI 引用 38 个 `/api/*` 端点，与 HttpBackend 路由表**零缺失**；
+  `node --check` 通过；HTML 150 个 id、标签全部闭合；`api()` 默认端口 26437 与后端一致。
+  12 项 UI 走调用链端到端测试 **12/12 通过**。
+
+### 已知环境限制（非代码缺陷）
+- `/data/media/0`（主用户 emulated/FUSE）下 root **无法删除其它应用 uid 属主的目录**，
+  `rmdir`/`rm -rf` 均报 `EPERM`（即使用 `/mnt/pass_through` 直连路径也一样）。
+  而 `/data/media/999`（多用户直连）可正常删除（已验证）。
+  修复后此类失败会记录 **FAIL 审计 + rejected**，不再静默；真实删除能力以 18:40 自动清理
+  `files=2780 bytes=675MB rejected=6` 为证。
+- 回滚备份：`/data/adb/Zhang/_backup_deletefix_*`（dex）、`/data/adb/Zhang/_backup_ui_*`（index.html）。
+
+### 复现命令速查
+```
+API=http://127.0.0.1:26437
+curl -s $API/api/ping
+curl -s $API/api/rubbish/rules | python3 -m json.tool | head
+curl -s -X POST $API/api/rubbish/preview -d '{"rules":"empty_dirs","max":5}' -H 'Content-Type: application/json'
+curl -s -X POST $API/api/rubbish/clean   -d '{"rules":"empty_dirs"}' -H 'Content-Type: application/json'
+tail -20 /data/adb/Zhang/log/rubbish_clean.log
+```

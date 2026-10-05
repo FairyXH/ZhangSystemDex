@@ -211,6 +211,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["module_appops_auth_enable"] == null) {
             missing.add("module_appops_auth_enable=false\t# 为模块挂载 App 授权 AppOps（仅处理模块目录 APK）")
         }
+        if (switches["oom_protect_enable"] == null) {
+            missing.add("oom_protect_enable=true\t# OOM 保护名单总开关（默认开启，内置保活 com.ai.assistance.operit；oom_score_adj 钳制到 -900）")
+        }
         // ===== 电源与后台调度优化子系统（新增，仅追加缺失键，不覆盖已有值）=====
         if (switches["power_optimize_enable"] == null) {
             missing.add("power_optimize_enable=false\t# 电源与后台调度优化（事件驱动省电子系统，关闭时不影响其它功能与系统 Doze）")

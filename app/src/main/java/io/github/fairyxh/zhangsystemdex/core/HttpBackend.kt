@@ -1232,6 +1232,21 @@ class HttpBackend(
     // OOM 保护名单 API
     // ==================================================================
 
+    /**
+     * 构建字符串数组 JSON（`["a","b"]`）。
+     *
+     * 注意：[JsonBuilder.arr] 不会自动插入逗号，元素间必须显式分隔，
+     * 否则会生成 `["a""b"]` 这样的非法 JSON（曾导致前端解析失败）。
+     */
+    private fun jsonStrArray(items: List<String>): String = JsonBuilder.arr {
+        var first = true
+        for (it in items) {
+            if (!first) comma()
+            first = false
+            value(it)
+        }
+    }
+
     /** 读取名单文件内容（含注释行，便于 UI 原样编辑）。 */
     private fun apiOomRead(): String {
         val f = OomProtectList.file(File(ctx.config.rootDir))
@@ -1269,7 +1284,7 @@ class HttpBackend(
             Logger.i(name, "OOM 名单已写入 ${normalized.size} 项")
             val sb = StringBuilder()
             sb.append("{\"ok\":true,\"code\":0,\"count\":").append(normalized.size)
-            sb.append(",\"packages\":").append(JsonBuilder.arr { normalized.forEach { value(it) } }).append('}')
+            sb.append(",\"packages\":").append(jsonStrArray(normalized)).append('}')
             jsonRaw(sb.toString())
         } catch (t: Throwable) {
             jsonError("写入失败: ${t.message}")
@@ -1292,7 +1307,7 @@ class HttpBackend(
         sb.append(",\"path\":").append(q(f.absolutePath))
         sb.append(",\"known\":").append(known.size)
         sb.append(",\"count\":").append(protectedList.size)
-        sb.append(",\"protected\":").append(JsonBuilder.arr { protectedList.forEach { value(it) } })
+        sb.append(",\"protected\":").append(jsonStrArray(protectedList))
         sb.append(",\"safeFloor\":").append(io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.SAFE_FLOOR)
         sb.append('}')
         return jsonRaw(sb.toString())
@@ -1307,7 +1322,10 @@ class HttpBackend(
         val system = try { AppListProvider.systemPackages().toHashSet() } catch (_: Throwable) { HashSet<String>() }
         val sb = StringBuilder()
         sb.append("{\"ok\":true,\"apps\":").append(JsonBuilder.arr {
+            var first = true
             for (pkg in apps) {
+                if (!first) comma()
+                first = false
                 raw(JsonBuilder.obj {
                     key("pkg"); value(pkg); comma()
                     key("system"); value(pkg in system)

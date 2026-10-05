@@ -849,11 +849,11 @@ object SelfTest {
         // ===== OOM 保护名单 =====
         // 11) 安全钳制：请求 -1000 必须被钳到 SAFE_FLOOR(-900)，不得越过系统核心。
         try {
-            val clamped = OomProtectModule.clampOom(-1000)
-            val clamped2 = OomProtectModule.clampOom(-500)
-            val clamped3 = OomProtectModule.clampOom(5000)
+            val clamped = OomProtectModule.clampOom(-1000)   // 越界下钳 -> -900
+            val clamped2 = OomProtectModule.clampOom(-500)   // 合法区间内 -> 原样 -500
+            val clamped3 = OomProtectModule.clampOom(5000)   // 越界上钳 -> 1000
             val ok = clamped == OomProtectModule.SAFE_FLOOR &&
-                clamped2 == OomProtectModule.SAFE_FLOOR &&
+                clamped2 == -500 &&
                 clamped3 == 1000
             s.add(
                 "OOM.安全钳制",

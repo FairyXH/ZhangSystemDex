@@ -1025,3 +1025,22 @@ await loadCleanState();
 - Git 最新 4 commit：`069cadb`（清理性能 A+B+C）→ `401c47b`（安全加固）→
   `7194cf4`（OOM WebUI）→ `11f7d92`（OOM JSON 修复）。
 - **未 push**（本地 main 领先 origin/main 4 个 commit）。
+
+---
+## 29. 发布构建：含 OOM 保护名单 + 安全加固的正式 zip（2026-10-05 09:04）
+**背景**：本次汇总发布三项改动——清理深度扫描性能 A+B+C（§25）、
+OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
+**产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,197,301 字节**（≈410 MB），100 文件
+- **SHA256 = `7188a43f7f8d6e30a958d327dae7fb190407ed0bc27fc09598bd1308b4fdf875`**
+- 打包耗时 32s（`pack.sh` v4 全程进度输出）
+**关键条目（md5 与源一致，已从 zip 内 `unzip -p` 复验）**：
+- `Main.dex` = `83b3e6d06d8f444e579ab305666da1db`（2,571,408 B，含 OOM + 安全加固 + JSON 修复）
+- `webroot/index.html` = `063d57cf47646555ca607bbdaa4ea7cc`（89,585 B，含 OOM 保护名单 UI）
+- `webroot/config.json` = `d01d5fc7f95f27ed10a33d1a16c1c255`
+**校验**：
+- `unzip -t` 零错误；`pack.sh` 内置 SHA256 逐文件比对 **100/100 一致**。
+- 发布前内容清查：无 `*.bak/*.tmp/*~/*.orig/__pycache__/.DS_Store` 残留。
+**部署**：用户可刷此 zip 或直接用母版 `部署母版到已安装.sh`。
+**⚠ 重装后建议**：先仅开 OOM 保护等低风险功能观察一轮，再逐步开启清理/停用类功能
+（见 §27 事故教训）。

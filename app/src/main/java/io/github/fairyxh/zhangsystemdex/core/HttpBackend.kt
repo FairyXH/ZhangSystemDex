@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex.core
 import io.github.fairyxh.zhangsystemdex.core.rubbish.JsonBuilder
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishProgress
 import io.github.fairyxh.zhangsystemdex.core.rubbish.UserGuardRules
 import java.io.BufferedInputStream
 import java.io.File
@@ -195,8 +196,11 @@ class HttpBackend(
             "/api/ota/update" -> apiOtaUpdate(method)
             // ===== 垃圾清理 =====
             "/api/rubbish/rules" -> apiRubbishRules()
-            "/api/rubbish/scan" -> apiRubbishScan(method, body, dryRun = true)
-            "/api/rubbish/clean" -> apiRubbishScan(method, body, dryRun = false)
+            "/api/rubbish/scan" -> apiRubbishScanStart(method, body, dryRun = true)
+            "/api/rubbish/clean" -> apiRubbishScanStart(method, body, dryRun = false)
+            "/api/rubbish/progress" -> apiRubbishProgress()
+            "/api/rubbish/result" -> apiRubbishResult()
+            "/api/rubbish/preview" -> apiRubbishPreview(method, body)
             "/api/rubbish/status" -> apiRubbishStatus()
             "/api/rubbish/history" -> apiRubbishHistory(query)
             "/api/rubbish/guard/read" -> apiRubbishGuardRead()
@@ -1137,26 +1141,91 @@ class HttpBackend(
     private fun apiRubbishRules(): String = cleaner().rulesToJson()
 
     /**
-     * Scan (dryRun=true) or clean (dryRun=false).
+     * 启动扫描（dryRun=true）或清理（dryRun=false）的**后台任务**。
+     *
+     * 重要：完整扫描要遍历几十万个文件、持续数十秒到数分钟。此前这里是
+     * 同步阻塞调用（WebUI 只能干等，且容易触发连接超时）。现在改为：
+     *   - 立即返回 `{ok:true, running:true}`（若已有任务在跑则 running:false）；
+     *   - 后台线程执行 scan/clean，实时更新 [RubbishProgress]；
+     *   - 前端轮询 `/api/rubbish/progress` 显示进度，完成后取 `/api/rubbish/result`。
      *
      * Gate: `rubbish_clean_enable` must be true for BOTH scan and clean so the
      * feature cannot even be triggered from the UI while disabled. Scan itself
      * is read-only, but requiring the master switch keeps behaviour predictable.
      */
-    private fun apiRubbishScan(method: String, body: String, dryRun: Boolean): String {
+    private fun apiRubbishScanStart(method: String, body: String, dryRun: Boolean): String {
         if (method != "POST") return jsonError("需要 POST")
         if (!ctx.config.switch("rubbish_clean_enable")) {
             return jsonError("垃圾清理总开关未开启（rubbish_clean_enable=false）")
         }
+        if (RubbishProgress.isRunning()) {
+            return jsonRaw("{\"ok\":true,\"running\":true,\"message\":\"已有任务在运行\"}")
+        }
         val obj = if (body.trimStart().startsWith("{")) MiniJson.parseObject(body) else emptyMap()
         val ruleIds = parseRuleIds(obj?.get("rules"))
+        val jobName = if (dryRun) "rubbish-scan" else "rubbish-clean"
+        Thread({
+            val c = cleaner()
+            try {
+                val total = c.previewRuleCount(ruleIds)
+                if (!RubbishProgress.begin(dryRun, total)) return@Thread
+                val summary = if (dryRun) c.scan(ruleIds) else c.clean(ruleIds)
+                RubbishProgress.finish(c.summaryToJson(summary))
+            } catch (t: Throwable) {
+                Logger.e(name, "垃圾任务执行失败", t)
+                RubbishProgress.fail(t.message ?: "未知错误")
+            }
+        }, jobName).apply { isDaemon = true }.start()
+        return jsonRaw("{\"ok\":true,\"running\":true,\"message\":\"任务已启动\"}")
+    }
+
+    /** 轮询扫描/清理进度。 */
+    private fun apiRubbishProgress(): String {
+        val s = RubbishProgress.snapshot()
+        val sb = JsonBuilder.obj {
+            key("ok"); value(true); comma()
+            key("running"); value(s.running); comma()
+            key("phase"); value(s.phase.name.lowercase()); comma()
+            key("dryRun"); value(s.dryRun); comma()
+            key("ruleId"); value(s.ruleId); comma()
+            key("ruleName"); value(s.ruleName); comma()
+            key("currentPath"); value(s.currentPath); comma()
+            key("rulesDone"); value(s.rulesDone); comma()
+            key("rulesTotal"); value(s.rulesTotal); comma()
+            key("shardDone"); value(s.shardDone); comma()
+            key("shardTotal"); value(s.shardTotal); comma()
+            key("hitFiles"); value(s.hitFiles); comma()
+            key("hitBytes"); value(s.hitBytes); comma()
+            key("elapsedMs"); value(s.elapsedMs); comma()
+            key("message"); value(s.message)
+        }
+        return jsonRaw(sb)
+    }
+
+    /** 取最近一次任务的结果（scan/clean 的 Summary JSON）。 */
+    private fun apiRubbishResult(): String {
+        val json = RubbishProgress.resultJson()
+        if (json.isEmpty()) return jsonError("暂无结果")
+        return jsonRaw(json)
+    }
+
+    /** 清理预览：列出点击清理后将被删除的具体路径（只读）。 */
+    private fun apiRubbishPreview(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        if (!ctx.config.switch("rubbish_clean_enable")) {
+            return jsonError("垃圾清理总开关未开启（rubbish_clean_enable=false）")
+        }
+        if (RubbishProgress.isRunning()) return jsonError("已有任务在运行，请稍候")
+        val obj = if (body.trimStart().contains("{")) MiniJson.parseObject(body) else emptyMap()
+        val ruleIds = parseRuleIds(obj?.get("rules"))
+        val maxPer = (obj?.get("max")?.toIntOrNull() ?: 200).coerceIn(10, 500)
         return try {
             val c = cleaner()
-            val summary = if (dryRun) c.scan(ruleIds) else c.clean(ruleIds)
+            val summary = c.preview(ruleIds, maxPer)
             c.summaryToJson(summary)
         } catch (t: Throwable) {
-            Logger.e(name, "垃圾清理执行失败", t)
-            jsonError("执行失败: ${t.message}")
+            Logger.e(name, "清理预览失败", t)
+            jsonError("预览失败: ${t.message}")
         }
     }
 

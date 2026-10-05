@@ -165,6 +165,23 @@
   .cleanhead .acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
   .bar{height:6px;border-radius:3px;background:var(--dim2);overflow:hidden;margin-top:12px}
   .bar > i{display:block;height:100%;width:0;background:var(--acc2);transition:width .25s}
+  .cleanhead .prog{margin-top:9px;padding-top:9px;border-top:1px solid var(--sep)}
+  .cleanhead .progline{font-size:12px;color:var(--dim);font-family:ui-monospace,monospace}
+  .cleanhead .progpath{font-size:11px;color:var(--dim);font-family:ui-monospace,monospace;
+    margin-top:3px;word-break:break-all;max-height:32px;overflow:hidden;opacity:.8}
+  .modal .box.wide{max-width:560px}
+  .prevsub{margin:0 0 12px!important}
+  .prevlist{max-height:50vh;overflow:auto;-webkit-overflow-scrolling:touch;
+    background:var(--card2);border-radius:10px;padding:8px 10px;margin-bottom:16px}
+  .prevlist .pgroup{font-size:12px;font-weight:700;color:var(--txt);margin:10px 0 5px;
+    position:sticky;top:0;background:var(--card2);padding:2px 0}
+  .prevlist .pgroup:first-child{margin-top:2px}
+  .prevlist .pfile{font-family:ui-monospace,monospace;font-size:11px;line-height:1.5;
+    color:var(--dim);word-break:break-all;padding:2px 0}
+  .prevlist .pmore{font-size:11px;color:var(--acc2);padding:3px 0;font-weight:600}
+  .prevlist .pempty{font-size:12.5px;color:var(--dim);padding:16px 0;text-align:center}
+  .prevlist::-webkit-scrollbar{width:6px}
+  .prevlist::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:3px}
   .risk{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:6px;margin-left:6px;
     vertical-align:middle}
   .risk.low{background:rgba(52,199,89,.18);color:var(--ok)}
@@ -439,6 +456,10 @@
       <div class="big" id="cleanSize">—</div>
       <div class="sub" id="cleanSub">点击「扫描」统计可清理空间</div>
       <div class="bar"><i id="cleanBar"></i></div>
+      <div class="prog" id="cleanProg" style="display:none">
+        <div class="progline" id="cleanProgRule">准备中…</div>
+        <div class="progpath" id="cleanProgPath"></div>
+      </div>
       <div class="acts">
         <button class="btn primary sm" id="btnCleanScan">扫描</button>
         <button class="btn sm" id="btnCleanRun">清理选中项</button>
@@ -475,6 +496,19 @@
     <div class="mbtns">
       <button class="btn sm ghost" id="cmCancel">取消</button>
       <button class="btn sm primary" id="cmOk">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 清理预览：列出点击清理后将被删除的具体文件 -->
+<div class="modal" id="prevModal">
+  <div class="box wide">
+    <h3 id="prevTitle">清理预览</h3>
+    <p id="prevSub" class="prevsub"></p>
+    <div class="prevlist" id="prevList"></div>
+    <div class="mbtns">
+      <button class="btn sm ghost" id="prevCancel">取消</button>
+      <button class="btn sm primary" id="prevOk">确认清理</button>
     </div>
   </div>
 </div>
@@ -1657,32 +1691,81 @@ async function persistCleanRule(r, inp){
   }
 }
 
+/** 渲染一条规则的大小/状态文案（统一 scan、preview 结果）。 */
+function renderRuleSize(x){
+  const el = document.querySelector('[data-size-for="' + x.id + '"]');
+  if (!el) return;
+  if (x.skipped){ el.textContent = "跳过：" + x.skipReason; }
+  else if (x.listOnly){ el.textContent = "仅列出 " + x.files + " 文件 · " + fmtBytes(x.bytes) + "（不计入可清理）"; }
+  else { el.textContent = x.files + " 文件 · " + fmtBytes(x.bytes); }
+}
+
+/** 轮询进度：更新进度条、当前规则、当前扫描路径。返回 Promise（任务结束时 resolve）。 */
+function pollCleanProgress(){
+  return new Promise((resolve)=>{
+    const bar = $("#cleanBar"), sub = $("#cleanSub");
+    const prog = $("#cleanProg"), progRule = $("#cleanProgRule"), progPath = $("#cleanProgPath");
+    let lastShown = "";
+    const tick = async ()=>{
+      let p = null;
+      try{ p = await api("/api/rubbish/progress"); }catch(_){}
+      if (p && p.ok){
+        const verb = p.dryRun ? "扫描" : "清理";
+        if (prog) prog.style.display = "";
+        if (progRule){
+          const rt = (p.rulesTotal>0) ? ("（规则 " + (p.rulesDone+1) + "/" + p.rulesTotal + "）") : "";
+          progRule.textContent = verb + "中 " + (p.ruleName || "…") + rt
+            + " · 已命中 " + (p.hitFiles||0) + " 个 · " + fmtBytes(p.hitBytes||0);
+        }
+        if (progPath){
+          const path = p.currentPath || "";
+          if (path && path !== lastShown){ lastShown = path; }
+          progPath.textContent = path ? ("正在扫描：" + path) : "";
+        }
+        // 进度条：优先用分片进度，其次用规则进度
+        if (bar){
+          let pct = 0;
+          if (p.shardTotal>0) pct = Math.min(99, Math.round(p.shardDone/p.shardTotal*100));
+          else if (p.rulesTotal>0) pct = Math.min(99, Math.round(p.rulesDone/p.rulesTotal*100));
+          bar.style.width = Math.max(5, pct) + "%";
+        }
+        if (sub) sub.textContent = verb + "中… 可先浏览其它页面";
+      }
+      if (!p || !p.running){ resolve(); return; }
+      setTimeout(tick, 600);
+    };
+    tick();
+  });
+}
+
 async function doCleanScan(){
-  const btn = $("#btnCleanScan");
-  if (btn) btn.disabled = true;
-  const bar = $("#cleanBar"); if (bar) bar.style.width = "30%";
-  const sub = $("#cleanSub"); if (sub) sub.textContent = "扫描中…";
+  if (CLEAN_SELECTED.size === 0){ toast("请先勾选要扫描的类型", "err"); return; }
+  const btn = $("#btnCleanScan"); if (btn) btn.disabled = true;
+  const bar = $("#cleanBar"); if (bar) bar.style.width = "5%";
+  const sub = $("#cleanSub"); if (sub) sub.textContent = "启动扫描…";
+  const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = "扫描中…";
   try{
-    const r = await api("/api/rubbish/scan", { rules: Array.from(CLEAN_SELECTED) });
+    const s = await api("/api/rubbish/scan", { rules: Array.from(CLEAN_SELECTED) });
+    if (s && s.ok === false) throw new Error(s.message || "无法启动扫描");
+    await pollCleanProgress();
+    const r = await api("/api/rubbish/result");
+    if (r && r.ok === false) throw new Error(r.message || "无扫描结果");
     CLEAN_LAST = r;
     if (bar) bar.style.width = "100%";
     const total = (r && r.totalBytes) || 0;
-    const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = fmtBytes(total);
+    if (sizeEl) sizeEl.textContent = fmtBytes(total);
     if (sub) sub.textContent = "可清理 " + ((r && r.totalFiles) || 0) + " 个文件 · " + fmtBytes(total);
-    (r && r.rules || []).forEach(x=>{
-      const el = document.querySelector('[data-size-for="' + x.id + '"]');
-      if (!el) return;
-      if (x.skipped){ el.textContent = "跳过：" + x.skipReason; }
-      else if (x.listOnly){ el.textContent = "仅列出 " + x.files + " 文件 · " + fmtBytes(x.bytes) + "（不计入可清理）"; }
-      else { el.textContent = x.files + " 文件 · " + fmtBytes(x.bytes); }
-    });
+    (r && r.rules || []).forEach(renderRuleSize);
+    const prog = $("#cleanProg"); if (prog) prog.style.display = "none";
     toast("扫描完成：" + fmtBytes(total), "ok");
   }catch(e){
     if (bar) bar.style.width = "0";
     if (sub) sub.textContent = "扫描失败";
+    if (sizeEl) sizeEl.textContent = "—";
     toast("扫描失败：" + (e.message||e), "err");
   }finally{
     if (btn) btn.disabled = false;
+    const prog = $("#cleanProg"); if (prog) prog.style.display = "none";
     setTimeout(()=>{ if (bar) bar.style.width = "0"; }, 1200);
   }
 }
@@ -1699,28 +1782,93 @@ function confirmModal(title, body, onOk){
   cancel.onclick = close;
 }
 
+/**
+ * 清理预览：请求后端列出「点击确认后将被删除」的具体文件，弹窗显示。
+ * 用户确认后才真正执行清理。
+ */
 async function doCleanRun(){
   if (CLEAN_SELECTED.size === 0){ toast("请先勾选要清理的类型", "err"); return; }
+  const btn = $("#btnCleanRun"); if (btn) btn.disabled = true;
+  const sub = $("#cleanSub"); if (sub) sub.textContent = "生成预览…";
+  try{
+    const p = await api("/api/rubbish/preview", { rules: Array.from(CLEAN_SELECTED), max: 200 });
+    if (p && p.ok === false) throw new Error(p.message || "预览失败");
+    showCleanPreview(p);
+  }catch(e){
+    toast("预览失败：" + (e.message||e), "err");
+    if (sub) sub.textContent = "预览失败";
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+/** 渲染预览弹窗。 */
+function showCleanPreview(p){
+  const m = $("#prevModal");
+  if (!m){ return; }
+  const total = (p && p.totalBytes) || 0;
+  const totalFiles = (p && p.totalFiles) || 0;
+  $("#prevTitle").textContent = "清理预览";
   const risky = CLEAN_RULES.filter(r=> CLEAN_SELECTED.has(r.id) && r.risk !== "LOW");
-  const msg = "将清理 " + CLEAN_SELECTED.size + " 类垃圾，删除后不可恢复。"
-    + (risky.length ? '<br/><b style="color:var(--warn)">其中含中/高风险项：' + risky.map(r=>esc(r.name)).join("、") + '</b>' : "");
-  confirmModal("确认清理", msg, async ()=>{
-    const btn = $("#btnCleanRun"); if (btn) btn.disabled = true;
-    const sub = $("#cleanSub"); if (sub) sub.textContent = "清理中…";
-    try{
-      const r = await api("/api/rubbish/clean", { rules: Array.from(CLEAN_SELECTED) });
-      CLEAN_LAST = r;
-      const total = (r && r.totalBytes) || 0;
-      const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = fmtBytes(total);
-      if (sub) sub.textContent = "本次已释放 " + ((r && r.totalFiles) || 0) + " 个文件 · " + fmtBytes(total);
-      toast("清理完成，释放 " + fmtBytes(total), "ok");
-      await doCleanScan();
-    }catch(e){
-      toast("清理失败：" + (e.message||e), "err");
-    }finally{
-      if (btn) btn.disabled = false;
-    }
-  });
+  $("#prevSub").innerHTML = "将删除 <b>" + totalFiles + "</b> 个文件 / 共 <b>" + fmtBytes(total) + "</b>，删除后不可恢复。"
+    + (risky.length ? '<br/><b style="color:var(--warn)">含中/高风险项：' + risky.map(r=>esc(r.name)).join("、") + '</b>' : "");
+
+  const host = $("#prevList");
+  if (!host) return;
+  const items = (p && p.rules) || [];
+  if (items.length === 0){ host.innerHTML = '<div class="pempty">没有匹配的可清理项。</div>'; }
+  else {
+    let html = "";
+    items.forEach(x=>{
+      if (x.skipped) return;
+      const samples = x.samples || [];
+      if (samples.length === 0 && x.files === 0) return; // 无内容规则不展示
+      html += '<div class="pgroup">' + esc(x.name) + "（" + x.files + " 个 · " + fmtBytes(x.bytes)
+        + (x.listOnly ? "，仅列出" : "") + "）</div>";
+      if (samples.length === 0){
+        html += '<div class="pfile">（无可展开的具体路径）</div>';
+      } else {
+        samples.forEach(s=>{ html += '<div class="pfile">' + esc(s) + '</div>'; });
+        if (x.files > samples.length){
+          html += '<div class="pmore">… 等共 ' + x.files + ' 个（仅预览前 ' + samples.length + ' 个）</div>';
+        }
+      }
+    });
+    host.innerHTML = html || '<div class="pempty">没有匹配的可清理项。</div>';
+  }
+
+  m.classList.add("show");
+  const ok = $("#prevOk"), cancel = $("#prevCancel");
+  const close = ()=>{ m.classList.remove("show"); ok.onclick = null; cancel.onclick = null; };
+  cancel.onclick = close;
+  ok.onclick = ()=>{ close(); runCleanNow(); };
+}
+
+/** 真正执行清理（异步 + 进度轮询）。 */
+async function runCleanNow(){
+  const btn = $("#btnCleanRun"); if (btn) btn.disabled = true;
+  const bar = $("#cleanBar"); if (bar) bar.style.width = "5%";
+  const sub = $("#cleanSub"); if (sub) sub.textContent = "启动清理…";
+  try{
+    const s = await api("/api/rubbish/clean", { rules: Array.from(CLEAN_SELECTED) });
+    if (s && s.ok === false) throw new Error(s.message || "无法启动清理");
+    await pollCleanProgress();
+    const r = await api("/api/rubbish/result");
+    if (r && r.ok === false) throw new Error(r.message || "无清理结果");
+    CLEAN_LAST = r;
+    if (bar) bar.style.width = "100%";
+    const total = (r && r.totalBytes) || 0;
+    const sizeEl = $("#cleanSize"); if (sizeEl) sizeEl.textContent = fmtBytes(total);
+    if (sub) sub.textContent = "本次已释放 " + ((r && r.totalFiles) || 0) + " 个文件 · " + fmtBytes(total);
+    toast("清理完成，释放 " + fmtBytes(total), "ok");
+    await doCleanScan();
+  }catch(e){
+    toast("清理失败：" + (e.message||e), "err");
+    if (sub) sub.textContent = "清理失败";
+  }finally{
+    if (btn) btn.disabled = false;
+    const prog = $("#cleanProg"); if (prog) prog.style.display = "none";
+  }
 }
 
 async function showCleanHistory(){

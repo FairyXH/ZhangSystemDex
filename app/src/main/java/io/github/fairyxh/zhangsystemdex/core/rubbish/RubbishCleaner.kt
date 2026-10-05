@@ -81,8 +81,11 @@ class RubbishCleaner(private val config: ConfigManager) {
         var totalFiles = 0
         var totalBytes = 0L
         for (rule in rules) {
+            RubbishProgress.enterRule(rule.id, rule.name)
             val r = scanRule(rule, maxSamples)
             results += r
+            RubbishProgress.addHits(r.files.toLong(), r.bytes)
+            RubbishProgress.finishRule()
             // ★ 仅列出不删（listOnly）的规则不计入「可清理」总量：
             //   它们统计的是可复核的大文件占用，而非可回收空间。
             if (!rule.listOnly) {
@@ -91,6 +94,176 @@ class RubbishCleaner(private val config: ConfigManager) {
             }
         }
         return Summary(results, totalFiles, totalBytes, dryRun = true)
+    }
+
+    /**
+     * 清理预览：列出「点击清理后将被删除」的具体路径（只读，绝不删除）。
+     *
+     * 与 [scan] 的区别在于样本语义：scan 的样本是规则目标（可能只是目录），
+     * preview 尽量给出**实际会被删除的文件/目录**，供用户清理前核对。
+     *
+     * 每条规则最多返回 [maxSamples] 条路径（防止超大列表拖垮 WebView），
+     * 同时给出该规则的完整 files/bytes，UI 用「等共 N 个」提示被截断。
+     */
+    fun preview(ruleIds: List<String> = emptyList(), maxSamples: Int = 200): Summary {
+        val rules = selectRules(ruleIds)
+        val results = ArrayList<RuleResult>()
+        var totalFiles = 0
+        var totalBytes = 0L
+        for (rule in rules) {
+            val skip = shouldSkipForRunning(rule)
+            if (skip != null) {
+                results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList(), listOnly = rule.listOnly)
+                continue
+            }
+            val victims = previewVictims(rule, maxSamples)
+            val r = RuleResult(
+                rule.id, rule.name, rule.group.key, rule.risk,
+                victims.first, victims.second, false, "", victims.third, listOnly = rule.listOnly,
+            )
+            results += r
+            if (!rule.listOnly) {
+                totalFiles += r.files
+                totalBytes += r.bytes
+            }
+        }
+        return Summary(results, totalFiles, totalBytes, dryRun = true)
+    }
+
+    /**
+     * 收集一条规则的预览数据：返回 (文件数, 字节数, 待删路径样本[≤maxSamples])。
+     * 所有路径仅用于展示；真正删除仍走 [RubbishGuard]。
+     */
+    private fun previewVictims(rule: CleanRule, maxSamples: Int): Triple<Int, Long, List<String>> {
+        val samples = ArrayList<String>()
+        var files = 0
+        var bytes = 0L
+
+        fun add(path: String, size: Long) {
+            files++
+            bytes += size
+            if (samples.size < maxSamples) samples += path
+        }
+
+        // 深度模式：复用各自的受害者收集逻辑，样本即真实删除目标。
+        if (isDeepMode(rule.mode)) {
+            val roots = collectRoots(rule)
+            when (rule.mode) {
+                MatchMode.APK_SCAN -> {
+                    val idx = cache.load(rule.id)
+                    for (f in collectFiles(rule, roots, rule.minBytes)) {
+                        if (classify(rule, idx, f) == 'A') add(f.path, f.length())
+                    }
+                }
+                MatchMode.BIG_FILE_SCAN -> {
+                    val threshold = (if (rule.bigFileMb > 0) rule.bigFileMb else 50).toLong() * 1024 * 1024
+                    for (f in collectFiles(rule, roots, threshold).sortedByDescending { it.length() }) {
+                        add(f.path, f.length())
+                    }
+                }
+                MatchMode.DUP_SAME_SIZE, MatchMode.DUP_CONTENT -> {
+                    val candidates = collectFiles(rule, roots, rule.minBytes)
+                    for (group in candidates.groupBy { it.length() }.values) {
+                        if (group.size < 2) continue
+                        val victims = if (rule.mode == MatchMode.DUP_CONTENT) {
+                            group.groupBy { FileIdentifier.contentHash(it, 0) ?: it.path }
+                                .values.filter { it.size > 1 }
+                                .flatMap { pickVictims(it, rule.keepNewest) }
+                        } else pickVictims(group, rule.keepNewest)
+                        for (v in victims) add(v.path, v.length())
+                    }
+                }
+                MatchMode.JUNK_SCAN -> {
+                    for (f in collectJunkVictims(rule, roots)) {
+                        if (f.isDirectory) {
+                            if (samples.size < maxSamples) samples += f.path + "/（空目录）"
+                            files++
+                        } else add(f.path, f.length())
+                    }
+                }
+                else -> {}
+            }
+            return Triple(files, bytes, samples)
+        }
+
+        // 卸载残留：运行时判定仍安装后剩余目录（无 .apk 后缀，不遍历大目录，仅列目录名）。
+        if (rule.mode == MatchMode.UNINSTALLED_SCAN) {
+            val leftovers = findUninstalledLeftovers()
+            for (d in leftovers) add(d.path, dirSize(d))
+            return Triple(files, bytes, samples)
+        }
+
+        // 普通模式：逐 target 展开为具体待删项。
+        for (userId in mediaUserIds()) {
+            for (root in expandRoots(rule, userId)) {
+                for (target in resolveTargets(rule, root)) {
+                    when (rule.mode) {
+                        MatchMode.DIR_CONTENT -> {
+                            // 清理目录内容：列出（直接子文件的递归集合）
+                            for (f in listFilesRecursive(target, if (rule.id == "app_cache") 1 else Int.MAX_VALUE)) {
+                                add(f.path, f.length())
+                            }
+                        }
+                        MatchMode.DIR_SELF -> add(target.path, dirSize(target))
+                        MatchMode.EMPTY_DIR -> {
+                            val empty = collectEmptyItems(rule, target)
+                            for (p in empty) {
+                                files++
+                                if (samples.size < maxSamples) samples += p
+                            }
+                        }
+                        MatchMode.OLDER_THAN -> {
+                            val cutoff = System.currentTimeMillis() - rule.ageDays.toLong() * 86400_000L
+                            for (f in listFilesRecursive(target, Int.MAX_VALUE)) {
+                                if (f.lastModified() in 1 until cutoff) add(f.path, f.length())
+                            }
+                        }
+                        MatchMode.GLOB -> add(target.path, if (target.isDirectory) dirSize(target) else target.length())
+                        else -> add(target.path, if (target.isDirectory) dirSize(target) else target.length())
+                    }
+                }
+            }
+        }
+        return Triple(files, bytes, samples)
+    }
+
+    /** 递归列出目录下的文件（depthLimit 限制下钻层数，用于 app_cache 只列直接子文件）。 */
+    private fun listFilesRecursive(dir: File, depthLimit: Int): List<File> {
+        val out = ArrayList<File>()
+        val stack = ArrayDeque<Pair<File, Int>>()
+        stack.addLast(dir to 0)
+        var guard = 0
+        while (stack.isNotEmpty() && guard++ < 300000) {
+            val (cur, depth) = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.isDirectory) {
+                    if (depth + 1 < depthLimit || depthLimit == Int.MAX_VALUE) stack.addLast(c to (depth + 1))
+                } else if (c.isFile) out += c
+            }
+        }
+        return out
+    }
+
+    /** 收集空目录与 0 字节文件路径（预览用，不删除）。 */
+    private fun collectEmptyItems(rule: CleanRule, root: File): List<String> {
+        val out = ArrayList<String>()
+        val stack = ArrayDeque<File>()
+        stack.addLast(root)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (c in children) {
+                if (c.name in rule.keep) continue
+                if (c.isDirectory) {
+                    stack.addLast(c)
+                    if (c.listFiles()?.isEmpty() == true) out += c.path + "/（空目录）"
+                } else if (c.isFile && c.length() == 0L) {
+                    out += c.path + "（0 字节）"
+                }
+            }
+        }
+        return out
     }
 
     private fun scanRule(rule: CleanRule, maxSamples: Int): RuleResult {
@@ -114,9 +287,12 @@ class RubbishCleaner(private val config: ConfigManager) {
         val samples = ArrayList<String>()
         var files = 0
         var bytes = 0L
+        // 非深度模式：逐 target 处理时上报「当前路径」，并在每处理完一个 target
+        // 后刷新累计命中，让前端也能看到进度（虽然通常很快）。
         for (userId in mediaUserIds()) {
             for (root in expandRoots(rule, userId)) {
                 for (target in resolveTargets(rule, root)) {
+                    RubbishProgress.onPath(target.path)
                     if (samples.size < maxSamples) samples += target.path
                     if (rule.mode == MatchMode.EMPTY_DIR) {
                         val stat = statEmpty(rule, target)
@@ -226,7 +402,12 @@ class RubbishCleaner(private val config: ConfigManager) {
             ruleId = rule.id,
             visitor = visitor,
             maxSamples = maxSamples,
-            onProgress = { d, t -> lastScanDone = d; lastScanTotal = t },
+            onProgress = { d, t ->
+                lastScanDone = d
+                lastScanTotal = t
+                RubbishProgress.onShard(d, t)
+                if (d < shards.size) RubbishProgress.onPath(shards[d].path)
+            },
         )
         Logger.i(
             "RubbishCleaner",
@@ -333,7 +514,12 @@ class RubbishCleaner(private val config: ConfigManager) {
             ruleId = "__collect_${rule.id}",
             visitor = visitor,
             maxSamples = 0,
-            onProgress = { d, t -> lastScanDone = d; lastScanTotal = t },
+            onProgress = { d, t ->
+                lastScanDone = d
+                lastScanTotal = t
+                RubbishProgress.onShard(d, t)
+                if (d < shards.size) RubbishProgress.onPath(shards[d].path)
+            },
         )
         return synchronized(out) { ArrayList(out) }
     }
@@ -594,9 +780,11 @@ class RubbishCleaner(private val config: ConfigManager) {
         val handledRules = ArrayList<String>()
 
         for (rule in rules) {
+            RubbishProgress.enterRule(rule.id, rule.name)
             val skip = shouldSkipForRunning(rule)
             if (skip != null) {
                 results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, skip, emptyList(), listOnly = rule.listOnly)
+                RubbishProgress.finishRule()
                 continue
             }
             // 只读规则（listOnly）：clean() 绝不删除，直接以空结果返回。
@@ -604,6 +792,7 @@ class RubbishCleaner(private val config: ConfigManager) {
             // cleanDeep 分支检查而遗漏普通模式。
             if (rule.listOnly) {
                 results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, 0, 0L, true, "仅列出（不删除）", emptyList(), listOnly = true)
+                RubbishProgress.finishRule()
                 continue
             }
             handledRules += rule.id
@@ -621,6 +810,8 @@ class RubbishCleaner(private val config: ConfigManager) {
                 results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, rejected)
                 totalFiles += files
                 totalBytes += bytes
+                RubbishProgress.addHits(files.toLong(), bytes)
+                RubbishProgress.finishRule()
                 continue
             }
 
@@ -640,12 +831,15 @@ class RubbishCleaner(private val config: ConfigManager) {
                 results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, rejected)
                 totalFiles += files
                 totalBytes += bytes
+                RubbishProgress.addHits(files.toLong(), bytes)
+                RubbishProgress.finishRule()
                 continue
             }
 
             for (userId in mediaUserIds()) {
                 for (root in expandRoots(rule, userId)) {
                     for (target in resolveTargets(rule, root)) {
+                        RubbishProgress.onPath(target.path)
                         if (samples.size < maxSamples) samples += target.path
                         val res: RubbishGuard.DeleteResult = when (rule.mode) {
                             MatchMode.DIR_CONTENT -> RubbishGuard.safeCleanDirContents(
@@ -669,6 +863,8 @@ class RubbishCleaner(private val config: ConfigManager) {
             results += RuleResult(rule.id, rule.name, rule.group.key, rule.risk, files, bytes, false, "", samples, rejected)
             totalFiles += files
             totalBytes += bytes
+            RubbishProgress.addHits(files.toLong(), bytes)
+            RubbishProgress.finishRule()
         }
 
         RubbishGuard.auditLog().logSession(handledRules, totalFiles, totalBytes, results.sumOf { it.rejected.size })
@@ -761,6 +957,9 @@ class RubbishCleaner(private val config: ConfigManager) {
         val set = ruleIds.toSet()
         return all.filter { it.id in set }
     }
+
+    /** 选中规则数（供进度显示总数；不触发任何扫描）。 */
+    fun previewRuleCount(ruleIds: List<String>): Int = selectRules(ruleIds).size
 
     /**
      * 解析一条 root 为实际清理目标。

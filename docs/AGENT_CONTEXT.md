@@ -1167,3 +1167,24 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 全局 54 PASS / 1 FAIL（既存 AppOps WRITE_SETTINGS，与本改动无关）/ 2 WARN / 7 SKIP。
 **教训**：汇总口径必须区分「只读/信息型」与「可回收」两类规则；新增 listOnly 规则自动豁免。
 详见 `docs/incidents/2026-10-05_rubbish_scan_total_inflated.md`。
+---
+## 36. 清理扫描进度 + 正在扫描路径 + 清理预览弹窗（2026-10-05）
+**需求**：扫描时显示进度与「正在扫描的位置」；点「清理」前弹预览窗列出将删文件。
+**根因**：`/api/rubbish/scan|clean` 原为同步阻塞，WebUI 干等且易超时。
+**实现**：
+- 新增 `core/rubbish/RubbishProgress.kt`（单例）：阶段/当前规则/当前路径/规则进度/
+  分片进度/累计命中/结果 JSON。
+- `RubbishCleaner`：scan/clean 每规则开始结束、每分片完成上报进度；
+  新增 `preview(ruleIds,maxSamples)` 只读返回将删路径；`previewRuleCount()` 供总数。
+- `HttpBackend`：`/api/rubbish/scan|clean` 改为启动**后台任务**立即返回；
+  新增 `/api/rubbish/progress`、`/api/rubbish/result`、`/api/rubbish/preview`。
+  注意：需 `import ...rubbish.RubbishProgress`（否则 Unresolved reference）。
+- 前端 `index.html`：清理页加 `#cleanProg`（规则+路径）与 `#prevModal` 预览窗；
+  `doCleanScan/runCleanNow` 走 `pollCleanProgress()`（600ms 轮询）；
+  `doCleanRun` 先 preview 弹窗，确认后 `runCleanNow()`。
+**验证**：真机轮询可见 8/26 规则、192/434 分片、当前路径、累计命中；
+结果 totalBytes=2.55GB（正确排除 listOnly 34GB 虚高）；预览按规则列出具体文件/空目录。
+SelfTest 清理.* 12 PASS/0 FAIL；全局 54/1/2/7（同前，唯一 FAIL 为既存 AppOps）。
+**产物**：`Main.dex` md5 `d31ddd5cca214ac5288ed6ae09c6e990`；
+`index.html` md5 `9cbac2ab722e83c478a8e9e398d00dc0`。已部署模块+运行目录+重启 dex。
+详见 `docs/plans/clean_scan_progress_and_preview.md`。

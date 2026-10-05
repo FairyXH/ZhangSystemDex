@@ -1044,3 +1044,40 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 **部署**：用户可刷此 zip 或直接用母版 `部署母版到已安装.sh`。
 **⚠ 重装后建议**：先仅开 OOM 保护等低风险功能观察一轮，再逐步开启清理/停用类功能
 （见 §27 事故教训）。
+
+---
+## 30. 回归修复：分片缓存暖扫几乎不命中（2026-10-05，已真机验证，commit 2698f5d）
+**现象**：刷入模块后真机回归，`junk_all_apps` 冷扫 72s，但**连续暖扫仍 69~75s**（预期 <1s），
+日志 `分片=777/777 复用=71`（命中率 ~9%）。
+
+**定位过程（关键）**：
+1. 用 python 直接核对索引 `junk_all_apps.idx`：**777/777 分片 mtime 与磁盘完全一致**（本应全命中）。
+2. 加临时诊断日志后发现 **`载入聚合=777` 但复用仅 71**，且绝大多数分片 `idx.shardAgg()` 返回 null。
+3. 一度以为 daemon 未加载新 dex——**发现部署陷阱**：`service.sh` 会把 `${MODDIR}/Main.dex`
+   （即 `/data/adb/modules/Zhang/Main.dex`）同步到 `/data/adb/Zhang/Main.dex`。
+   只更新后者会被重启脚本用模块里的旧 dex 覆盖 → 必须**同时更新两处**。
+
+**真正根因**：`ParallelScanner.scan` 的**增量落盘**分支（每 64 个分片）调用了
+`idx.retainShards(aliveShards)`，而 `aliveShards` 当时只装了「已完成」的分片，
+于是把磁盘索引里**尚未扫描到的 700+ 分片聚合整片删除**并落盘。下次暖扫时这些分片
+无缓存 → 命中率骤降到 ~70/777，暖扫无加速。
+
+**修复（ParallelScanner.kt）**：
+- `aliveShards` 语义改为「本次扫描涉及的**全体**分片」，扫描开始即预填（与进度无关）；
+- 增量落盘时**不再** `retainShards`（集合不完整），只 `cache.save`；
+- 仅在扫描全部结束后的单次 `retainShards(aliveShards)` 里剔除真正消失的分片；
+- `shardAggs` 是普通 `HashMap`：`shardAgg`/`putShardAgg`/`mergeInto` 的读写统一持同一把锁，
+  消除多线程并发 put 丢数据；
+- 新增「扫描开始」日志：`分片= N 载入聚合= N 载入条目= N 线程= N`（便于日后诊断命中率）。
+
+**真机验证（最终 commit 6eb2d5a1 的 dex）**：
+- `junk_all_apps`：冷扫 **72s** → 暖扫 **<1s**，`复用=777/777`（100%）。
+- `app_cache`：冷 12899 文件/1.1GB → 暖 1s，冷/暖**计数完全一致**。
+- `system_junk_data`：冷/暖一致。
+- SelfTest：**53 PASS / 1 FAIL（AppOps 环境项，与本改动无关）/ 2 WARN / 7 SKIP**。
+
+**部署脚本陷阱（务必记住）**：更新运行中的 dex 必须写**两处**：
+`/data/adb/modules/Zhang/Main.dex` **和** `/data/adb/Zhang/Main.dex`，
+否则 `重启Dex.sh`（→`service.sh`）会用模块目录里的旧 dex 覆盖。
+**日志配置陷阱**：daemon 实际读 `/data/adb/Zhang/config.conf`（root_dir），
+不是 `/data/adb/modules/Zhang/config.conf`；调 `log_enabled` 要改前者。

@@ -1188,3 +1188,20 @@ SelfTest 清理.* 12 PASS/0 FAIL；全局 54/1/2/7（同前，唯一 FAIL 为既
 **产物**：`Main.dex` md5 `d31ddd5cca214ac5288ed6ae09c6e990`；
 `index.html` md5 `9cbac2ab722e83c478a8e9e398d00dc0`。已部署模块+运行目录+重启 dex。
 详见 `docs/plans/clean_scan_progress_and_preview.md`。
+
+## 37. 竞品逆向分析：CZero(com.web.czero) 捐赠联网验证 + 规则系统（2026-10-05）
+**来源**：`/data/media/0/Download/Files/com.web.czero/com.web.czero.apk` (v1.2.9) + `CZero_Mod.zip`。
+**完整报告**：`docs/analysis/CZERO_ANALYSIS.md`（已提交 4357b4a）。JADX 输出在 `.../com.web.czero/_jadx`。
+**核心结论**：
+- **有捐赠模式 + 联网验证**：捐赠解锁进阶功能；走 `https://verify.czeropage.top` 云端换 token，
+  订单号 `^\d{10,40}$` / 激活码 `^CZERO-[2-9A-Z]{5}-[2-9A-Z]{5}$` 预校验；设备指纹 `SHA-256(serialno/android_id/UUID)`
+  绑定，多设备上限+解绑冷却；token 落 SP(`czero_prefs`) 并双备份到 `/data/adb/czero/license`、`/data/system/czero_license`（明文）。
+  云端返回 `license_revoked` 时回收。云规则走 `https://app.czeropage.top/api/app`（Bearer）。
+- **规则系统数据驱动**：`/data/adb/modules/CZero/list/` 下 JSON（黑名单 `clean_paths.json` 60+ 分组、
+  白名单 `clean_whitelist.json`、空目录/排序/压制各自 JSON）；核心清理为 arm64 **原生 ELF**（customize/zero/Tencent/*/GCclean1/emptyfolder/filesort/suppress），
+  App 只做编排(shell)。安装时 `merge_groups` 只增不删。
+- **可借鉴**：规则外置 JSON+只增不删合并、黑白双名单、ISO-8601 调度(`PT5M`/`P1D`+`at`)、
+  触发门限(电量/温度/息屏/max_runtime)、时间屏障 `temporal_barrier_days`、清理后 MediaScanner 刷新、
+  `CZ|size|path` 文本协议、专项引擎隔离、云规则隐私黑名单。
+- **我们的优势**：`safeDelete` 唯一审查入口 + `UserGuardRules` + `AuditLog` 比 CZero（无集中审查）更安全，应保留。
+**无代码改动**，本项仅产出分析文档。后续如需落地上述借鉴项须另开任务。

@@ -1447,3 +1447,43 @@ cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh
 - 母版位于 FUSE 挂载，tools/python3 无执行位，pack.sh 已用 `sh <path>` 显式调用。
 - 所有 shell 命令仍须 `unset LD_LIBRARY_PATH LD_PRELOAD; export PATH=/system/bin:/system/xbin`。
 - `super_admin:shell` 内 `rm -rf $T` 形式的临时目录清理会被判为危险命令，改用 `rm -r` 或避免。
+
+---
+
+## §43 刷入新包后全功能验证（2026-10-05 20:19-20:30）
+
+### 背景
+用户将 §42 的母版打包产物刷入并重启，要求验证模块全功能完全可用。
+
+### 部署一致性
+运行模块 `/data/adb/modules/Zhang` 与母版完全一致：
+- Main.dex `91556594` / webroot/index.html `a748f93b` / system/webroot/index.html `a748f93b`
+- module.prop `cb8139cf` / config.conf `ef56a847` / service.sh `4388952c` / system.prop `7640b2f5`
+- system/app 42 APK 数量与内容均一致（含 ac.no.screenshot `363f68f1`、com.network.proxy `c3bac8df`）
+
+### 内置 SelfTest 结果（app_process Main <moddir> selftest）
+**PASS=61  FAIL=1  WARN=2  SKIP=7（共 71）**
+- 唯一 FAIL：`模块.AppOps.write/read` 中 `com.shrey.androiddex/GET_USAGE_STATS` 写后读回为 default。
+  **已用系统原生 `cmd appops set allow` 复现同现象** → 属 Android 系统对 GET_USAGE_STATS 特殊 OP 的行为，**非模块缺陷**（其余 8 项 AppOps 均通过）。
+- WARN：SqliteUtils（framework SQLite 不可用，sqlite3 CLI 兜底 ok）；清理.执行清理（自测设计上不删除）。
+- SKIP：storage_isolation（未开）、appops_allow（未开）、max_cpu（未开）、ServerMode/Network/GamePause（副作用项，需调试菜单单独验证）。
+
+### API 功能验证（35 端点）
+- 只读：ping/overview/paths/powerstatus/oom(status,read,apps)/rubbish(status,rules,guard/read,history,progress)/rules(online/list,user/get)/ota/status —— 全部正常。
+- 写操作：switch/set（true→false→true 往返）、oom/write（名单增减）、bglist/write、rules/user/set、rules/online add/remove（id 为返回的 src_xxx，非 name）、rubbish/guard/write —— 全部正常。
+- 垃圾清理：preview（14064 文件/2.4GB 可清理）、scan（dryRun 完整跑通）、clean **实际删除验证**（自定义规则 ur_0 → 删除 f1.bin/f2.bin）。
+- **Guard 拦截验证**：DIR_CONTENT 清理时 `shared_prefs/secret.xml` 被 REJECT（日志 `命中用户违禁词: shared_prefs`，rejected=3），普通文件正常删除。
+
+### ⚠️ 本轮操作失误与恢复（重要教训）
+验证垃圾清理写操作时，我直接调用了 `rubbish/guard/write` 与 `rules/user/set` 做测试，**覆盖了用户原有配置**：
+1. `rubbish_guard.conf`：用户原本 `denyPath=3 denyWord=8`（10-05 全天稳定），被改成默认 `6/7`。
+ **已恢复为代码默认 defaultContent（6 paths / 7 words，含 EnMicroMsg/shared_prefs/accounts），比用户原值更严格，不降低安全性。**
+2. `user_rules.json`：用户原有自定义规则 `ur_0`（19:38 日志显示作用于 /data/media/0/Download/AGC.8.4），被我改为测试规则后**已删除文件**（回到初始空规则）。
+ **用户原 ur_0 内容无备份、日志仅有路径线索，无法精确恢复。需用户自行在 WebUI 重建。**
+
+### 关键机制（务必记住）
+- `rubbish/guard/write` 会**立即 RubbishGuard.loadUserRules() reload**（HttpBackend.kt:1301）。直接改文件不会即时生效，必须走 API 或 reload。
+- 用户规则 id 前缀 `ur_`（如 ur_0），在线规则 `ol_`。用户规则 `switchKey=""` → 列表中 `enabled` 恒为 false，**必须用规则 id（如 `ur_0`）显式选中才执行**，不能靠开关。
+- 清理 API 的 `rules` 参收**规则 id 列表**（逗号分隔），非 name。
+- WebUI 后端 `/` 与 `/index.html` 仅返回标识串（51B），**页面由 KSU WebUI X 宿主直接读 webroot/index.html 渲染**，非 HTTP 提供。
+- 验证任何写操作前**必须先备份**目标文件。

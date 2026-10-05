@@ -265,6 +265,38 @@ object SelfTest {
             s.add("模块.AntiDetection.runOnce", Status.FAIL, t.message ?: "")
         }
 
+        // AntiDetection: HMA 残留清理必须走**精确白名单**，绝不做子串模糊匹配。
+        // 正例：白名单内路径或其子路径应被判定可清理；
+        // 反例：含 hide/hma/applist 字样但非白名单的 /data/system 路径（如 hmac_key、
+        //       厂商 applist 目录）必须被拒绝，避免误删系统核心。
+        try {
+            val positives = listOf(
+                "/data/system/hidemyandroid_applist.conf",
+                "/data/adb/modules/hidemyapplist",
+            )
+            val negatives = listOf(
+                "/data/system/sensor_service/hmac_key",
+                "/data/system/vendor_applist_cache",   // 含 applist
+                "/data/system/hide_from_root",         // 含 hide
+                "/data/system/xyz_hma_data",           // 含 hma
+                "/data/system/shortx_hqSknixfXdvtRJKB",
+                "/data/system/thanos_hJOuGhClVqtheRla",
+                "/data/system/packages.xml",           // 关键文件
+                "/data/system/users/0/package-restrictions.xml",
+            )
+            val posBad = positives.filterNot { AntiDetectionModule.isWhitelisted(it) }
+            val negBad = negatives.filter { AntiDetectionModule.isWhitelisted(it) }
+            val ok = posBad.isEmpty() && negBad.isEmpty() && AntiDetectionModule.HMA_RESIDUE_WHITELIST.isNotEmpty()
+            s.add(
+                "模块.AntiDetection.HMA白名单精确性",
+                if (ok) Status.PASS else Status.FAIL,
+                "白名单=${AntiDetectionModule.HMA_RESIDUE_WHITELIST.size} 漏放正例=${posBad.size} 误放反例=${negBad}",
+            )
+        } catch (t: Throwable) {
+            s.add("模块.AntiDetection.HMA白名单精确性", Status.FAIL, t.message ?: "")
+        }
+
+
         // PowerManager: doze whitelist with verification.
         try {
             PowerManagerModule(ctx).applyDozeList()

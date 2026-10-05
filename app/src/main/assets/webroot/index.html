@@ -465,6 +465,8 @@
         <button class="btn sm" id="btnCleanRun">清理选中项</button>
         <button class="btn ghost sm" id="btnCleanHist">历史</button>
         <button class="btn ghost sm" id="btnCleanGuard">审查规则</button>
+        <button class="btn ghost sm" id="btnOnlineRules">在线规则</button>
+        <button class="btn ghost sm" id="btnRuleEditor">规则编辑器</button>
       </div>
     </div>
     <div class="section">
@@ -486,6 +488,60 @@
         违禁规则可在「审查规则」中自定义。</div>
     </div>
     <div id="cleanGroups"></div>
+
+    <!-- ============ 在线规则（多源直链 + 定期拉取）============ -->
+    <div class="section" id="onlinePanel" style="display:none">
+      <div class="stitle">在线规则订阅</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#30d158">⇩</div>
+          <div class="body"><div class="k">启用在线规则订阅</div>
+            <div class="d">开启后按各源设定间隔自动拉取规则直链（多套），合并进清理规则</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swOnlineRules"><i></i></label></div></div>
+      </div>
+      <div class="section" style="margin:10px 0 0">
+        <div class="stitle">新增规则源</div>
+        <div style="padding:0 4px">
+          <input class="inp" id="olName" placeholder="名称（可选，如：社区规则）" style="width:100%;margin-bottom:6px">
+          <input class="inp" id="olUrl" placeholder="规则直链 https://.../rules.json" style="width:100%;margin-bottom:6px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label class="d" style="color:var(--dim);font-size:12.5px">间隔(小时)</label>
+            <input class="inp" id="olInterval" type="number" min="1" max="720" value="24" style="width:90px">
+            <button class="btn sm primary" id="btnOlAdd">添加并拉取</button>
+          </div>
+          <div class="d" id="olMsg" style="margin-top:8px;color:var(--dim);font-size:12.5px"></div>
+        </div>
+      </div>
+      <div id="olList" style="margin-top:12px"></div>
+    </div>
+
+    <!-- ============ 规则编辑器 ============ -->
+    <div class="section" id="editorPanel" style="display:none">
+      <div class="stitle">规则编辑器</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#0a84ff">✎</div>
+          <div class="body"><div class="k">JSON 规则编辑</div>
+            <div class="d">支持导入/校验/导出；保存后立即生效（仍经安全审查）</div></div>
+          <div class="val">
+            <button class="btn sm ghost" id="btnEdExport">导出</button>
+            <button class="btn sm ghost" id="btnEdUser">载入用户规则</button>
+          </div></div>
+      </div>
+      <div style="padding:0 4px;margin-top:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn sm ghost" id="btnEdValidate">校验</button>
+          <button class="btn sm ghost" id="btnEdImport">导入 JSON</button>
+          <button class="btn sm ghost" id="btnEdFromOnline">从在线源导入</button>
+          <button class="btn sm ghost" id="btnEdCopy">复制</button>
+          <button class="btn sm ghost" id="btnEdDownload">下载 JSON</button>
+          <button class="btn sm primary" id="btnEdSave">保存为用户规则</button>
+        </div>
+        <textarea class="ta" id="edText" spellcheck="false"
+          style="width:100%;min-height:320px;font-family:ui-monospace,monospace;font-size:12.5px"
+          placeholder='{"version":1,"name":"我的规则","groups":[{"name":"示例","mode":"DIR_CONTENT","risk":"LOW","roots":["/data/media/<u>/Android/data/*/cache"]}]}'></textarea>
+        <div class="d" id="edMsg" style="margin-top:8px;color:var(--dim);font-size:12.5px"></div>
+        <div class="d" id="edMeta" style="margin-top:4px;color:var(--dim);font-size:12px"></div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -1902,6 +1958,252 @@ async function showCleanGuard(){
   }catch(e){ toast("读取失败：" + (e.message||e), "err"); }
 }
 
+// ==================== 在线规则（多源直链 + 定期拉取）====================
+let OL_SOURCES = [];
+
+function toggleOnlinePanel(){
+  const p = $("#onlinePanel"); if (!p) return;
+  const ed = $("#editorPanel"); if (ed) ed.style.display = "none";
+  const show = p.style.display === "none";
+  p.style.display = show ? "" : "none";
+  if (show) loadOnlineRules();
+}
+
+function toggleEditorPanel(){
+  const p = $("#editorPanel"); if (!p) return;
+  const ol = $("#onlinePanel"); if (ol) ol.style.display = "none";
+  const show = p.style.display === "none";
+  p.style.display = show ? "" : "none";
+}
+
+async function loadOnlineRules(){
+  try{
+    const r = await api("/api/rules/online/list");
+    OL_SOURCES = (r && r.sources) || [];
+    const sw = $("#swOnlineRules"); if (sw) sw.checked = !!(r && r.masterEnabled);
+    renderOnlineSources();
+  }catch(e){ toast("读取在线规则失败：" + (e.message||e), "err"); }
+}
+
+function fmtTime(ms){
+  if (!ms) return "—";
+  try{ return new Date(ms).toLocaleString(); }catch(_){ return String(ms); }
+}
+
+function renderOnlineSources(){
+  const box = $("#olList"); if (!box) return;
+  if (!OL_SOURCES.length){ box.innerHTML = '<div class="sfoot">暂无规则源。填写名称与直链后点击「添加并拉取」。</div>'; return; }
+  let h = '<div class="section"><div class="stitle">已配置的规则源（' + OL_SOURCES.length + '）</div><div class="list">';
+  OL_SOURCES.forEach(s=>{
+    const status = s.lastStatus === "SUCCESS" ? "成功" : (s.lastStatus === "FAILED" ? "失败" : "未拉取");
+    const stColor = s.lastStatus === "SUCCESS" ? "#30d158" : (s.lastStatus === "FAILED" ? "#ff453a" : "#8e8e93");
+    h += '<div class="cell">'
+      +   '<div class="ic" style="background:' + stColor + '">⇩</div>'
+      +   '<div class="body"><div class="k">' + esc(s.name || "规则源") + '</div>'
+      +     '<div class="d">' + esc(s.url) + '</div>'
+      +     '<div class="d">状态：' + status + ' · 规则 ' + (s.ruleCount||0) + ' 条 · 间隔 ' + (s.intervalHours||24) + 'h'
+      +       ' · 上次 ' + esc(fmtTime(s.lastFetchMs)) + (s.lastError ? (' · ' + esc(s.lastError)) : '') + '</div></div>'
+      +   '<div class="val">'
+      +     '<label class="sw"><input type="checkbox" data-olen="' + esc(s.id) + '"' + (s.enabled ? ' checked' : '') + '><i></i></label>'
+      +     '<button class="btn sm ghost" data-olfetch="' + esc(s.id) + '">拉取</button>'
+      +     '<button class="btn sm ghost" data-oled="' + esc(s.id) + '">编辑</button>'
+      +     '<button class="btn sm ghost" data-olimp="' + esc(s.id) + '">导入到编辑器</button>'
+      +     '<button class="btn sm ghost" data-olrm="' + esc(s.id) + '">删除</button>'
+      +   '</div></div>';
+  });
+  h += '</div></div>';
+  box.innerHTML = h;
+
+  $$("[data-olen]").forEach(el=> el.onchange = ()=> setOnlineEnabled(el.dataset.olen, el.checked));
+  $$("[data-olfetch]").forEach(el=> el.onclick = ()=> fetchOnlineSource(el.dataset.olfetch));
+  $$("[data-oled]").forEach(el=> el.onclick = ()=> editOnlineSource(el.dataset.oled));
+  $$("[data-olimp]").forEach(el=> el.onclick = ()=> importOnlineToEditor(el.dataset.olimp));
+  $$("[data-olrm]").forEach(el=> el.onclick = ()=> removeOnlineSource(el.dataset.olrm));
+}
+
+async function setOnlineEnabled(id, on){
+  try{
+    await api("/api/rules/online/update", { id: id, enabled: on ? "true" : "false" });
+    toast(on ? "已启用该规则源" : "已禁用该规则源", "ok");
+    await loadOnlineRules();
+  }catch(e){ toast("保存失败：" + (e.message||e), "err"); }
+}
+
+async function fetchOnlineSource(id){
+  toast("正在拉取规则…", "ok");
+  try{
+    const r = await api("/api/rules/online/fetch", { id: id });
+    toast(r && r.message ? r.message : "拉取完成", (r && r.ok) ? "ok" : "err");
+    await loadOnlineRules();
+  }catch(e){ toast("拉取失败：" + (e.message||e), "err"); }
+}
+
+async function editOnlineSource(id){
+  const s = OL_SOURCES.find(x=> x.id === id); if (!s) return;
+  const body = '<p>编辑规则源信息：</p>'
+    + '<input class="inp" id="olEdName" placeholder="名称" style="width:100%;margin-bottom:6px" value="' + esc(s.name||"") + '">'
+    + '<input class="inp" id="olEdUrl" placeholder="直链" style="width:100%;margin-bottom:6px" value="' + esc(s.url||"") + '">'
+    + '<label class="d" style="color:var(--dim)">间隔(小时)</label> '
+    + '<input class="inp" id="olEdInterval" type="number" min="1" max="720" value="' + (s.intervalHours||24) + '" style="width:90px">';
+  confirmModal("编辑规则源", body, ()=>{});
+  const ok = $("#cmOk"); if (ok) ok.textContent = "保存";
+  ok.onclick = async ()=>{
+    const name = ($("#olEdName")||{}).value || "";
+    const url = ($("#olEdUrl")||{}).value || "";
+    const interval = ($("#olEdInterval")||{}).value || "24";
+    try{
+      await api("/api/rules/online/update", { id: id, name: name, url: url, intervalHours: interval });
+      toast("已保存", "ok");
+      $("#cleanModal").classList.remove("show");
+      await loadOnlineRules();
+    }catch(e){ toast("保存失败：" + (e.message||e), "err"); }
+  };
+}
+
+async function removeOnlineSource(id){
+  const s = OL_SOURCES.find(x=> x.id === id); if (!s) return;
+  confirmModal("删除规则源", '<p>确定删除「' + esc(s.name||"规则源") + '」？其缓存规则将一并移除。</p>', ()=>{});
+  const ok = $("#cmOk"); if (ok) ok.textContent = "删除";
+  ok.onclick = async ()=>{
+    try{
+      await api("/api/rules/online/remove", { id: id });
+      toast("已删除", "ok");
+      $("#cleanModal").classList.remove("show");
+      await loadOnlineRules();
+    }catch(e){ toast("删除失败：" + (e.message||e), "err"); }
+  };
+}
+
+async function addOnlineSource(){
+  const name = ($("#olName")||{}).value || "";
+  const url = ($("#olUrl")||{}).value || "";
+  const interval = ($("#olInterval")||{}).value || "24";
+  const msg = $("#olMsg");
+  if (!url.trim()){ toast("请填写规则直链", "err"); return; }
+  if (msg) msg.textContent = "正在添加并拉取…";
+  try{
+    const r = await api("/api/rules/online/add", { name: name, url: url, intervalHours: interval, enabled: "true" });
+    if (msg) msg.textContent = (r && r.message) || "已添加";
+    toast((r && r.ok) ? "已添加并拉取" : ("已添加：" + ((r && r.message)||"")), (r && r.ok) ? "ok" : "err");
+    const u = $("#olUrl"); if (u) u.value = "";
+    const n = $("#olName"); if (n) n.value = "";
+    await loadOnlineRules();
+  }catch(e){
+    if (msg) msg.textContent = "失败：" + (e.message||e);
+    toast("添加失败：" + (e.message||e), "err");
+  }
+}
+
+async function importOnlineToEditor(id){
+  try{
+    const r = await api("/api/rules/online/content?id=" + encodeURIComponent(id));
+    const ta = $("#edText"); if (ta && r && r.content) ta.value = r.content;
+    const ed = $("#editorPanel"); if (ed) ed.style.display = "";
+    toast("已载入到编辑器", "ok");
+  }catch(e){ toast("载入失败：" + (e.message||e), "err"); }
+}
+
+// ==================== 规则编辑器 ====================
+function edSetMsg(text, isErr){
+  const m = $("#edMsg"); if (m){ m.textContent = text || ""; m.style.color = isErr ? "#ff453a" : "var(--dim)"; }
+}
+
+function edSetMeta(text){
+  const m = $("#edMeta"); if (m) m.textContent = text || "";
+}
+
+async function edValidate(){
+  const ta = $("#edText"); if (!ta) return null;
+  edSetMsg("正在校验…");
+  try{
+    const r = await api("/api/rules/validate", { content: ta.value });
+    if (r && r.ok){
+      edSetMsg("校验通过：" + (r.name||"") + "，共 " + (r.groups||0) + " 条规则", false);
+      edSetMeta("规范化后的规则已就绪，可保存或导出。");
+      return r;
+    }
+    edSetMsg("校验失败：" + ((r && r.message) || "未知错误"), true);
+    return null;
+  }catch(e){ edSetMsg("校验失败：" + (e.message||e), true); return null; }
+}
+
+async function edExport(){
+  try{
+    const r = await api("/api/rules/user/export");
+    const ta = $("#edText"); if (ta && r && r.content) ta.value = r.content;
+    edSetMsg("已导出合并规则（" + ((r && r.groups)||0) + " 条），可直接编辑或复制分享。", false);
+    edSetMeta("导出内容包含内建 + 在线 + 用户规则；修改后「保存为用户规则」即生效。");
+    toast("已导出规则", "ok");
+  }catch(e){ toast("导出失败：" + (e.message||e), "err"); }
+}
+
+async function edLoadUser(){
+  try{
+    const r = await api("/api/rules/user/get");
+    const ta = $("#edText"); if (ta && r && r.content) ta.value = r.content;
+    edSetMsg("已载入用户规则。", false);
+    edSetMeta(r && r.path ? ("保存位置：" + r.path) : "");
+  }catch(e){ toast("载入失败：" + (e.message||e), "err"); }
+}
+
+async function edImport(){
+  const ta = $("#edText"); if (!ta) return;
+  const ok = await edValidate(); if (!ok) return;
+  try{
+    const r = await api("/api/rules/import", { content: ta.value, target: "user" });
+    edSetMsg("导入成功：" + ((r && r.message) || ""), false);
+    toast("已导入为用户规则", "ok");
+    await loadCleanState();
+  }catch(e){ edSetMsg("导入失败：" + (e.message||e), true); }
+}
+
+async function edFromOnline(){
+  if (!OL_SOURCES.length){ await loadOnlineRules(); }
+  if (!OL_SOURCES.length){ toast("暂无在线规则源，请先添加", "err"); return; }
+  const opts = OL_SOURCES.map(s=> '<option value="' + esc(s.id) + '">' + esc(s.name||s.id) + '</option>').join("");
+  const body = '<p>选择一个在线源，导入其缓存规则到编辑器：</p><select id="edSrcSel">' + opts + '</select>';
+  confirmModal("从在线源导入", body, ()=>{});
+  const ok = $("#cmOk"); if (ok) ok.textContent = "导入";
+  ok.onclick = async ()=>{
+    const sel = $("#edSrcSel"); const id = sel ? sel.value : "";
+    $("#cleanModal").classList.remove("show");
+    if (id) await importOnlineToEditor(id);
+  };
+}
+
+async function edSave(){
+  const ta = $("#edText"); if (!ta) return;
+  const ok = await edValidate(); if (!ok) return;
+  try{
+    await api("/api/rules/user/set", { content: ta.value });
+    edSetMsg("已保存为用户规则并立即生效。", false);
+    toast("用户规则已保存", "ok");
+    await loadCleanState();
+  }catch(e){ edSetMsg("保存失败：" + (e.message||e), true); }
+}
+
+async function edCopy(){
+  const ta = $("#edText"); if (!ta) return;
+  try{
+    if (navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(ta.value); }
+    else { ta.select(); document.execCommand("copy"); }
+    toast("已复制到剪贴板", "ok");
+  }catch(e){ toast("复制失败，请手动选择复制", "err"); }
+}
+
+function edDownload(){
+  const ta = $("#edText"); if (!ta) return;
+  try{
+    const blob = new Blob([ta.value], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "zhangprotect-rules.json";
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    toast("已下载 JSON", "ok");
+  }catch(e){ toast("下载失败：" + (e.message||e), "err"); }
+}
+
 async function otaCheck(){
   const info = $("#otaInfo");
   try{
@@ -1977,6 +2279,19 @@ function bind(){
   const bcr = $("#btnCleanRun"); if (bcr) bcr.onclick = doCleanRun;
   const bch = $("#btnCleanHist"); if (bch) bch.onclick = showCleanHistory;
   const bcg = $("#btnCleanGuard"); if (bcg) bcg.onclick = showCleanGuard;
+  // 在线规则 / 规则编辑器
+  const bor = $("#btnOnlineRules"); if (bor) bor.onclick = toggleOnlinePanel;
+  const bre = $("#btnRuleEditor"); if (bre) bre.onclick = toggleEditorPanel;
+  const bors = $("#swOnlineRules"); if (bors) bors.onchange = ()=> setCleanSwitch("online_rules_enable", bors.checked);
+  const boa = $("#btnOlAdd"); if (boa) boa.onclick = addOnlineSource;
+  const bev = $("#btnEdValidate"); if (bev) bev.onclick = edValidate;
+  const bex = $("#btnEdExport"); if (bex) bex.onclick = edExport;
+  const beu = $("#btnEdUser"); if (beu) beu.onclick = edLoadUser;
+  const bei = $("#btnEdImport"); if (bei) bei.onclick = edImport;
+  const beo = $("#btnEdFromOnline"); if (beo) beo.onclick = edFromOnline;
+  const bec = $("#btnEdCopy"); if (bec) bec.onclick = edCopy;
+  const bed = $("#btnEdDownload"); if (bed) bed.onclick = edDownload;
+  const bes = $("#btnEdSave"); if (bes) bes.onclick = edSave;
   const m = $("#swCleanMaster"); if (m) m.onchange = ()=> setCleanSwitch("rubbish_clean_enable", m.checked);
   const so = $("#swCleanScreenOff"); if (so) so.onchange = ()=> setCleanSwitch("rubbish_clean_screen_off_only", so.checked);
   const fc = $("#swCleanForce"); if (fc) fc.onchange = ()=> setCleanSwitch("rubbish_force_when_running", fc.checked);

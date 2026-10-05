@@ -214,6 +214,10 @@ class ConfigManager(private val modDir: String) {
         if (switches["oom_protect_enable"] == null) {
             missing.add("oom_protect_enable=true\t# OOM 保护名单总开关（默认开启，内置保活 com.ai.assistance.operit；oom_score_adj 钳制到 -900）")
         }
+        // 在线规则订阅：旧版本 switches.conf 中不存在该键时补齐（默认关闭）。
+        if (switches["online_rules_enable"] == null) {
+            missing.add("online_rules_enable=false\t# 在线规则订阅：定期拉取规则直链（多套），合并进清理规则")
+        }
         // ===== 电源与后台调度优化子系统（新增，仅追加缺失键，不覆盖已有值）=====
         if (switches["power_optimize_enable"] == null) {
             missing.add("power_optimize_enable=false\t# 电源与后台调度优化（事件驱动省电子系统，关闭时不影响其它功能与系统 Doze）")
@@ -616,7 +620,9 @@ class ConfigManager(private val modDir: String) {
             "rubbish_rule_junk_all_apps" to "全部应用垃圾扫描：按特征识别所有 App 私有目录的缓存/日志/临时垃圾（中风险）",
             "rubbish_rule_junk_media_apps" to "外部存储应用垃圾：扫描 /data/media 各应用目录的缓存/日志（全部 App）",
             "rubbish_rule_system_junk_data" to "系统级垃圾：/data 下缓存/日志/崩溃转储（已排除 /data/adb 与 Python 解释器）",
-            "rubbish_rule_system_bcc_csv" to "内核追踪 CSV：清理 /data 根下散落的 *_bcc.csv"
+            "rubbish_rule_system_bcc_csv" to "内核追踪 CSV：清理 /data 根下散落的 *_bcc.csv",
+            // ===== 在线规则订阅（数据驱动规则，默认关闭） =====
+            "online_rules_enable" to "在线规则订阅：按各源设定间隔定期拉取规则直链（支持多套），合并进清理规则；拉取失败保留旧缓存，不影响主清理"
         )
 
         /** Defaults: false for everything except the six special features. */

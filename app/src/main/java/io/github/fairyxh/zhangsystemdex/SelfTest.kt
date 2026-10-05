@@ -29,10 +29,13 @@ import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
 import io.github.fairyxh.zhangsystemdex.core.rubbish.CleanRule
 import io.github.fairyxh.zhangsystemdex.core.rubbish.MatchMode
+import io.github.fairyxh.zhangsystemdex.core.rubbish.OnlineRuleStore
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RiskLevel
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishCleaner
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishGuard
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishRuleSet
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDoc
+import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDocCodec
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleGroup
 import io.github.fairyxh.zhangsystemdex.core.rubbish.ScanCache
 import java.io.File
@@ -92,6 +95,7 @@ object SelfTest {
         moduleChecks(s, ctx)
         powerChecks(s, ctx)
         rubbishChecks(s, ctx)
+        onlineRuleChecks(s, ctx)
         s.print()
         Logger.i("SelfTest", "自测完成: 通过=${s.pass} 失败=${s.fail} 警告=${s.warn} 跳过=${s.skip}")
         return s
@@ -960,6 +964,131 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("OOM.配置键齐备", Status.FAIL, t.message ?: "")
+        }
+    }
+
+    // ---------- 在线规则 / 规则编辑器 ----------
+
+    private fun onlineRuleChecks(s: Summary, ctx: DexContext) {
+        val root = File(ctx.config.rootDir)
+
+        // 1) 规则 schema 往返：解析 → 序列化 → 再解析，分组数一致。
+        try {
+            val json = """
+                {
+                  "version": 1,
+                  "name": "自测规则",
+                  "groups": [
+                    {
+                      "name": "自测缓存",
+                      "mode": "DIR_CONTENT",
+                      "risk": "LOW",
+                      "roots": ["/data/media/<u>/Android/data/com.example/cache"]
+                    }
+                  ]
+                }
+            """.trimIndent()
+            val p1 = RuleDocCodec.parse(json, strict = true)
+            if (p1 is RuleDoc.Result.Err) {
+                s.add("在线规则.schema往返", Status.FAIL, p1.message)
+            } else {
+                val doc = (p1 as RuleDoc.Result.Ok).doc
+                val re = RuleDocCodec.parse(RuleDocCodec.encode(doc), strict = true)
+                val ok = re is RuleDoc.Result.Ok && (re as RuleDoc.Result.Ok).doc.groups.size == doc.groups.size
+                s.add("在线规则.schema往返", if (ok) Status.PASS else Status.FAIL, "groups=${doc.groups.size}")
+            }
+        } catch (t: Throwable) {
+            s.add("在线规则.schema往返", Status.FAIL, t.message ?: "")
+        }
+
+        // 2) 校验红线：相对路径 / .. / 根目录 必须被拒绝。
+        try {
+            val bad = listOf(
+                "relative/path",
+                "/data/media/../system",
+                "/",
+            )
+            val allRejected = bad.all { RuleDocCodec.validatePath(it) != null }
+            s.add(
+                "在线规则.校验红线（拒绝非法路径）",
+                if (allRejected) Status.PASS else Status.FAIL,
+                "cases=${bad.size}"
+            )
+        } catch (t: Throwable) {
+            s.add("在线规则.校验红线（拒绝非法路径）", Status.FAIL, t.message ?: "")
+        }
+
+        // 3) GLOB 模式缺 pattern 必须被拒绝。
+        try {
+            val json = """{"version":1,"groups":[{"name":"g","mode":"GLOB","roots":["/data/media/<u>/x"]}]}"""
+            val r = RuleDocCodec.parse(json, strict = true)
+            s.add(
+                "在线规则.GLOB 需 pattern",
+                if (r is RuleDoc.Result.Err) Status.PASS else Status.FAIL,
+                if (r is RuleDoc.Result.Err) "已拒绝" else "未拒绝"
+            )
+        } catch (t: Throwable) {
+            s.add("在线规则.GLOB 需 pattern", Status.FAIL, t.message ?: "")
+        }
+
+        // 4) 存储读写：新增源 → 列表可见 → 删除 → 列表消失（不联网）。
+        try {
+            val dir = OnlineRuleStore.dir(root)
+            val existedBefore = dir.exists()
+            val id = OnlineRuleStore.addSource(root, "自测源", "https://example.invalid/rules.json", 24, false)
+            val listed = id != null && OnlineRuleStore.listSources(root).any { it.id == id }
+            val removed = id != null && OnlineRuleStore.removeSource(root, id)
+            val gone = id == null || OnlineRuleStore.listSources(root).none { it.id == id }
+            val ok = listed && removed && gone
+            s.add(
+                "在线规则.源增删（不联网）",
+                if (ok) Status.PASS else Status.FAIL,
+                "id=$id listed=$listed removed=$removed gone=$gone"
+            )
+            // 清理：若本测试首次创建了目录且已空，则移除之。
+            if (!existedBefore && dir.exists() && dir.listFiles()?.isEmpty() == true) dir.delete()
+        } catch (t: Throwable) {
+            s.add("在线规则.源增删（不联网）", Status.FAIL, t.message ?: "")
+        }
+
+        // 5) URL 校验：非 http(s) 必须拒绝。
+        try {
+            val ok = !OnlineRuleStore.isHttpUrl("ftp://x/y") &&
+                !OnlineRuleStore.isHttpUrl("not-a-url") &&
+                OnlineRuleStore.isHttpUrl("https://a.b/c.json")
+            s.add("在线规则.URL 校验", if (ok) Status.PASS else Status.FAIL, "http/https only")
+        } catch (t: Throwable) {
+            s.add("在线规则.URL 校验", Status.FAIL, t.message ?: "")
+        }
+
+        // 6) 规则编辑器：导出 → 校验（内建 + 在线 + 用户合并结果可往返）。
+        try {
+            val cleaner = RubbishCleaner(ctx.config)
+            cleaner.forceSingleThreadForTest()
+            val groups = cleaner.exportGroups()
+            val doc = RuleDoc.Doc(name = "自测导出", groups = groups)
+            val re = RuleDocCodec.parse(RuleDocCodec.encode(doc), strict = true)
+            val ok = re is RuleDoc.Result.Ok && (re as RuleDoc.Result.Ok).doc.groups.size == groups.size
+            s.add(
+                "规则编辑器.导出往返",
+                if (ok && groups.isNotEmpty()) Status.PASS else if (groups.isEmpty()) Status.WARN else Status.FAIL,
+                "groups=${groups.size}"
+            )
+        } catch (t: Throwable) {
+            s.add("规则编辑器.导出往返", Status.FAIL, t.message ?: "")
+        }
+
+        // 7) 配置键齐备（online_rules_enable）。
+        try {
+            val missing = listOf(io.github.fairyxh.zhangsystemdex.modules.OnlineRuleModule.SWITCH_KEY)
+                .filter { ConfigManager.SWITCH_DESCRIPTIONS[it] == null }
+            s.add(
+                "在线规则.配置键齐备",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                if (missing.isEmpty()) "online_rules_enable 已登记" else "缺失: $missing"
+            )
+        } catch (t: Throwable) {
+            s.add("在线规则.配置键齐备", Status.FAIL, t.message ?: "")
         }
     }
 }

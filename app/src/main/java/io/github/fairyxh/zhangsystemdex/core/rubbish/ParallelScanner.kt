@@ -91,10 +91,17 @@ internal class ParallelScanner(
         val hits = AtomicLong(0)
         val bytes = AtomicLong(0)
         val samplesBox = java.util.Collections.synchronizedList(ArrayList<String>())
-        val aliveShards = java.util.Collections.synchronizedSet(HashSet<String>())
+        // ★ 本次扫描涉及的「全部分片」路径（初始即预填，与扫描进度无关）。
+        //   用于扫描结束时安全地剔除「真正已消失」的分片缓存。
+        //   注意：绝不能在「增量落盘」时用它做 retain——那时它尚不完整，
+        //   会把还没扫到的分片缓存整片删掉，导致暖扫命中率极低（历史 bug）。
+        val aliveShards: MutableSet<String> =
+            java.util.Collections.synchronizedSet(HashSet<String>())
+        for (s in shards) aliveShards.add(s.path)
 
         val nThreads = minOf(threads, total).coerceAtLeast(1)
         val latch = CountDownLatch(nThreads)
+        Logger.i("ParallelScanner", "扫描开始: 分片=$total 载入聚合=${idx.shardAggs.size} 载入条目=${idx.entries.size} 线程=$nThreads")
 
         for (t in 0 until nThreads) {
             Thread({
@@ -106,7 +113,8 @@ internal class ParallelScanner(
                         var b = 0L
                         try {
                             val m = if (root.isDirectory) root.lastModified() else -1L
-                            val cached = if (m > 0) idx.shardAgg(root.path, m) else null
+                            // shardAggs 是普通 HashMap：读/写都必须持锁，避免并发 put 丢数据。
+                            val cached = if (m > 0) synchronized(lock) { idx.shardAgg(root.path, m) } else null
                             if (cached != null) {
                                 // ★ 分片级复用：mtime 未变 → 整片跳过遍历。
                                 f = cached.junkFiles
@@ -120,11 +128,12 @@ internal class ParallelScanner(
                                 val agg = walk(root, visitor, shard, maxSamples, samplesBox)
                                 f = agg[0].toInt()
                                 b = agg[1]
-                                if (m > 0) idx.putShardAgg(root.path, f, b, m)
-                                // 本片遍历产生的文件条目合并进索引
-                                cache.mergeInto(idx, shard, lock)
+                                // 本片遍历产生的文件条目与分片聚合一起在锁内并入索引。
+                                synchronized(lock) {
+                                    if (m > 0) idx.putShardAgg(root.path, f, b, m)
+                                    cache.mergeInto(idx, shard, lock)
+                                }
                             }
-                            aliveShards.add(root.path)
                         } catch (e: Throwable) {
                             Logger.w("ParallelScanner", "分片失败 ${root.path}: ${e.message}")
                         }
@@ -135,12 +144,12 @@ internal class ParallelScanner(
                         if (onProgress != null) {
                             try { onProgress(d, total) } catch (_: Throwable) {}
                         }
-                        // 增量落盘（B）：已完成分片可随时中断续扫
+                        // 增量落盘（B）：已完成分片可随时中断续扫。
+                        // ★ 此处「不」做 retainShards——扫描进行中 aliveShards 尚不完整，
+                        //   一旦 retain 会把还没扫到的分片缓存删掉（历史 bug：暖扫命中率骤降）。
+                        //   清理已消失分片统一放到扫描结束后的那一处。
                         if (d % FLUSH_EVERY_SHARDS == 0) {
-                            synchronized(lock) {
-                                idx.retainShards(aliveShards)
-                                cache.save(ruleId, idx)
-                            }
+                            synchronized(lock) { cache.save(ruleId, idx) }
                         }
                     }
                 } finally {

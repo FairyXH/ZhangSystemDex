@@ -1135,3 +1135,12 @@ OOM 保护名单（§26）、包状态改写安全加固（§27/§28）。
 - 反例保护完好：`packages.xml`、`users/0/package-restrictions.xml`、`sensor_service/hmac_key`、
   ColorOS 目录 `shortx_*`/`thanos_*` 均未被触碰。
 - SelfTest：**54 PASS**（新增项 PASS，误放反例=[]），HMA conf 被正确清理。
+
+---
+## 34. 发布：含 HMA 白名单化的 zip（2026-10-05 11:5x）
+**产物**：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+- 大小 **430,198,429 字节**，100 文件；内置 SHA256 逐文件 **100/100 一致**；`unzip -t` 零错误。
+- **SHA256 = `7c882823e6d421c5906c08160b5a5b406e8116ae57d82a66f4207e62ae422f82`**
+- `Main.dex` = `ef26d8fca55df8e84c9776d0ecaac0d0`（2,573,624 B，含 HMA 白名单化 + 此前暖扫修复 + AppManager 修复）
+- 已同步：模块目录（两处）、仓库根 Main.dex、母版、zip。**取代** §32 的 zip（84de99b6…）。
+**SelfTest**：54 PASS / 1 FAIL（AppOps 环境项）/ 2 WARN / 7 SKIP（total 64）。

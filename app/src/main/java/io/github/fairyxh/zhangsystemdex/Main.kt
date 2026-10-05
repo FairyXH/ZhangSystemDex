@@ -20,6 +20,7 @@ import io.github.fairyxh.zhangsystemdex.modules.BtOffloadGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
 import io.github.fairyxh.zhangsystemdex.modules.GamePauseModule
 import io.github.fairyxh.zhangsystemdex.modules.GameOomProtectModule
+import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
@@ -180,6 +181,12 @@ object Main {
                 label = "游戏 OOM 保护", desc = "保活游戏进程，避免被低内存杀手回收",
             ) {
                 GameOomProtectModule(ctx)
+            },
+            ModuleEntry(
+                "oom_protect", { enabled("oom_protect_enable") },
+                label = "OOM 保护名单", desc = "保活名单内任意应用（可编辑），oom_score_adj 钳制到系统安全上限",
+            ) {
+                OomProtectModule(ctx)
             },
             ModuleEntry("accessibility_guard", { true }, label = "无障碍守护", desc = "常驻守护无障碍服务不被系统关闭") {
                 AccessibilityGuardModule(ctx)

@@ -12,8 +12,11 @@ import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
+import io.github.fairyxh.zhangsystemdex.core.ConfigManager
+import io.github.fairyxh.zhangsystemdex.core.OomProtectList
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
+import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ConfigGenModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
@@ -841,6 +844,90 @@ object SelfTest {
             s.add("清理.执行清理", Status.SKIP, "rubbish_clean_enable=false（安全门控，避免自测真删）")
         } else {
             s.add("清理.执行清理", Status.WARN, "总开关已开，自测不主动执行删除；请用调试菜单 28 单独验证")
+        }
+
+        // ===== OOM 保护名单 =====
+        // 11) 安全钳制：请求 -1000 必须被钳到 SAFE_FLOOR(-900)，不得越过系统核心。
+        try {
+            val clamped = OomProtectModule.clampOom(-1000)
+            val clamped2 = OomProtectModule.clampOom(-500)
+            val clamped3 = OomProtectModule.clampOom(5000)
+            val ok = clamped == OomProtectModule.SAFE_FLOOR &&
+                clamped2 == OomProtectModule.SAFE_FLOOR &&
+                clamped3 == 1000
+            s.add(
+                "OOM.安全钳制",
+                if (ok) Status.PASS else Status.FAIL,
+                "clamp(-1000)=$clamped clamp(-500)=$clamped2 clamp(5000)=$clamped3 " +
+                    "安全上限=${OomProtectModule.SAFE_FLOOR}"
+            )
+        } catch (t: Throwable) {
+            s.add("OOM.安全钳制", Status.FAIL, t.message ?: "")
+        }
+
+        // 12) 名单归一化：去注释/空行/重复/非法包名，保留合法项。
+        try {
+            val text = """
+                # comment
+                com.ai.assistance.operit
+                com.ai.assistance.operit   # dup
+                com.tencent.mm
+                not-a-package
+                /system/bin/sh
+                123.bad
+            """.trimIndent()
+            val got = OomProtectList.normalize(text)
+            val expect = listOf("com.ai.assistance.operit", "com.tencent.mm")
+            s.add(
+                "OOM.名单归一化",
+                if (got == expect) Status.PASS else Status.FAIL,
+                "得到=$got 期望=$expect"
+            )
+        } catch (t: Throwable) {
+            s.add("OOM.名单归一化", Status.FAIL, t.message ?: "")
+        }
+
+        // 13) 名单文件读写往返（写到临时路径，不污染真实配置）。
+        try {
+            val tmpDir = File("/data/media/0/.zsd_selftest/oom")
+            if (tmpDir.exists()) tmpDir.deleteRecursively()
+            tmpDir.mkdirs()
+            val f = OomProtectList.file(tmpDir)
+            f.writeText(OomProtectList.render(listOf("com.ai.assistance.operit", "com.tencent.mm")), Charsets.UTF_8)
+            val back = OomProtectList.read(tmpDir)
+            val ok = back == listOf("com.ai.assistance.operit", "com.tencent.mm")
+            s.add("OOM.名单读写往返", if (ok) Status.PASS else Status.FAIL, "读回=$back")
+            tmpDir.deleteRecursively()
+        } catch (t: Throwable) {
+            s.add("OOM.名单读写往返", Status.FAIL, t.message ?: "")
+        }
+
+        // 14) 默认内置包名正确（用户要求 com.ai.assistance.operit）。
+        try {
+            val has = OomProtectList.normalize(OomProtectList.DEFAULT_CONTENT)
+                .contains(OomProtectList.DEFAULT_PACKAGE)
+            s.add(
+                "OOM.默认内置包名",
+                if (has) Status.PASS else Status.FAIL,
+                "默认内容含 ${OomProtectList.DEFAULT_PACKAGE}"
+            )
+        } catch (t: Throwable) {
+            s.add("OOM.默认内置包名", Status.FAIL, t.message ?: "")
+        }
+
+        // 15) 配置键齐备（oom_protect_enable）。
+        try {
+            val keys = listOf("oom_protect_enable")
+            val missing = keys.filter { k ->
+                ConfigManager.SWITCH_DESCRIPTIONS[k] == null
+            }
+            s.add(
+                "OOM.配置键齐备",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                if (missing.isEmpty()) "oom_protect_enable 已登记" else "缺失: $missing"
+            )
+        } catch (t: Throwable) {
+            s.add("OOM.配置键齐备", Status.FAIL, t.message ?: "")
         }
     }
 }

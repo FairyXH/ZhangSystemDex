@@ -5,6 +5,7 @@ import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.PackageStateBackup
 import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
@@ -450,14 +451,32 @@ class AppManagerModule(private val ctx: DexContext) {
         Logger.i("AppManager", "已遮蔽 $pkg -> ${ctx.modDir}$src")
     }
 
+    /**
+     * 停用应用（**可逆、幂等**）。
+     *
+     * 安全约束（2026-10-05 开机卡死事故加固）：
+     *  - **不再执行全用户 `pm uninstall`**——它会以「卸载」语义改写包数据库，
+     *    并被周期任务反复触发，是 packages.xml 损坏的头号嫌疑。改为仅
+     *    `disable-user`（可逆、幂等）。
+     *  - **已停用则跳过**：先查询当前启用状态，避免每个维护周期重复改写包状态。
+     *  - 每次会改变包状态前，滚动备份 `packages.xml` 一次。
+     */
     private fun disableApp(pkg: String) {
-        ShellExecutor.run("pm uninstall $pkg")
-        val users = File("/data/media").listFiles { f -> f.isDirectory } ?: emptyArray()
-        for (u in users) {
-            FrameworkOps.setApplicationDisabledUser(pkg, u.name.toIntOrNull() ?: 0)
+        // 幂等：已经是「停用」状态则直接返回，杜绝重复改写包数据库。
+        val state = FrameworkOps.applicationEnabledState(pkg)
+        if (state == android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
+            state == android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        ) {
+            // 仍确保模块层遮蔽存在（幂等，不触碰包数据库）。
+            return
         }
-        FrameworkOps.setApplicationEnabled(pkg, false)
-        Logger.i("AppManager", "已停用 $pkg")
+        PackageStateBackup.snapshotOnce(ctx.config.rootDir)
+        val users = File("/data/media").listFiles { f -> f.isDirectory } ?: emptyArray()
+        val userList = if (users.isEmpty()) listOf(0) else users.map { it.name.toIntOrNull() ?: 0 }
+        for (u in userList) {
+            FrameworkOps.setApplicationDisabledUser(pkg, u)
+        }
+        Logger.i("AppManager", "已停用 $pkg (users=${userList.joinToString(",")})")
     }
 
     /**

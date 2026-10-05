@@ -65,6 +65,35 @@ object FrameworkOps {
         ShellExecutor.run("pm disable-user --user $user $pkg")
     }
 
+    /**
+     * 查询应用（或组件）当前的启用状态位。
+     *
+     * 返回值语义与 [PackageManager.getApplicationEnabledSetting] 一致：
+     *  - COMPONENT_ENABLED_STATE_ENABLED (0)
+     *  - COMPONENT_ENABLED_STATE_DISABLED (2)
+     *  - COMPONENT_ENABLED_STATE_DISABLED_USER (3)
+     *  - COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED (4) 等
+     *
+     * 供「幂等停用」判断使用：已是 DISABLED/DISABLED_USER 时不再重复改写包数据库。
+     * 查询失败返回 -1（未知），调用方将其视为「需要执行」，但会先做包状态备份。
+     */
+    fun applicationEnabledState(pkg: String): Int {
+        val pm = ctx()?.packageManager
+        if (pm != null) {
+            try {
+                return pm.getApplicationEnabledSetting(pkg)
+            } catch (t: Throwable) {
+                apiFailed("enabledState_$pkg", "getApplicationEnabledSetting($pkg)", t)
+            }
+        }
+        // Shell 兜底：解析 `cmd package list packages -d`（仅列出 disabled 包）。
+        val out = ShellExecutor.run("cmd package list packages -d '$pkg'", 8000)
+        if (out != null && out.lineSequence().any { it.trim().endsWith(":$pkg") }) {
+            return PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+        }
+        return -1
+    }
+
     fun setComponentEnabled(component: String, enabled: Boolean) {
         val cn = ComponentName.unflattenFromString(component)
         val pm = ctx()?.packageManager

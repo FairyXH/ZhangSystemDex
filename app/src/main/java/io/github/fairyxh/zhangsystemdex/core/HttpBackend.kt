@@ -201,6 +201,11 @@ class HttpBackend(
             "/api/rubbish/history" -> apiRubbishHistory(query)
             "/api/rubbish/guard/read" -> apiRubbishGuardRead()
             "/api/rubbish/guard/write" -> apiRubbishGuardWrite(method, body)
+            // ===== OOM 保护名单 =====
+            "/api/oom/read" -> apiOomRead()
+            "/api/oom/write" -> apiOomWrite(method, body)
+            "/api/oom/status" -> apiOomStatus()
+            "/api/oom/apps" -> apiOomApps()
             else -> jsonError("未知接口: $path")
         }
     }
@@ -1221,6 +1226,95 @@ class HttpBackend(
         } catch (t: Throwable) {
             jsonError("写入失败: ${t.message}")
         }
+    }
+
+    // ==================================================================
+    // OOM 保护名单 API
+    // ==================================================================
+
+    /** 读取名单文件内容（含注释行，便于 UI 原样编辑）。 */
+    private fun apiOomRead(): String {
+        val f = OomProtectList.file(File(ctx.config.rootDir))
+        if (!f.exists()) {
+            // 首次：返回内置默认内容（不落盘，保存时再写）。
+            val sb = StringBuilder()
+            sb.append("{\"ok\":true,\"path\":").append(q(f.absolutePath))
+            sb.append(",\"exists\":false,\"content\":").append(q(OomProtectList.DEFAULT_CONTENT)).append('}')
+            return jsonRaw(sb.toString())
+        }
+        val text = try { f.readText(Charsets.UTF_8) } catch (t: Throwable) {
+            return jsonError("读取失败: ${t.message}")
+        }
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"path\":").append(q(f.absolutePath))
+        sb.append(",\"exists\":true,\"content\":").append(q(text)).append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /** 写入名单（归一化后原子落盘）。 */
+    private fun apiOomWrite(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val content = obj["content"] ?: return jsonError("缺少 content")
+        val normalized = OomProtectList.normalize(content)
+        val f = OomProtectList.file(File(ctx.config.rootDir))
+        return try {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.parentFile, f.name + ".http.tmp")
+            tmp.writeText(OomProtectList.render(normalized), Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(OomProtectList.render(normalized), Charsets.UTF_8)
+                tmp.delete()
+            }
+            Logger.i(name, "OOM 名单已写入 ${normalized.size} 项")
+            val sb = StringBuilder()
+            sb.append("{\"ok\":true,\"code\":0,\"count\":").append(normalized.size)
+            sb.append(",\"packages\":").append(JsonBuilder.arr { normalized.forEach { value(it) } }).append('}')
+            jsonRaw(sb.toString())
+        } catch (t: Throwable) {
+            jsonError("写入失败: ${t.message}")
+        }
+    }
+
+    /** 名单 + 运行时状态。 */
+    private fun apiOomStatus(): String {
+        val enabled = ctx.config.switch("oom_protect_enable")
+        val f = OomProtectList.file(File(ctx.config.rootDir))
+        val known = OomProtectList.read(File(ctx.config.rootDir))
+        val protectedList = RuntimeRegistry.get("oom_protect")
+            ?.let { state ->
+                (state.extras["protectedList"] as? String)?.split(',')
+                    ?.filter { it.isNotBlank() } ?: emptyList()
+            } ?: emptyList()
+        val sb = StringBuilder()
+        sb.append('{').append("\"ok\":true")
+        sb.append(",\"enabled\":").append(enabled)
+        sb.append(",\"path\":").append(q(f.absolutePath))
+        sb.append(",\"known\":").append(known.size)
+        sb.append(",\"count\":").append(protectedList.size)
+        sb.append(",\"protected\":").append(JsonBuilder.arr { protectedList.forEach { value(it) } })
+        sb.append(",\"safeFloor\":").append(io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.SAFE_FLOOR)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /** 已安装应用清单（应用选择器数据源）。 */
+    private fun apiOomApps(): String {
+        val apps = try { AppListProvider.allPackages().sorted() } catch (t: Throwable) {
+            Logger.w(name, "枚举应用失败: ${t.message}")
+            emptyList()
+        }
+        val system = try { AppListProvider.systemPackages().toHashSet() } catch (_: Throwable) { HashSet<String>() }
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"apps\":").append(JsonBuilder.arr {
+            for (pkg in apps) {
+                raw(JsonBuilder.obj {
+                    key("pkg"); value(pkg); comma()
+                    key("system"); value(pkg in system)
+                })
+            }
+        }).append('}')
+        return jsonRaw(sb.toString())
     }
 
     /** Parse the `rules` field: either ["id1","id2"] or "id1,id2". */

@@ -414,6 +414,9 @@ class ConfigManager(private val modDir: String) {
         copyOrInit("autorun.conf", DEFAULT_AUTORUN_CONF)
         copyOrInit("HideMyAppList_MoreBlack.txt", DEFAULT_HMA_MORE_BLACK)
         copyOrInit("power_bg_stop_list.conf", DEFAULT_POWER_BG_STOP_LIST)
+        // OOM 保护名单（一行一个包名，默认内置 com.ai.assistance.operit）
+        copyOrInit(io.github.fairyxh.zhangsystemdex.core.OomProtectList.FILE_NAME,
+            io.github.fairyxh.zhangsystemdex.core.OomProtectList.DEFAULT_CONTENT)
         File(rootDir, "app_manager").mkdirs()
         copyOrInit("app_manager/disable_app_list.conf", DEFAULT_DISABLE_APP_LIST)
         copyOrInit("app_manager/disable_app_list_onlydisable.conf", DEFAULT_DISABLE_APP_LIST_ONLY)
@@ -491,6 +494,7 @@ class ConfigManager(private val modDir: String) {
             "module_appops_auth_enable",
             "skip_mount_guard_enable",
             "game_oom_protect_enable",
+            "oom_protect_enable",
             "power_charging_release",
             // ===== 垃圾清理：低风险规则默认开启（用户要求） =====
             "rubbish_rule_app_cache",
@@ -551,6 +555,7 @@ class ConfigManager(private val modDir: String) {
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
             "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
+            "oom_protect_enable" to "OOM 保护名单：保活名单内任意应用（可在清理页编辑，一行一个包名），oom_score_adj 钳制到系统安全上限 -900，关闭时自动还原",
             "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转",
             "bt_offload_guard_enable" to "蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，修复卡顿/无声/断连）",
 

@@ -37,6 +37,13 @@ class SystemTuningModule(
     private var cycle = 0
     private var runOnceDone = false
 
+    /**
+     * `com.oplus.appdetail` 卸载仅在进程生命周期内执行一次（去重），
+     * 避免每个常规周期都 `pm uninstall` 反复改写包数据库。
+     */
+    @Volatile
+    private var appDetailUninstalled = false
+
     private val taskInterval: Int
         get() {
             val n = ctx.config.getString("heavy_interval_cycles", "").toIntOrNull()
@@ -146,11 +153,21 @@ class SystemTuningModule(
 
         FileUtils.touch("/data/adb/shamiko/whitelist")
         FileUtils.touch("/data/adb/modules/wjw_hiderootauxiliarymod/TrickyStoreListDTGX_Task")
-        ShellExecutor.run("pm uninstall --user 0 com.oplus.appdetail")
 
-        FileUtils.chattr("/data/data/cn.gov.pbc.dcep/envc.push", "-i")
-        ProcessUtils.writeFile("/data/data/cn.gov.pbc.dcep/envc.push", "r=0")
-        FileUtils.chattr("/data/data/cn.gov.pbc.dcep/envc.push", "+i")
+        // 安全加固（2026-10-05 开机卡死事故）：
+        //  - 原实现每个常规周期都无条件 `pm uninstall --user 0 com.oplus.appdetail`，
+        //    与任何开关无关，持续改写包数据库，是 packages.xml 损坏的嫌疑之一。
+        //    现改为：**仅当该包仍存在**时执行一次（进程生命周期内去重），
+        //    且执行前滚动备份包状态。
+        uninstallAppDetailOnce()
+
+        // 安全加固：chattr -i 前先确认文件存在，失败静默（原实现无存在性校验）。
+        val dcep = File("/data/data/cn.gov.pbc.dcep/envc.push")
+        if (dcep.exists()) {
+            FileUtils.chattr(dcep.path, "-i")
+            ProcessUtils.writeFile(dcep.path, "r=0")
+            FileUtils.chattr(dcep.path, "+i")
+        }
 
         FileUtils.rmQuoted("/data/local/tmp/shizuku")
         FileUtils.rmQuoted("/data/local/tmp/shizuku_starter")
@@ -247,6 +264,25 @@ class SystemTuningModule(
             done += "整体异常(${t.message})"
         }
         Logger.i(name, "高占用维护完成: ${done.joinToString("、")}")
+    }
+
+    /**
+     * 卸载 `com.oplus.appdetail`（OPPO/Realme 广告详情服务）。
+     *
+     * 安全加固（2026-10-05 开机卡死事故）：
+     *  - 原实现每个常规周期都无条件 `pm uninstall`，持续改写包数据库；
+     *  - 现在：进程生命周期内**只执行一次**，且**仅当包仍存在**时才卸载；
+     *  - 卸载前滚动备份包状态，便于万一损坏时恢复。
+     */
+    private fun uninstallAppDetailOnce() {
+        if (appDetailUninstalled) return
+        appDetailUninstalled = true
+        val pkg = "com.oplus.appdetail"
+        // 仅当包真正存在时才动包数据库（不存在则无需卸载，避免空改写）。
+        if (!AppListProvider.installed(pkg)) return
+        io.github.fairyxh.zhangsystemdex.core.PackageStateBackup.snapshotOnce(ctx.config.rootDir)
+        ShellExecutor.run("pm uninstall --user 0 $pkg")
+        Logger.i(name, "已卸载 $pkg（一次性，本次开机仅执行一次）")
     }
 
     private fun antiErrorDialogs() {

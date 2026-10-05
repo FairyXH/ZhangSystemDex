@@ -341,7 +341,12 @@ object RubbishGuard {
         }
 
         if (f.isDirectory) {
-            val (df, db, dr) = deleteTree(f, ruleId)
+            // safeDelete 的语义是「彻底删除该路径」：先递归清空内容，再删除目录自身。
+            // 修复（2026-10-05）：此前 deleteTree 只删内容、从不删自身，导致
+            //   - cleanEmpty（空目录规则）删除「空目录」时 files=0、目录残留；
+            //   - cleanDeep 的空目录受害者同样删不掉；
+            //   - JUNK_SCAN 命中的空目录无法清除。
+            val (df, db, dr) = deleteTree(f, ruleId, deleteSelf = true)
             files += df
             bytes += db
             rejected += dr
@@ -467,7 +472,7 @@ object RubbishGuard {
     // 内部工具
     // ------------------------------------------------------------------
 
-    private fun deleteTree(dir: File, ruleId: String): Triple<Int, Long, List<Rejected>> {
+    private fun deleteTree(dir: File, ruleId: String, deleteSelf: Boolean = false): Triple<Int, Long, List<Rejected>> {
         var files = 0
         var bytes = 0L
         val rejected = ArrayList<Rejected>()
@@ -480,7 +485,7 @@ object RubbishGuard {
                     rejected += Rejected(dir.path, verdict.reason)
                     audit.log(ruleId, "REJECT", dir.path, 0L, verdict.reason)
                 }
-            } else if (deleteOne(dir, followLink = true)) {
+            } else if (deleteSelf && deleteOne(dir, followLink = true)) {
                 files++
                 audit.log(ruleId, "DELETE", dir.path, 0L, "dir(empty)")
             }
@@ -508,15 +513,10 @@ object RubbishGuard {
                 continue
             }
             if (child.isDirectory) {
-                val (df, db, dr) = deleteTree(child, ruleId)
+                val (df, db, dr) = deleteTree(child, ruleId, deleteSelf = true)
                 files += df
                 bytes += db
                 rejected += dr
-                // 子目录内容清空后删除该目录自身（此时它仍须通过审查）。
-                if (dr.none { it.path == child.path } && deleteOne(child, followLink = true)) {
-                    files++
-                    audit.log(ruleId, "DELETE", child.path, 0L, "dir")
-                }
             } else {
                 val size = child.length()
                 if (deleteOne(child, followLink = true)) {
@@ -526,6 +526,23 @@ object RubbishGuard {
                 } else {
                     rejected += Rejected(child.path, "删除文件失败")
                     audit.log(ruleId, "FAIL", child.path, size, "删除文件失败")
+                }
+            }
+        }
+        // 内容处理完毕后，按需删除目录自身（safeDelete 的彻底删除语义）。
+        // 注意：仅当自身仍存在（子项可能因审查被拒而残留）时才尝试。
+        if (deleteSelf) {
+            val left = dir.listFiles()
+            if (left != null && left.isEmpty()) {
+                if (deleteOne(dir, followLink = true)) {
+                    files++
+                    audit.log(ruleId, "DELETE", dir.path, 0L, "dir")
+                } else {
+                    // 目录已空但删除失败（典型：emulated/FUSE 分区下 root 无法删除
+                    // 其它应用 uid 属主的目录，`rm -rf` 亦被 EPERM 拒绝）。
+                    // 记录 FAIL 便于排查「日志无记录但目录残留」的静默失败。
+                    rejected += Rejected(dir.path, "删除空目录失败")
+                    audit.log(ruleId, "FAIL", dir.path, 0L, "删除空目录失败")
                 }
             }
         }

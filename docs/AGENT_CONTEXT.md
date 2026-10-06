@@ -1575,8 +1575,19 @@ APK 内 so 是 `Defl:N` 完全正常。
 - commit **`7c226b3`** `feat(webui): 设置页保活名单完整 UI（通知使用权/无障碍服务）`
   （1 file changed, +174/-1）。当前 `main` 领先 origin/main **17 个 commit，未 push**。
 
-### 复用/注意
-- 新增保活类「开关」控件仍必须走 `/api/switch/set` 落盘（见 §18/§23 教训）；本次
-  `setKeepAliveSwitch` 已正确调用。
-- WebUI 双文件：真源 `app/src/main/assets/webroot/index.html`；改后须手动 `cp` 到
-  `webroot/`（交付副本）+ 部署到模块目录 + 母版（构建 dex **不会**同步 UI，见 §39）。
+## §45 运行约定：单条命令行执行 60s 上限（2026-10-06，用户要求）
+
+**用户明确要求**：Operit AI 执行单条命令行时，**超过 60s 直接终止并取消等待**。
+
+**落地方式（本项目内 Long-term 约束，后续 Agent 必须遵守）**：
+- 凡是 `super_admin:terminal` / `super_admin:shell` / `terminal_wait` 等命令行执行，
+  **单次 `timeoutMs` 一律 ≤ 60000**；超时即视为终止（不无限等待）。
+- 长任务（如 `pack.sh` 打包 ~30s、gradle 构建 45~100s）需拆分为带进度/可轮询的分步执行，
+  避免单条命令挂死；构建类确需 >60s 的，用 `background:true` + 轮询 `terminal_wait`/`getscreen`，
+  而不是同步阻塞等待。
+- 已知会挂死的场景：`super_admin:terminal` 复用会话卡死（§38 坑 2）→ 用 `background:true` 起新会话。
+- 说明：Operit 平台**未**将"命令超时"持久化到任何 DataStore/SharedPreferences（已核查
+  `user_preferences`/`terminal_prefs`/`env_preferences`/`ui_preferences` 等均无该键）；
+  该超时是**每次工具调用的参数**，故以"Agent 运行约定"形式固化，而非改配置文件。
+
+

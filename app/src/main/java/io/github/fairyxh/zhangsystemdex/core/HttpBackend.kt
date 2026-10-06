@@ -8,6 +8,7 @@ import io.github.fairyxh.zhangsystemdex.core.rubbish.RubbishProgress
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDoc
 import io.github.fairyxh.zhangsystemdex.core.rubbish.RuleDocCodec
 import io.github.fairyxh.zhangsystemdex.core.rubbish.UserGuardRules
+import io.github.fairyxh.zhangsystemdex.modules.IncidentWatchModule
 import io.github.fairyxh.zhangsystemdex.modules.OnlineRuleModule
 import java.io.BufferedInputStream
 import java.io.File
@@ -238,6 +239,8 @@ class HttpBackend(
             "/api/builtin/guard/set" -> apiBuiltinGuardSet(method, body)
             // ===== Shizuku 守护（保活 + 防检测）=====
             "/api/shizuku/status" -> apiShizukuStatus()
+            // 事故哨兵：读取后台采集的 watchdog/崩溃/软重启记录（纯文件，零 shell）。
+            "/api/guard/alerts" -> apiGuardAlerts(query)
             "/api/shizuku/residue" -> apiShizukuResidue()
             else -> jsonError("未知接口: $path")
         }
@@ -2049,6 +2052,33 @@ class HttpBackend(
      *   - 保活/防检测开关
      *   - 已清理的痕迹计数
      */
+    /**
+     * /api/guard/alerts?limit=N
+     *
+     * 返回「事故哨兵」（[io.github.fairyxh.zhangsystemdex.modules.IncidentWatchModule]）
+     * 后台采集到的事故记录（watchdog / 软重启 / native crash / ANR / 内存低点）。
+     *
+     * 全部来自纯文件读取，**不执行任何 shell**，因此查询本接口不会给 system_server
+     * 增加 Binder 压力——这正是替代「反复 dumpsys/logcat 取证」的正解。
+     */
+    private fun apiGuardAlerts(query: Map<String, String>): String {
+        val limit = (query["limit"]?.toIntOrNull() ?: 100).coerceIn(1, 1000)
+        val lines = IncidentWatchModule.readRecent(ctx, limit)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"count\":").append(lines.size)
+        sb.append(",\"uptimeSec\":").append(
+            try { java.io.File("/proc/uptime").readText().substringBefore(' ').toDouble().toLong() }
+            catch (_: Throwable) { 0L }
+        )
+        sb.append(",\"alerts\":[")
+        lines.forEachIndexed { i, ln ->
+            if (i > 0) sb.append(',')
+            sb.append(ln.trim())
+        }
+        sb.append("]}")
+        return sb.toString()
+    }
+
     private fun apiShizukuStatus(): String {
         val procList = try {
             ProcessUtils.pidsOf(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE)

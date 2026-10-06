@@ -24,6 +24,7 @@ import io.github.fairyxh.zhangsystemdex.modules.GamePauseModule
 import io.github.fairyxh.zhangsystemdex.modules.GameOomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
+import io.github.fairyxh.zhangsystemdex.modules.IncidentWatchModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.NetworkModule
@@ -376,6 +377,14 @@ object Main {
             },
             ModuleEntry("memory_clean", { enabled("memory_clean_enable") }, label = "内存清理", desc = "低内存时回收后台进程") {
                 MemoryModule(ctx)
+            },
+            // 事故哨兵：常驻后台、零 shell 采集 watchdog/crash/重启/内存低点，
+            // 供 /api/guard/alerts 读取。始终启用（纯文件读取，开销极低）。
+            ModuleEntry(
+                "incident_watch", { true },
+                label = "事故哨兵", desc = "后台记录 watchdog/崩溃/软重启（零 shell）",
+            ) {
+                IncidentWatchModule(ctx)
             },
             ModuleEntry(
                 "accelerometer_rotation", { enabled("accelerometer_rotation_enable") },

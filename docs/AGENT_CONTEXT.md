@@ -1841,3 +1841,75 @@ APK 内 so 是 `Defl:N` 完全正常。
 ### 结论
 发布完成：远端 `origin/main` = `93f1afd`；发布包 `ZhangProtect-Android.zip`（SHA256 `767b78…`）由母版构建，
 内含本次「内置应用默认保活（不听配置）」的已验证 Main.dex。
+---
+
+## §51 软重启根因定位与修复：内置守护开关 + OOM 可选/强制 + 内存看门狗（2026-10-06 16:xx）
+
+### 用户本轮需求（合并主线）
+1. 模块内置守护改为**可按应用独立开关**（默认开）。
+2. OOM 保护改为**可选（复选框）**；含**无障碍/通知监听组件**的内置应用**强制** OOM，其余可选。
+3. 新增**内存看门狗**：OOM 期间物理内存过高时判断是否模块所致，是则取消保护 + 终止高占用对象。
+4. 覆盖到已安装模块 + **复原 oom** + **免重启更新**。
+5. **追加**：OOM 值不要太高（≈-500）；**坚决不动 system_server 等系统级进程**。
+
+### ⚠️ 软重启根因（已确认，关键教训）
+现象：部署新 dex 后系统**反复软重启**；用户描述 **状态栏无法下拉、全局冻结、前台尚可、随后卡死重启**。
+
+证据：
+- `dropbox/SYSTEM_SERVER_WATCHDOG@1791273175861.txt.gz` + `SYSTEM_RESTART@...`（15:52），
+  15:51 大量 `system_app_anr`。→ **Watchdog 杀死 system_server → 软重启**。
+- daemon 日志每次启动都停在 `[ConfigManager] 已加载开关（94 项）`。
+
+**根因**：新代码 `BuiltinConfig.isForcedOom(pkg)` 同步执行 `cmd package dump <pkg>`（超时 20s），
+而 `BuiltinConfig.oomPackages()` 会对 **`builtin_apps.conf` 全部 45 个内置应用**逐个探测
+（`effectivePackages → oomPackages → 45×isForcedOom`）→ **45 次 `cmd package dump` 串行** →
+最终在 **system_server** 内执行 → 严重阻塞 system_server → **Watchdog 超时杀 system_server → 软重启**。
+（旧 dex 无此探测，故不触发；时间相关性吻合。）
+
+**修复**：
+- `isForcedOom` 改为**只读缓存**（内存 + 落盘 `builtin_forced.conf`），**永不阻塞**；未命中返回 false 并入队。
+- 新增 `BuiltinConfig.startProbeWorker()`：单线程**串行限速**（250ms/个）后台探测，结果增量落盘。
+- `OomProtectModule.onStart()` 调 `loadForcedCache()` + `startProbeWorker()`。
+
+### 用户强要求的安全改造
+- `SAFE_FLOOR = -500`；`DEFAULT_MAIN_ADJ=-500`、`DEFAULT_CHILD_ADJ=-450`（原 -1000/-700）。
+- `OomProtectModule.isProtectedSystemProcess(pid)`：comm/cmdline 白名单 + `/system|/vendor|/odm|/system_ext|apex`
+  路径 + `comm=main 且 cmdline 含 zygote`（zygote 的 comm 是 main）→ **绝不改其 oom_score_adj**。
+- `applyAdj`/`restoreAll`/`onStop`/stale 清理/看门狗终止 全部先过该系统进程判定。
+- `GamePauseModule` / `GameOomProtectModule` 的游戏 OOM 由 -1000 改为 -500/-450，并过滤系统进程。
+- 看门狗阈值由 95 → **90**（95 时系统已卡死，来不及）。
+
+### 另一关键修复：内置 OOM 不被「守卫开关」拖入
+`OomProtectList.effectivePackages` 原会 union 保活名单——而 `KeepAliveList.read` 会把
+「启用内置守护」的全部 45 个内置应用并入，导致 **45 个内置应用实际上全被 OOM 保护**，
+违背「OOM 可选」。**修复**：`effectivePackages` 合并保活名单时**剔除内置应用**；
+内置 OOM 只由 `BuiltinConfig.oomPackages`（强制∪勾选）决定。新增 `BuiltinConfig.allPackages()`。
+
+### 验证（设备实测，全部 PASS）
+- `bash /opt/build.sh` **BUILD SUCCESSFUL**；Main.dex md5=**`bd254a9a4dc71862b04084a23075864e`**（2,760,452B）。
+- 自测：`PASS 73 / FAIL 1 / WARN 2 / SKIP 7`。唯一 FAIL 是 `模块.AppOps.write/read`（ColorOS 已知问题，非本轮）。
+  - `内置应用.OOM保护: 强制=8 勾选=0 生效=9 未勾选却泄漏=0` ✅
+  - `OOM.安全钳制: clamp(-1000)=-500` ✅
+  - `OOM.系统进程保护: 已识别 init/system_server/zygote64` ✅
+- 运行时 `/api/oom/status`：`safeFloor=-500`、`watchdogTrigger=90`、`builtinCount=8`。
+- `system_server` adj 保持 **-900**；受保护用户应用 adj 均为 **-500/-450**。
+- **uptime 持续 >100 分钟无重启**（部署后无新 watchdog 报告）。
+
+### 部署（免重启更新，已执行）
+- dex 三副本 md5 一致：`/data/media/0/Download/Files/ZhangProtect-Android/Main.dex`
+  = `/data/adb/modules/Zhang/Main.dex` = `/data/adb/Zhang/Main.dex` = `bd254a9a…`。
+- webroot 三副本 md5 一致：`0275291e52d78498e6d7c2610ce53754`。
+- 备份：`/data/adb/Zhang/_backup_predeploy_20261006-164806/`。
+- 复原 oom：清空模块残留（含 -1000/-700 的用户应用 15 个）→ 0；system_server 未动。
+- 重启用母版 `重启Dex.sh`（停 → `service.sh`）→ daemon pid 7179。
+
+### 关键环境事实（避免再次踩坑）
+- `BuiltinApps.packagesFromRoot(rootDir)` 在 rootDir 无 `system/app` 时**回退到 `/data/adb/modules/Zhang`**，
+  因此自测用临时目录仍会返回真实 45 个内置应用——写断言时须注意。
+- Ubuntu proot **看不到 `/data/adb`**，只能在 `/sdcard` 交换文件；部署用 android `shell` 执行。
+- **绝不在 daemon tick/启动路径同步跑 `cmd package`/`dumpsys` 等重 IPC**（per-package 调用要估算次数）。
+- 已知遗留：`PowerManagerModule.applyDozeList()` 在 `onStart()` 会 45× `dumpsys deviceidle whitelist +pkg`（仅启动一次）。
+
+### Git
+- 本轮 commit：`11f2fe7`(feat) → `d0aa237`(build) → `a53ecff` → `294a325` → **`c1e9628`**（HEAD）。
+- `origin/main` 仍为 `23abaf1`，**本地领先 4+ commits，未 push**。

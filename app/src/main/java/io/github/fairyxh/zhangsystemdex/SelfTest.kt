@@ -3,6 +3,7 @@ package io.github.fairyxh.zhangsystemdex
 import android.database.sqlite.SQLiteDatabase
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.BuiltinApps
+import io.github.fairyxh.zhangsystemdex.core.BuiltinConfig
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
@@ -503,11 +504,11 @@ object SelfTest {
     // instantiated (its constructor registers nothing and performs no I/O);
     // its daemon loop is driven by Main, not by SelfTest. This keeps the
     // regression suite non-destructive while still exercising all 6 classes.
-    // ---------- 模块内置应用（system/app/）默认保活 ----------
+    // ---------- 模块内置应用（system/app/）守护与 OOM ----------
     //
-    // 用户要求（2026-10-06）：内置应用必须默认获得 Doze 白名单、多任务 Lock、
-    // 通知使用权保活、无障碍服务保活、OOM 保护，且**不听从任何开关**。
-    // 这里只做只读断言（枚举 + 集合包含），不写系统状态，避免副作用。
+    // 用户要求（2026-10-06 修订）：内置应用「内置守护」可按应用独立关闭；
+    // OOM 保护：含无障碍/通知组件者**强制**，其余可选（勾选）。
+    // 这里只做只读断言（枚举 + 集合关系），不写系统状态。
     private fun builtinChecks(s: Summary, ctx: DexContext) {
         val modDir = ctx.modDir
         val rootDir = java.io.File(ctx.config.rootDir)
@@ -523,61 +524,63 @@ object SelfTest {
             "目录=${BuiltinApps.root(modDir).path} 数量=${pkgs.size}",
         )
         if (pkgs.isEmpty()) {
-            // 无内置应用时后续断言无意义，显式跳过。
-            s.add("内置应用.Doze白名单强制", Status.SKIP, "无内置应用")
-            s.add("内置应用.通知保活强制", Status.SKIP, "无内置应用")
-            s.add("内置应用.无障碍保活强制", Status.SKIP, "无内置应用")
-            s.add("内置应用.OOM保护强制", Status.SKIP, "无内置应用")
+            s.add("内置应用.Doze守护", Status.SKIP, "无内置应用")
+            s.add("内置应用.通知保活", Status.SKIP, "无内置应用")
+            s.add("内置应用.无障碍保活", Status.SKIP, "无内置应用")
+            s.add("内置应用.OOM保护", Status.SKIP, "无内置应用")
             return
         }
 
-        // Doze 生效集合（buildWhiteList ∪ builtin）—— 与 applyDozeList 语义一致。
-        try {
-            val white = LinkedHashSet<String>()
-            white.addAll(parseDozeConf(ctx))
-            white.addAll(pkgs)
-            val missing = pkgs.filter { it !in white }
-            s.add(
-                "内置应用.Doze白名单强制",
-                if (missing.isEmpty()) Status.PASS else Status.FAIL,
-                "内置=${pkgs.size} 缺失=${missing.size}",
-            )
-        } catch (t: Throwable) {
-            s.add("内置应用.Doze白名单强制", Status.FAIL, t.message ?: "")
-        }
+        // 守护集合 = guard 开关为开的内置应用（默认全开）。
+        val guardSet = BuiltinConfig.guardPackages(rootDir)
+        val guardOff = pkgs.filter { it !in guardSet }
+        s.add(
+            "内置应用.守护开关",
+            Status.PASS,
+            "内置=${pkgs.size} 启用守护=${guardSet.size} 已关闭=${guardOff.size}",
+        )
 
-        // 通知使用权 / 无障碍保活名单（KeepAliveList.read 已强制 union 内置应用）。
+        // Doze / 保活名单只能包含「启用守护」的内置应用（guard=0 的必须缺席）。
         try {
             val notif = KeepAliveList.read(rootDir, KeepAliveKind.NOTIFICATION)
             val a11y = KeepAliveList.read(rootDir, KeepAliveKind.ACCESSIBILITY)
-            val mN = pkgs.filter { it !in notif }
-            val mA = pkgs.filter { it !in a11y }
+            val leakedNotif = guardOff.filter { it in notif }
+            val leakedA11y = guardOff.filter { it in a11y }
+            val mN = guardSet.filter { it !in notif }
+            val mA = guardSet.filter { it !in a11y }
             s.add(
-                "内置应用.通知保活强制",
-                if (mN.isEmpty()) Status.PASS else Status.FAIL,
-                "生效名单=${notif.size} 缺失=${mN.size}",
+                "内置应用.通知保活",
+                if (mN.isEmpty() && leakedNotif.isEmpty()) Status.PASS else Status.FAIL,
+                "生效名单=${notif.size} 守护缺失=${mN.size} 关闭却泄漏=${leakedNotif.size}",
             )
             s.add(
-                "内置应用.无障碍保活强制",
-                if (mA.isEmpty()) Status.PASS else Status.FAIL,
-                "生效名单=${a11y.size} 缺失=${mA.size}",
+                "内置应用.无障碍保活",
+                if (mA.isEmpty() && leakedA11y.isEmpty()) Status.PASS else Status.FAIL,
+                "生效名单=${a11y.size} 守护缺失=${mA.size} 关闭却泄漏=${leakedA11y.size}",
             )
         } catch (t: Throwable) {
-            s.add("内置应用.通知保活强制", Status.FAIL, t.message ?: "")
-            s.add("内置应用.无障碍保活强制", Status.FAIL, t.message ?: "")
+            s.add("内置应用.通知保活", Status.FAIL, t.message ?: "")
+            s.add("内置应用.无障碍保活", Status.FAIL, t.message ?: "")
         }
 
-        // OOM 生效名单（effectivePackages 已强制 union 内置应用）。
+        // OOM 生效集合：必须包含「强制集合」（含通知/无障碍组件者），
+        // 不含未勾选且非强制的内置应用。
         try {
-            val eff = OomProtectList.effectivePackages(rootDir)
-            val missing = pkgs.filter { it !in eff }
+            val eff = OomProtectList.effectivePackages(rootDir).toHashSet()
+            val forced = pkgs.filter { BuiltinConfig.isForcedOom(it) }
+            val forcedMissing = forced.filter { it !in eff }
+            // 非强制且未勾选者不应在名单中。
+            val oomChecked = pkgs.filter { BuiltinConfig.isOomChecked(rootDir, it) }.toHashSet()
+            val shouldNot = pkgs.filter { it !in forced && it !in oomChecked }
+            val leaked = shouldNot.filter { it in eff }
             s.add(
-                "内置应用.OOM保护强制",
-                if (missing.isEmpty()) Status.PASS else Status.FAIL,
-                "生效名单=${eff.size} 缺失=${missing.size}",
+                "内置应用.OOM保护",
+                if (forcedMissing.isEmpty() && leaked.isEmpty()) Status.PASS else Status.FAIL,
+                "强制=${forced.size} 勾选=${oomChecked.size} 生效=${pkgs.count { it in eff }} " +
+                    "强制缺失=${forcedMissing.size} 未勾选却泄漏=${leaked.size}",
             )
         } catch (t: Throwable) {
-            s.add("内置应用.OOM保护强制", Status.FAIL, t.message ?: "")
+            s.add("内置应用.OOM保护", Status.FAIL, t.message ?: "")
         }
     }
 

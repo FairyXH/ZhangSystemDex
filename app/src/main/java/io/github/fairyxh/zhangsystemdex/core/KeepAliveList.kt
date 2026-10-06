@@ -48,12 +48,15 @@ object KeepAliveList {
     fun file(rootDir: File, kind: KeepAliveKind): File = File(rootDir, kind.fileName)
 
     /**
-     * 模块内置应用（`system/app/`）—— **始终**纳入保活名单，不听从配置。
+     * 模块内置应用（`system/app/`）中**启用内置守护**的那部分。
      *
-     * 见 [BuiltinApps]：这些应用是模块功能的载体，掉线即模块失效，
-     * 因此不提供关闭它们的开关（[KeepAliveKind] 的总开关仅影响用户自选名单）。
+     * 见 [BuiltinApps] 与 [BuiltinConfig]：内置应用默认纳入保活，但可按应用
+     * 通过 `builtin_guard.conf` 的 `guard=0` 独立关闭（用户需求 2026-10-06）。
      */
-    fun builtinPackages(rootDir: File): List<String> = BuiltinApps.packagesFromRoot(rootDir)
+    fun builtinPackages(rootDir: File): List<String> = BuiltinConfig.guardPackages(rootDir)
+
+    /** 全部内置应用（不看守护开关），供 UI / 状态查询。 */
+    fun allBuiltinPackages(rootDir: File): List<String> = BuiltinApps.packagesFromRoot(rootDir)
 
     /**
      * 读取并归一化。文件不存在返回内置默认列表。

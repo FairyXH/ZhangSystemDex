@@ -2,6 +2,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
 import io.github.fairyxh.zhangsystemdex.core.BuiltinApps
+import io.github.fairyxh.zhangsystemdex.core.BuiltinConfig
 import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
@@ -41,16 +42,16 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         }
     }
 
-    /** 内置应用（system/app/）—— 强制保活名单，来源见 [BuiltinApps]。 */
+    /** 内置应用（system/app/）中**启用内置守护**的部分，来源见 [BuiltinConfig]。 */
     private fun builtinPackages(): List<String> = try {
-        BuiltinApps.packages(ctx.modDir)
+        BuiltinConfig.guardPackages(File(ctx.config.rootDir))
     } catch (t: Throwable) {
         Logger.w(name, "枚举内置应用失败: ${t.message}")
         emptyList()
     }
 
     /**
-     * 必要 Doze 白名单 + **全部内置应用**（内置应用不听从开关）。
+     * 必要 Doze 白名单 + **启用内置守护的内置应用**（可按应用独立关闭）。
      * 在 `doze_enable=false` 时调用。
      */
     private fun applyRequiredDozePackages() {
@@ -59,18 +60,18 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         for (pkg in pkgs) {
             FrameworkOps.addPowerSaveWhitelist(pkg)
         }
-        Logger.i(name, "必要 + 内置应用 Doze 白名单已应用: ${pkgs.size} 个包")
+        Logger.i(name, "必要 + 内置守护应用 Doze 白名单已应用: ${pkgs.size} 个包")
     }
 
     /**
-     * 仅把内置应用写入多任务 Lock（`locked_apps_enable=false` 时调用），
-     * 保证「内置应用默认多任务锁定」不听从配置。
+     * 仅把「启用内置守护」的内置应用写入多任务 Lock（`locked_apps_enable=false` 时调用），
+     * 保证「内置应用默认多任务锁定」在详情关闭时仍生效。
      */
     private fun applyBuiltinLockedApps() {
         val pkgs = builtinPackages()
         if (pkgs.isEmpty()) return
         writeLockedApps(pkgs)
-        Logger.i(name, "内置应用多任务 Lock 已应用: ${pkgs.size} 个包（开关关闭仍生效）")
+        Logger.i(name, "内置守护应用多任务 Lock 已应用: ${pkgs.size} 个包（开关关闭仍生效）")
     }
 
     override fun tick() {

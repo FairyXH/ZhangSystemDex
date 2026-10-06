@@ -318,31 +318,31 @@ object Main {
             ) {
                 GameOomProtectModule(ctx)
             },
-            // OOM 保护：**常驻**。总开关只控制「用户名单」，模块内置应用
-            // （system/app/）始终受保护，不听从配置（用户要求 2026-10-06）。
+            // OOM 保护：常驻线程；用户名单受总开关控制，内置应用按
+            // `builtin_guard.conf`（强制：含通知/无障碍组件者；其余勾选）。
             ModuleEntry(
                 "oom_protect", { true },
                 label = "OOM 保护名单",
-                desc = "内置应用始终保护（不受开关控制）；用户名单受总开关控制，oom_score_adj 钳制到系统安全上限",
+                desc = "含通知/无障碍组件的内置应用强制保护；其余可选（WebUI 勾选）。用户名单受总开关控制",
             ) {
                 OomProtectModule(ctx)
             },
             ModuleEntry("accessibility_guard", { true }, label = "无障碍守护", desc = "常驻守护无障碍服务不被系统关闭") {
                 AccessibilityGuardModule(ctx)
             },
-            // 通知使用权 / 无障碍服务保活：**常驻**。总开关只控制「用户名单」，
-            // 模块内置应用（system/app/）始终保活，不听从配置（用户要求 2026-10-06）。
+            // 通知使用权 / 无障碍服务保活：常驻线程；总开关控制「用户名单」，
+            // 内置应用按 `builtin_guard.conf` 的 guard 开关（默认开，可独立关闭）。
             ModuleEntry(
                 "notif_keepalive", { true },
                 label = "通知使用权保活",
-                desc = "内置应用始终保活（不受开关控制）；用户名单见 WebUI「保活」页",
+                desc = "内置应用默认保活（可在 WebUI「内置应用」逐项关闭）；用户名单见 WebUI「保活」页",
             ) {
                 NotificationKeepAliveModule(ctx)
             },
             ModuleEntry(
                 "a11y_keepalive", { true },
                 label = "无障碍服务保活",
-                desc = "内置应用始终保活（不受开关控制）；用户名单见 WebUI「保活」页",
+                desc = "内置应用默认保活（可在 WebUI「内置应用」逐项关闭）；用户名单见 WebUI「保活」页",
             ) {
                 AccessibilityKeepAliveModule(ctx)
             },

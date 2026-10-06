@@ -85,23 +85,23 @@ object OomProtectList {
                 Logger.w("OomProtectList", "合并 ${kind.fileName} 失败: ${t.message}")
             }
         }
-        // 模块内置应用（system/app/）**无条件**纳入 OOM 保护，不听从配置。
+        // 模块内置应用：**可选** OOM 保护。声明了无障碍/通知组件的强制保护，
+        // 其余按 `builtin_guard.conf` 的勾选（用户需求 2026-10-06）。
         try {
-            out.addAll(KeepAliveList.builtinPackages(rootDir))
+            out.addAll(BuiltinConfig.oomPackages(rootDir))
         } catch (t: Throwable) {
             Logger.w("OomProtectList", "合并内置应用失败: ${t.message}")
         }
         return out.toList()
     }
-
     /**
-     * 仅「模块内置应用」的 OOM 保护名单。
+     * 仅「模块内置应用」中**参与 OOM 保护**的部分（强制 ∪ 勾选）。
      *
-     * 用于 `oom_protect_enable=false` 时：用户名单被停用，但内置应用
-     * 仍必须受保护（用户要求「不听从配置」）。
+     * 用于 `oom_protect_enable=false` 时：用户名单被停用，但内置应用的
+     * 强制/勾选 OOM 保护仍然生效（用户要求）。
      */
     fun builtinPackages(rootDir: File): List<String> = try {
-        KeepAliveList.builtinPackages(rootDir)
+        BuiltinConfig.oomPackages(rootDir)
     } catch (t: Throwable) {
         Logger.w("OomProtectList", "读取内置应用失败: ${t.message}")
         emptyList()

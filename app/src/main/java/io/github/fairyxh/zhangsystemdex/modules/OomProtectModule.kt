@@ -2,10 +2,12 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
+import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
 import io.github.fairyxh.zhangsystemdex.core.Logger
 import io.github.fairyxh.zhangsystemdex.core.OomProtectList
 import io.github.fairyxh.zhangsystemdex.core.ProcessUtils
 import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
+import io.github.fairyxh.zhangsystemdex.core.ShellExecutor
 import java.io.File
 
 /**
@@ -43,9 +45,25 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
 
         /** 主进程默认请求值（会被 [clampOom] 钳制到 SAFE_FLOOR）。 */
         const val DEFAULT_MAIN_ADJ = -1000
-
         /** 子进程默认请求值（更保守，避免抢占系统资源）。 */
         const val DEFAULT_CHILD_ADJ = -700
+
+        /**
+         * 内存看门狗触发阈值：物理内存「已用」百分比达到该值即介入。
+         * 用户需求（2026-10-06）：95%。
+         */
+        const val WATCHDOG_MEM_USED_TRIGGER = 95
+
+        /**
+         * 判定「模块 OOM 保护是元凶」的最小证据：
+         * 受保护进程集合的 RSS 合计占总内存的比例达到该值，或单个受保护进程
+         * RSS ≥ 总内存的 [WATCHDOG_SINGLE_SHARE] 时，认为保护对象是高占用主因。
+         */
+        const val WATCHDOG_TOTAL_SHARE = 40   // 受保护进程合计 ≥ 总内存 40%
+        const val WATCHDOG_SINGLE_SHARE = 25  // 单个受保护进程 ≥ 总内存 25%
+
+        /** 触发后冷却（毫秒），避免连续轮询反复杀进程。 */
+        const val WATCHDOG_COOLDOWN_MS = 60_000L
 
         /**
          * 把「期望的 oom_score_adj」钳制到安全范围。
@@ -65,9 +83,12 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
 
     /** 本模块改动过的 pid（用于退出/关闭时还原）。 */
     private val touchedPids = HashSet<Int>()
-
     /** 本轮受保护的应用（去重后的包名）。 */
     private val protected = LinkedHashSet<String>()
+    /** 看门狗上次触发时间（冷却用）。 */
+    private var lastWatchdogAt = 0L
+    /** 看门狗累计触发次数（供状态展示）。 */
+    private var watchdogHits = 0L
 
     override fun onStart() {
         refreshList(force = true)
@@ -143,10 +164,92 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         }
         // 进程已退出的条目从 lastAdj 清除（有界化）。
         lastAdj.keys.retainAll(aliveNow)
-
         protected.clear()
         protected.addAll(protectedNow)
         publish()
+        checkMemoryWatchdog()
+    }
+
+    /**
+     * 内存看门狗：物理内存「已用」≥ [WATCHDOG_MEM_USED_TRIGGER] 时介入。
+     *
+     * 判断模块 OOM 保护是否为高占用主因：统计**受保护进程**的 RSS 合计，
+     * 若合计占总内存 ≥ [WATCHDOG_TOTAL_SHARE] 或单个受保护进程 ≥
+     * [WATCHDOG_SINGLE_SHARE]，则：
+     *   1. **取消保护**：把全部被本模块改动过的存活进程 `oom_score_adj` 还原为 0；
+     *   2. **终止高占用对象**：强制停止占用最大的受保护应用（force-stop）；
+     *   3. 记录日志并进入 [WATCHDOG_COOLDOWN_MS] 冷却。
+     *
+     * 若高占用不来自受保护进程（系统本身吃满），则**不动手**，仅记录一次告警。
+     */
+    private fun checkMemoryWatchdog() {
+        val used = ProcessUtils.memUsedPercent()
+        RuntimeRegistry.put("oom_protect", "memUsedPercent", used)
+        if (used < WATCHDOG_MEM_USED_TRIGGER) return
+        val now = System.currentTimeMillis()
+        if (now - lastWatchdogAt < WATCHDOG_COOLDOWN_MS) return
+        lastWatchdogAt = now
+
+        // 统计受保护进程的 RSS（仅统计本模块 touched 的存活进程）。
+        val totalKb = ProcessUtils.memTotalKb()
+        var sumKb = 0L
+        var topPid = -1
+        var topKb = 0L
+        val alive = touchedPids.filter { ProcessUtils.readFile("/proc/$it/oom_score_adj") != null }
+        for (pid in alive) {
+            val kb = ProcessUtils.rssKbOf(pid)
+            sumKb += kb
+            if (kb > topKb) { topKb = kb; topPid = pid }
+        }
+        val sumShare = if (totalKb > 0) (sumKb * 100 / totalKb).toInt() else 0
+        val topShare = if (totalKb > 0) (topKb * 100 / totalKb).toInt() else 0
+        val ours = sumShare >= WATCHDOG_TOTAL_SHARE || topShare >= WATCHDOG_SINGLE_SHARE
+
+        RuntimeRegistry.put("oom_protect", "watchdogMemUsed", used)
+        RuntimeRegistry.put("oom_protect", "watchdogProtectedShare", sumShare)
+        if (!ours) {
+            Logger.w(
+                name,
+                "内存看门狗：物理内存已用 ${used}%（≥${WATCHDOG_MEM_USED_TRIGGER}%）" +
+                    "，但受保护进程占比仅 ${sumShare}%（最大单进程 ${topShare}%），非本模块所致，不处理"
+            )
+            return
+        }
+
+        // 找出占用最大的受保护「包名」，用于 force-stop。
+        val topPkg = resolvePackageForPid(topPid)
+        Logger.w(
+            name,
+            "内存看门狗触发：物理内存已用 ${used}%，受保护进程合计 ${sumShare}%（最大 ${topShare}%），" +
+                "判定为模块 OOM 保护所致 → 取消保护并终止高占用对象（pkg=${topPkg ?: "?"} pid=$topPid rss=${topKb}kB）"
+        )
+        // 1) 取消保护（还原所有被本模块改动过的存活进程）。
+        val n = touchedPids.size
+        restoreAll()
+        // 2) 终止高占用对象。
+        if (topPkg != null) {
+            try {
+                FrameworkOps.forceStop(topPkg)
+                Logger.w(name, "内存看门狗：已强制停止 $topPkg")
+            } catch (t: Throwable) {
+                Logger.w(name, "内存看门狗：强制停止 $topPkg 失败: ${t.message}")
+            }
+        } else if (topPid > 0) {
+            ProcessUtils.writeFile("/proc/$topPid/oom_score_adj", "1000")
+            ShellExecutor.run("kill -9 $topPid")
+            Logger.w(name, "内存看门狗：无法解析包名，直接终止 pid=$topPid（标注 adj=1000）")
+        }
+        watchdogHits++
+        RuntimeRegistry.put("oom_protect", "watchdogHits", watchdogHits)
+        Logger.w(name, "内存看门狗：已取消 $n 个进程的保护；本轮处理完成")
+    }
+
+    /** 由 pid 反查所属包名（读取 /proc/<pid>/cmdline 首段）。 */
+    private fun resolvePackageForPid(pid: Int): String? {
+        if (pid <= 0) return null
+        val cmd = ProcessUtils.readFile("/proc/$pid/cmdline") ?: return null
+        val first = cmd.replace('\u0000', ' ').trim().split(' ').firstOrNull() ?: return null
+        return first.takeIf { OomProtectList.isValidPackage(it) }
     }
 
     /** 写入 oom_score_adj（仅在变化时写）。 */

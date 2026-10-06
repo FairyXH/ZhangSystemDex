@@ -234,6 +234,8 @@ class HttpBackend(
             // ===== 模块内置应用（system/app/，默认保活不听配置）=====
             "/api/builtin/apps" -> apiBuiltinApps()
             "/api/builtin/status" -> apiBuiltinStatus()
+            "/api/builtin/guard/get" -> apiBuiltinGuardGet()
+            "/api/builtin/guard/set" -> apiBuiltinGuardSet(method, body)
             // ===== Shizuku 守护（保活 + 防检测）=====
             "/api/shizuku/status" -> apiShizukuStatus()
             "/api/shizuku/residue" -> apiShizukuResidue()
@@ -1678,6 +1680,14 @@ class HttpBackend(
         sb.append(",\"count\":").append(protectedList.size)
         sb.append(",\"protected\":").append(jsonStrArray(protectedList))
         sb.append(",\"safeFloor\":").append(io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.SAFE_FLOOR)
+        // 内存看门狗状态。
+        val st = RuntimeRegistry.get("oom_protect")
+        sb.append(",\"watchdogMemUsed\":").append((st?.extras?.get("memUsedPercent") as? Int) ?: 0)
+        sb.append(",\"watchdogProtectedShare\":").append((st?.extras?.get("watchdogProtectedShare") as? Int) ?: 0)
+        sb.append(",\"watchdogHits\":").append((st?.extras?.get("watchdogHits") as? Long) ?: 0L)
+        sb.append(",\"watchdogTrigger\":").append(
+            io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.WATCHDOG_MEM_USED_TRIGGER
+        )
         sb.append('}')
         return jsonRaw(sb.toString())
     }
@@ -1892,6 +1902,7 @@ class HttpBackend(
      *   - OOM 保护（oom_score_adj）
      */
     private fun apiBuiltinApps(): String {
+        val rootDir = File(ctx.config.rootDir)
         val list = BuiltinApps.packages(ctx.modDir)
         val sb = StringBuilder()
         sb.append("{\"ok\":true")
@@ -1905,18 +1916,70 @@ class HttpBackend(
                     key("pkg"); value(pkg); comma()
                     key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
                     key("installed"); value(AppListProvider.installed(pkg)); comma()
-                    key("apk"); value(BuiltinApps.apkOf(ctx.modDir, pkg)?.name ?: "")
+                    key("apk"); value(BuiltinApps.apkOf(ctx.modDir, pkg)?.name ?: ""); comma()
+                    key("guard"); value(BuiltinConfig.isGuardEnabled(rootDir, pkg)); comma()
+                    key("oomChecked"); value(BuiltinConfig.isOomChecked(rootDir, pkg)); comma()
+                    key("forcedOom"); value(BuiltinConfig.isForcedOom(pkg)); comma()
+                    key("oomEffective"); value(BuiltinConfig.isOomEnabled(rootDir, pkg))
                 })
             }
         })
-        sb.append(",\"enforced\":").append(JsonBuilder.obj {
-            key("doze"); value(true); comma()
-            key("multitaskLock"); value(true); comma()
-            key("notifKeepAlive"); value(true); comma()
-            key("a11yKeepAlive"); value(true); comma()
-            key("oomProtect"); value(true)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * GET /api/builtin/guard/get
+     *
+     * 返回内置应用的「守护 / OOM」逐应用开关（`builtin_guard.conf`），
+     * 以及每个应用的 `forced`（强制 OOM，不可关）标记。
+     */
+    private fun apiBuiltinGuardGet(): String {
+        val rootDir = File(ctx.config.rootDir)
+        val list = BuiltinApps.packages(ctx.modDir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"file\":").append(q(BuiltinConfig.file(rootDir).absolutePath))
+        sb.append(",\"count\":").append(list.size)
+        sb.append(",\"items\":").append(JsonBuilder.arr {
+            var first = true
+            for (pkg in list) {
+                if (!first) comma(); first = false
+                raw(JsonBuilder.obj {
+                    key("pkg"); value(pkg); comma()
+                    key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
+                    key("guard"); value(BuiltinConfig.isGuardEnabled(rootDir, pkg)); comma()
+                    key("oom"); value(BuiltinConfig.isOomChecked(rootDir, pkg)); comma()
+                    key("forcedOom"); value(BuiltinConfig.isForcedOom(pkg))
+                })
+            }
         })
         sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * POST /api/builtin/guard/set
+     * Body: {"pkg":"<pkg>","guard":true|false,"oom":true|false}
+     *
+     * 仅写入用户可改的字段；`oom` 对「强制 OOM」的内置应用无效（会返回 forcedOom=true）。
+     */
+    private fun apiBuiltinGuardSet(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = if (body.trimStart().startsWith("{")) MiniJson.parseObject(body) ?: emptyMap() else emptyMap()
+        val pkg = obj["pkg"]?.trim().orEmpty()
+        if (pkg.isEmpty()) return jsonError("缺少 pkg")
+        val rootDir = File(ctx.config.rootDir)
+        if (pkg !in BuiltinApps.packages(ctx.modDir)) return jsonError("非内置应用: $pkg")
+        val guard = obj["guard"]?.trim()?.let { it == "true" || it == "1" }
+        val oom = obj["oom"]?.trim()?.let { it == "true" || it == "1" }
+        if (guard == null && oom == null) return jsonError("缺少 guard 或 oom")
+        if (!BuiltinConfig.set(rootDir, pkg, guard, oom)) return jsonError("写入失败")
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0,\"pkg\":").append(q(pkg))
+        sb.append(",\"guard\":").append(BuiltinConfig.isGuardEnabled(rootDir, pkg))
+        sb.append(",\"oom\":").append(BuiltinConfig.isOomChecked(rootDir, pkg))
+        sb.append(",\"forcedOom\":").append(BuiltinConfig.isForcedOom(pkg))
+        sb.append(",\"oomEffective\":").append(BuiltinConfig.isOomEnabled(rootDir, pkg)).append('}')
         return jsonRaw(sb.toString())
     }
 
@@ -1932,18 +1995,20 @@ class HttpBackend(
         val list = BuiltinApps.packages(ctx.modDir)
         val set = list.toHashSet()
         val rootDir = File(ctx.config.rootDir)
+        val guardSet = BuiltinConfig.guardPackages(rootDir).toHashSet()
+        val oomSet = BuiltinConfig.oomPackages(rootDir).toHashSet()
 
-        // Doze 命中
+        // Doze 命中（仅统计启用内置守护的）
         val dozeHit = try {
-            val out = io.github.fairyxh.zhangsystemdex.core.ShellExecutor
-                .run("dumpsys deviceidle whitelist", 15000L) ?: ""
-            val text = out
-            list.filter { text.contains(it) }
+            val out = ShellExecutor.run("dumpsys deviceidle whitelist", 15000L) ?: ""
+            list.filter { it in guardSet && out.contains(it) }
         } catch (_: Throwable) { emptyList() }
 
-        // 保活名单命中
-        val notifHit = KeepAliveList.read(rootDir, KeepAliveKind.NOTIFICATION).filter { it in set }
-        val a11yHit = KeepAliveList.read(rootDir, KeepAliveKind.ACCESSIBILITY).filter { it in set }
+        // 保活名单命中（read 已按 guard 过滤内置应用）
+        val notifHit = KeepAliveList.read(rootDir, KeepAliveKind.NOTIFICATION)
+            .filter { it in set && it in guardSet }
+        val a11yHit = KeepAliveList.read(rootDir, KeepAliveKind.ACCESSIBILITY)
+            .filter { it in set && it in guardSet }
 
         // OOM 运行时快照
         val oomProtected = RuntimeRegistry.get("oom_protect")
@@ -1954,15 +2019,20 @@ class HttpBackend(
 
         // 多任务 Lock 命中（MIUI 写入 settings system locked_apps）
         val locked = try {
-            val v = io.github.fairyxh.zhangsystemdex.core.ShellExecutor
-                .run("settings get system locked_apps", 15000L) ?: ""
-            list.filter { v.contains(it) }
+            val v = ShellExecutor.run("settings get system locked_apps", 15000L) ?: ""
+            list.filter { it in guardSet && v.contains(it) }
         } catch (_: Throwable) { emptyList() }
+
+        val forcedOom = list.filter { BuiltinConfig.isForcedOom(it) }
 
         val sb = StringBuilder()
         sb.append("{\"ok\":true")
         sb.append(",\"count\":").append(list.size)
         sb.append(",\"packages\":").append(jsonStrArray(list))
+        sb.append(",\"guard\":").append(jsonStrArray(guardSet.toList()))
+        sb.append(",\"guardOff\":").append(jsonStrArray(list.filter { it !in guardSet }))
+        sb.append(",\"oomEnabled\":").append(jsonStrArray(oomSet.toList()))
+        sb.append(",\"forcedOom\":").append(jsonStrArray(forcedOom))
         sb.append(",\"doze\":").append(jsonStrArray(dozeHit))
         sb.append(",\"locked\":").append(jsonStrArray(locked))
         sb.append(",\"notifKeepAlive\":").append(jsonStrArray(notifHit))

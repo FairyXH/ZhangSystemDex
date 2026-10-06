@@ -128,6 +128,53 @@ object ProcessUtils {
         return ((free * 100) / total).toInt()
     }
 
+    /**
+     * 物理内存「已用」百分比（0..100）。
+     *
+     * 用 `MemTotal - MemAvailable` 计算：比 `free` 列更贴近真实压力
+     * （`free` 不含可回收的 page cache，会严重高估压力）。
+     * 解析失败返回 0（视为「正常」，避免误触发看门狗）。
+     */
+    fun memUsedPercent(): Int {
+        val meminfo = readFile("/proc/meminfo") ?: return 0
+        var total = 0L
+        var available = -1L
+        var free = 0L
+        for (line in meminfo.lineSequence()) {
+            val v = line.substringAfter(':').trim().removeSuffix("kB").trim().toLongOrNull() ?: continue
+            when {
+                line.startsWith("MemTotal:") -> total = v
+                line.startsWith("MemAvailable:") -> available = v
+                line.startsWith("MemFree:") -> free = v
+            }
+        }
+        if (total <= 0) return 0
+        val avail = if (available >= 0) available else free
+        return (((total - avail) * 100) / total).toInt().coerceIn(0, 100)
+    }
+
+    /** 进程的物理内存占用（VmRSS，单位 kB）；读取失败返回 0。 */
+    fun rssKbOf(pid: Int): Long {
+        val status = readFile("/proc/$pid/status") ?: return 0L
+        for (line in status.lineSequence()) {
+            if (line.startsWith("VmRSS:")) {
+                return line.substringAfter(':').trim().removeSuffix("kB").trim().toLongOrNull() ?: 0L
+            }
+        }
+        return 0L
+    }
+
+    /** 物理内存总量（MemTotal，单位 kB）；读取失败返回 0。 */
+    fun memTotalKb(): Long {
+        val meminfo = readFile("/proc/meminfo") ?: return 0L
+        for (line in meminfo.lineSequence()) {
+            if (line.startsWith("MemTotal:")) {
+                return line.substringAfter(':').trim().removeSuffix("kB").trim().toLongOrNull() ?: 0L
+            }
+        }
+        return 0L
+    }
+
     /** This daemon's own pid (falls back to -1 if the runtime can't provide it). */
     fun selfPid(): Int = try {
         android.os.Process.myPid()

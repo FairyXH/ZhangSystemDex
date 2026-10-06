@@ -1155,7 +1155,9 @@ object SelfTest {
                 ShizukuResidue.isWhitelisted("/data/local/tmp/shizuku") &&
                 !ShizukuResidue.isWhitelisted("/data/local/tmp/my_shizuku_notes.txt") &&
                 !ShizukuResidue.isWhitelisted("/data/local/tmp/other") &&
+                // 2026-10-06：官方 start.sh 使用的 starter 已改为受保护（guarded）
                 ShizukuResidue.isGuarded("/data/local/shizuku_starter") &&
+                ShizukuResidue.isGuarded("/data/local/tmp/shizuku_starter") &&
                 !ShizukuResidue.isGuarded("/data/local/tmp/rikka.shizuku")
             s.add(
                 "Shizuku.防检测白名单",
@@ -1172,8 +1174,11 @@ object SelfTest {
             ) }
             val safe = ShizukuResidue.targets(false, exists)
             val full = ShizukuResidue.targets(true, exists)
-            val ok = safe == listOf("/data/local/tmp/shizuku_starter") &&
-                full.contains("/data/local/shizuku_starter") && full.size == 2
+            // 2026-10-06：starter 已移入 GUARDED_CLEAN → safe 不再包含任何路径；
+            // 解锁后 full 同时包含两个 starter。
+            val ok = safe.isEmpty() &&
+                full.contains("/data/local/shizuku_starter") &&
+                full.contains("/data/local/tmp/shizuku_starter") && full.size == 2
             s.add(
                 "Shizuku.防检测目标",
                 if (ok) Status.PASS else Status.FAIL,
@@ -1181,6 +1186,23 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("Shizuku.防检测目标", Status.FAIL, t.message ?: "")
+        }
+        // 14h) Shizuku 官方 root 启动：进程识别口径与 ABI 目录候选。
+        try {
+            val ok = ShizukuModule.SERVER_PROC == "shizuku_server" &&
+                ShizukuModule.PROC_PATTERNS.contains(ShizukuResidue.PACKAGE) &&
+                ShizukuModule.PROC_PATTERNS.contains("shizuku_server") &&
+                ShizukuModule.ABI_DIRS.first() == "arm64" &&
+                ShizukuModule.ABI_DIRS.contains("arm") &&
+                // classify 能把 shizuku_server（root，uid=0）归为服务端
+                ShizukuModule.classify(listOf(100 to 0)).serverPids == listOf(100)
+            s.add(
+                "Shizuku.官方启动识别",
+                if (ok) Status.PASS else Status.FAIL,
+                "SERVER_PROC=${ShizukuModule.SERVER_PROC} ABI=${ShizukuModule.ABI_DIRS}"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.官方启动识别", Status.FAIL, t.message ?: "")
         }
         // 15) 配置键齐备（oom_protect_enable）。
         try {

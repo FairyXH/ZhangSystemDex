@@ -33,8 +33,14 @@ import java.io.File
  *   3. 统计到的进程数 < 2 或服务端缺失 → 判定掉线，重启 starter。
  *
  * 重启方式（依次尝试，任一成功即止）：
- *   1. `/data/local/shizuku_starter ""`（root 模式，本设备使用）
- *   2. 从 Shizuku 应用自身 `Android/data` 目录复制 starter 再执行
+ *   1. **官方 root 命令**：`<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`
+ *      （源码依据 `Shizuku/manager/.../starter/Starter.kt#internalCommand`，
+ *      对应 app 内「Start」按钮的 root 分支；见 docs/SHIZUKU_START_DESIGN.md）
+ *   2. 旧 starter 兜底：`/data/local/tmp/shizuku_starter`（adb 模式遗留）
+ *   3. 旧 starter 兜底：`/data/local/shizuku_starter`
+ *
+ * **禁止改 Shizuku 包**：本模块只调用官方入口，不重打包、不替换 APK，
+ * 以保证换机通用性与 Shizuku 升级后的可持续性。
  *
  * ## 防检测（detect）
  *
@@ -116,6 +122,21 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
 
     companion object {
         /**
+         * 服务端进程名。官方 starter 以 `--nice-name=shizuku_server` 启动服务端，
+         * 该进程名**不含包名**，因此不能只靠 [ShizukuResidue.PACKAGE] 匹配。
+         */
+        const val SERVER_PROC = "shizuku_server"
+
+        /** 全部需要纳入快照的进程名（包名 + 服务端进程名）。 */
+        val PROC_PATTERNS: List<String> = listOf(ShizukuResidue.PACKAGE, SERVER_PROC)
+
+        /**
+         * APK 内 lib 子目录候选（按优先级）。注意目录名与 ABI 名不同：
+         * arm64-v8a -> arm64，armeabi-v7a -> arm。
+         */
+        val ABI_DIRS: List<String> = listOf("arm64", "arm", "x86_64", "x86")
+
+        /**
          * 从 (pid, uid) 列表划分主进程 / 服务端。
          *
          * Android uid 编码为 `userId * 100000 + appId`。Shizuku 两种进程的
@@ -161,9 +182,15 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         }
     }
 
-    /** 当前快照（真实读取）。 */
+    /**
+     * 当前快照（真实读取）。
+     *
+     * 同时匹配**包名**与**服务端进程名**（`shizuku_server`）后的 pid 去重，
+     * 再统一交给 [classify] 按 uid 划分。旧实现只看包名 → 服务端永远匹配不到。
+     */
     fun snapshot(): Snapshot {
-        val pids = ProcessUtils.pidsOf(ShizukuResidue.PACKAGE)
+        val pids = LinkedHashSet<Int>()
+        for (p in PROC_PATTERNS) pids.addAll(ProcessUtils.pidsOf(p))
         return classify(pids.map { it to uidOf(it) })
     }
 
@@ -198,18 +225,80 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
     }
 
     /**
-     * 重启 Shizuku：优先使用设备上已有的 starter。
+     * 解析 Shizuku 官方 root 启动命令。
      *
-     * 路径优先级：
-     *   1. Shizuku 应用导出的 `${外部存储}/Android/data/<pkg>/starter`
-     *      → 复制到 `/data/local/tmp/shizuku_starter` 后执行（uid 2000，Shizuku 官方流程）
-     *   2. 已有的 `/data/local/tmp/shizuku_starter`
-     *   3. 已有的 `/data/local/shizuku_starter`（root 模式，本设备使用）
+     * 对应官方源码 `Shizuku/manager/.../starter/Starter.kt`：
+     * ```
+     * starterFile = File(application.applicationInfo.nativeLibraryDir, "libshizuku.so")
+     * internalCommand = "$starterFile --apk=${application.applicationInfo.sourceDir}"
+     * ```
+     * 即 `StartRootViewHolder` -> `StarterActivity(EXTRA_IS_ROOT=true)` 实际执行的命令。
+     *
+     * 模块运行在 DexContext（无 Android ApplicationInfo），故用 `pm path` 解析
+     * `sourceDir`，再以 ABI 目录推导 `nativeLibraryDir`（arm64-v8a -> lib/arm64）。
+     *
+     * @return 可执行的 shell 命令；null 表示无法解析（未安装 / libshizuku.so 缺失），
+     *         调用方应回退旧 starter。
+     */
+    fun officialStartCommand(): String? {
+        return try {
+            val out = ShellExecutor.run("pm path ${ShizukuResidue.PACKAGE}", 10_000)
+                ?: return null
+            val src = out.lineSequence()
+                .firstOrNull { it.startsWith("package:") }
+                ?.removePrefix("package:")
+                ?.trim()
+                ?: return null
+            if (src.isEmpty() || !src.endsWith(".apk")) return null
+            val baseDir = src.substringBeforeLast('/')
+            for (abi in ABI_DIRS) {
+                val starter = File("$baseDir/lib/$abi/libshizuku.so")
+                if (starter.exists()) {
+                    return "${quoteArg(starter.path)} --apk=${quoteArg(src)}"
+                }
+            }
+            null
+        } catch (t: Throwable) {
+            Logger.w(name, "解析官方启动命令失败: ${t.message}")
+            null
+        }
+    }
+
+    /**
+     * 重启 Shizuku。
+     *
+     * 优先级（依次尝试，任一成功即止）：
+     *   1. **官方 root 命令**（推荐、稳定、换机通用）：
+     *      `<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`
+     *   2. `/data/local/tmp/shizuku_starter`（adb 模式遗留，兜底）
+     *   3. `/data/local/shizuku_starter`（旧版遗留，兜底）
+     *
+     * 成功判据：执行后 [Snapshot.serverPids] 非空（不解析 starter stdout，
+     * 避免不同版本输出差异导致误判）。
      */
     fun restartShizuku(): Boolean {
+        // ---- 1) 官方 root 命令 ----
+        val official = officialStartCommand()
+        if (official != null) {
+            try {
+                Logger.i(name, "执行官方启动命令: $official")
+                ShellExecutor.run(official, 20_000)
+                sleepSafe(3000)
+                if (snapshot().serverPids.isNotEmpty()) {
+                    Logger.i(name, "Shizuku 服务端已恢复（官方命令）")
+                    return true
+                }
+                Logger.w(name, "官方命令未拉起服务端，回退旧 starter")
+            } catch (t: Throwable) {
+                Logger.w(name, "官方命令失败: ${t.message}")
+            }
+        } else {
+            Logger.w(name, "无法解析官方启动命令（可能未安装 Shizuku），回退旧 starter")
+        }
+
+        // ---- 2/3) 旧 starter 兜底 ----
         val tmpStarter = File("/data/local/tmp/shizuku_starter")
         try {
-            // 1) 从应用数据目录复制一份到 tmp（Shizuku 官方推荐的部署位置）
             val exported = File("/storage/emulated/0/Android/data/${ShizukuResidue.PACKAGE}/starter")
             if (exported.exists() && exported.length() > 0) {
                 if (FileUtils.copyFile(exported, tmpStarter)) {
@@ -220,8 +309,6 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         } catch (t: Throwable) {
             Logger.w(name, "复制 starter 失败: ${t.message}")
         }
-
-        // 2) 依次尝试候选 starter
         val candidates = listOf(
             tmpStarter,
             File("/data/local/shizuku_starter"),
@@ -229,16 +316,12 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         for (c in candidates) {
             if (!c.exists()) continue
             try {
-                if (c.path.endsWith("/data/local/shizuku_starter")) {
-                    // root 模式 starter 需要可执行
-                    FileUtils.chmod(c.path, "700")
-                }
+                FileUtils.chmod(c.path, "700")
                 Logger.i(name, "执行 starter: ${c.path}")
-                ShellExecutor.run("${c.path} \"\"", 15_000)
-                // 给服务端一点启动时间再验证
+                ShellExecutor.run("${quoteArg(c.path)} \"\"", 15_000)
                 sleepSafe(3000)
                 if (snapshot().serverPids.isNotEmpty()) {
-                    Logger.i(name, "Shizuku 服务端已恢复")
+                    Logger.i(name, "Shizuku 服务端已恢复（${c.path}）")
                     return true
                 }
             } catch (t: Throwable) {
@@ -247,6 +330,9 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         }
         return false
     }
+
+    /** shell 单引号转义（路径可能含空格/特殊字符）。 */
+    private fun quoteArg(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     // ==================================================================
     // 防检测

@@ -13,7 +13,7 @@ import java.io.File
  * 典型检测面：
  *
  *   - `/data/local/shizuku_starter`        root 模式启动器残留
- *   - `/data/local/tmp/shizuku_starter`    旧版部署位置
+ *   - `/data/local/tmp/shizuku_starter`    官方 start.sh（adb 模式）部署位置
  *   - `/data/local/tmp/shizuku`            服务端二进制
  *   - `/data/local/tmp/shizuku_server`     部分版本命名
  *   - `/data/local/tmp/rikka*`             Shizuku 作者包名痕迹
@@ -73,19 +73,29 @@ object ShizukuResidue {
      *    默认受开关保护（`shizuku_detect_clean_starter`）。
      */
     val ALWAYS_CLEAN: List<String> = listOf(
-        // 旧版部署位置（现版本 Shizuku 已不使用）
-        "/data/local/tmp/shizuku_starter",
         // 作者包名痕迹
         "/data/local/tmp/rikka.shizuku",
         "/data/local/tmp/rikka.shizuku_server",
     )
-
-    /** 默认不删、需开关解锁的路径（删除会影响 Shizuku 自启）。 */
+    /**
+     * 默认不删、需开关解锁的路径（删除会影响 Shizuku 启动/自启）。
+     *
+     * 2026-10-06 修正：`/data/local/tmp/shizuku_starter` 不是「旧版遗留」，
+     * 而是 Shizuku 官方 `start.sh`（adb/wireless 模式）每次启动都会重建的文件
+     * （脚本内 `STARTER_PATH="/data/local/tmp/shizuku_starter"`）。删除它会直接
+     * 破坏 adb 模式自启，故从 ALWAYS_CLEAN 移入 GUARDED_CLEAN。
+     *
+     * 注意：本模块 root 模式启动已改为官方命令
+     * `<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`（见 ShizukuModule），
+     * 不依赖该文件；但为不破坏 adb 模式，默认仍不删。
+     */
     val GUARDED_CLEAN: List<String> = listOf(
+        "/data/local/tmp/shizuku_starter",
         "/data/local/shizuku_starter",
         "/data/local/tmp/shizuku",
         "/data/local/tmp/shizuku_server",
     )
+
 
     /** 全部可清理路径（未拆分时用）。 */
     val ALL: List<String> = ALWAYS_CLEAN + GUARDED_CLEAN

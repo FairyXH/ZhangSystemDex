@@ -85,7 +85,26 @@ object OomProtectList {
                 Logger.w("OomProtectList", "合并 ${kind.fileName} 失败: ${t.message}")
             }
         }
+        // 模块内置应用（system/app/）**无条件**纳入 OOM 保护，不听从配置。
+        try {
+            out.addAll(KeepAliveList.builtinPackages(rootDir))
+        } catch (t: Throwable) {
+            Logger.w("OomProtectList", "合并内置应用失败: ${t.message}")
+        }
         return out.toList()
+    }
+
+    /**
+     * 仅「模块内置应用」的 OOM 保护名单。
+     *
+     * 用于 `oom_protect_enable=false` 时：用户名单被停用，但内置应用
+     * 仍必须受保护（用户要求「不听从配置」）。
+     */
+    fun builtinPackages(rootDir: File): List<String> = try {
+        KeepAliveList.builtinPackages(rootDir)
+    } catch (t: Throwable) {
+        Logger.w("OomProtectList", "读取内置应用失败: ${t.message}")
+        emptyList()
     }
 
     /** 归一化文本为包名列表（去注释/空行/重复/非法）。 */

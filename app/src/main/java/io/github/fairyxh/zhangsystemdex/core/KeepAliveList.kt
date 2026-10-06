@@ -47,17 +47,46 @@ object KeepAliveList {
 
     fun file(rootDir: File, kind: KeepAliveKind): File = File(rootDir, kind.fileName)
 
-    /** 读取并归一化。文件不存在返回内置默认列表。 */
+    /**
+     * 模块内置应用（`system/app/`）—— **始终**纳入保活名单，不听从配置。
+     *
+     * 见 [BuiltinApps]：这些应用是模块功能的载体，掉线即模块失效，
+     * 因此不提供关闭它们的开关（[KeepAliveKind] 的总开关仅影响用户自选名单）。
+     */
+    fun builtinPackages(rootDir: File): List<String> = BuiltinApps.packagesFromRoot(rootDir)
+
+    /**
+     * 读取并归一化。文件不存在返回内置默认列表。
+     *
+     * **注意**：返回值始终 union [builtinPackages]（模块内置应用强制保活），
+     * 因此调用方拿到的就是「实际生效名单」。
+     */
     fun read(rootDir: File, kind: KeepAliveKind): List<String> {
         val f = file(rootDir, kind)
-        if (!f.exists()) return DEFAULT_PACKAGES[kind] ?: emptyList()
-        val text = try {
-            f.readText(Charsets.UTF_8)
-        } catch (t: Throwable) {
-            Logger.w("KeepAliveList", "读取 ${kind.fileName} 失败: ${t.message}")
-            ""
+        val userList = if (!f.exists()) {
+            DEFAULT_PACKAGES[kind] ?: emptyList()
+        } else {
+            val text = try {
+                f.readText(Charsets.UTF_8)
+            } catch (t: Throwable) {
+                Logger.w("KeepAliveList", "读取 ${kind.fileName} 失败: ${t.message}")
+                ""
+            }
+            normalize(text)
         }
-        return normalize(text)
+        return mergeBuiltin(userList, rootDir)
+    }
+
+    /** 用户名单 ∪ 内置应用（保持顺序：先用户名单，再内置应用）。 */
+    fun mergeBuiltin(list: List<String>, rootDir: File): List<String> {
+        val out = LinkedHashSet<String>()
+        out.addAll(list)
+        try {
+            out.addAll(builtinPackages(rootDir))
+        } catch (t: Throwable) {
+            Logger.w("KeepAliveList", "合并内置应用失败: ${t.message}")
+        }
+        return out.toList()
     }
 
     /**
@@ -70,9 +99,22 @@ object KeepAliveList {
             val def = DEFAULT_PACKAGES[kind] ?: emptyList()
             write(rootDir, kind, def)
             Logger.i("KeepAliveList", "已创建默认配置 ${kind.fileName}（${def.size} 项）")
-            return def
+            return mergeBuiltin(def, rootDir)
         }
         return read(rootDir, kind)
+    }
+
+    /** 用户在文件中的名单（不含内置应用，供 WebUI 编辑与回写）。 */
+    fun readUserOnly(rootDir: File, kind: KeepAliveKind): List<String> {
+        val f = file(rootDir, kind)
+        if (!f.exists()) return DEFAULT_PACKAGES[kind] ?: emptyList()
+        val text = try {
+            f.readText(Charsets.UTF_8)
+        } catch (t: Throwable) {
+            Logger.w("KeepAliveList", "读取 ${kind.fileName} 失败: ${t.message}")
+            ""
+        }
+        return normalize(text)
     }
 
     /** 归一化文本为包名列表（去注释/空行/重复/非法）。 */
@@ -92,6 +134,7 @@ object KeepAliveList {
         append("# ${kind.title}名单：一行一个包名，`#` 开头为注释（支持行内注释）。\n")
         append("# 列表中的应用，其「${kind.title.replace("保活", "")}」掉线后会被自动重新授权。\n")
         append("# 由 WebUI「保活」页维护，也可手工编辑（保存后无需重启）。\n")
+        append("# 注意：模块内置应用（system/app/）始终强制保活，本文件无需重复列出。\n")
         val def = DEFAULT_PACKAGES[kind] ?: emptyList()
         if (def.isNotEmpty()) {
             append("# 内置默认：").append(def.joinToString("、")).append('\n')

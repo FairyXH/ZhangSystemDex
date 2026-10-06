@@ -65,46 +65,20 @@
     letter-spacing:.4px;padding:0 4px 7px;font-weight:500}
   .section>.sfoot{font-size:12.5px;color:var(--dim);padding:7px 4px 0;line-height:1.45}
   .list{background:var(--grouped);border-radius:var(--radius);overflow:hidden}
-  /* 允许卡片内部换行：窄屏下「正文」与「操作区」可落到不同行，
-     避免操作控件（开关/按钮）把正文挤压到 1 个汉字宽。 */
   .cell{display:flex;align-items:center;gap:12px;padding:11px 16px;position:relative;
-    background:var(--grouped);flex-wrap:wrap}
+    background:var(--grouped)}
   .cell+.cell::before{content:"";position:absolute;left:16px;right:0;top:0;
     height:1px;background:var(--sep);transform:scaleY(.6)}
   .cell .ic{width:29px;height:29px;border-radius:7px;flex:0 0 auto;display:flex;
     align-items:center;justify-content:center;font-size:16px;color:#fff}
-  /* 正文区域：显式 basis + 允许收缩；长 URL 可换行、可截断，绝不撑破卡片。 */
-  .cell .body{flex:1 1 200px;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+  .cell .body{flex:1;min-width:0}
   .cell .k{font-size:15px;font-weight:500;word-break:break-word}
   .cell .k.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
-  .cell .d{color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.35;
-    overflow-wrap:anywhere;word-break:break-word}
-  /* URL 行：单行省略，避免超长直链把卡片撑高/撑宽（可点「编辑」看完整值）。 */
-  .cell .d.url{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
-    max-width:100%;direction:ltr}
-  /* 窄屏放宽为可换行，优先保证可读性而非省略。 */
-  @media (max-width:560px){
-    .cell .d.url{white-space:normal;overflow-wrap:anywhere}
-  }
+  .cell .d{color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.35}
   .cell.danger .k{color:var(--warn)}
   .cell.danger .d::before{content:"⚠️ ";}
   .cell.modified .k::after{content:" ●";color:var(--acc2);font-size:10px;vertical-align:middle}
-  /* 操作区：允许换行，且用 margin-left:auto 保持靠右；min-width:0 防溢出。 */
-  .cell .val{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;
-    flex:0 1 auto;max-width:100%;margin-left:auto}
-  /* 操作区自身的「一行内不换行、整块可换行」的按钮条（用于规则源等复杂卡片）。 */
-  .cell .val .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-  /* ===== 复杂操作卡片（规则源）：窄屏下操作区独占第二行 ===== */
-  .cell.actrow{row-gap:8px}
-  .cell.actrow .val{flex-basis:100%;width:100%;justify-content:flex-start;margin-left:0;
-    padding-top:2px}
-  .cell.actrow .val .sw{margin-right:2px}
-  /* 桌面/宽屏：操作区回到右侧同一行，正文优先占宽。 */
-  @media (min-width:560px){
-    .cell.actrow .val{flex:0 1 auto;flex-basis:auto;width:auto;justify-content:flex-end;
-      margin-left:auto;padding-top:0}
-  }
+  .cell .val{display:flex;align-items:center;gap:6px;flex:0 0 auto}
   .cell input.vin{width:74px;text-align:right;background:var(--card2);border:1px solid var(--line);
     color:var(--fg);border-radius:8px;padding:6px 9px;font-size:15px;
     font-family:ui-monospace,monospace}
@@ -234,34 +208,6 @@
   .oomapps::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:3px}
   .grouphdr{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;
     padding:14px 4px 7px;font-weight:600}
-  /* ---------- 保活页（通知 / 无障碍） ---------- */
-  .kaapplist{background:var(--grouped);border-radius:var(--radius);overflow:hidden;
-    max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch}
-  .kaapplist .oapp{display:flex;align-items:center;gap:10px;padding:9px 16px;position:relative}
-  .kaapplist .oapp + .oapp::before{content:"";position:absolute;left:16px;right:0;top:0;
-    height:1px;background:var(--sep)}
-  .kaapplist .oapp .oname{flex:1;min-width:0}
-  .kaapplist .oapp .olabel{font-size:14px;word-break:break-word}
-  .kaapplist .oapp .opkg{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--dim);
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .kaapplist .oapp .otag{font-size:10px;color:var(--dim);border:1px solid var(--sep);
-    border-radius:5px;padding:0 5px;margin-left:6px;white-space:nowrap}
-  .kaapplist .oapp .otag.on{color:var(--ok);border-color:var(--ok)}
-  .kaapplist .oempty{color:var(--dim);padding:20px 16px;text-align:center;font-size:13px}
-  .kaapplist::-webkit-scrollbar{width:6px}
-  .kaapplist::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:3px}
-  /* 应用行上的勾选框 */
-  .kaapplist .oapp .ochk{flex:0 0 auto;width:24px;height:24px;display:flex;
-    align-items:center;justify-content:center}
-  .kaapplist .oapp .ochk input{width:19px;height:19px;accent-color:var(--ok);cursor:pointer}
-  .kaedit{width:100%;box-sizing:border-box;min-height:140px;margin-top:10px;
-    border:0;border-radius:var(--radius);background:var(--grouped);color:var(--fg);
-    font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.5;padding:12px 14px;resize:vertical}
-  .kaseg{display:flex;gap:0;background:var(--dim2);border-radius:10px;padding:3px;margin-bottom:14px}
-  .kaseg .seg{flex:1;text-align:center;padding:7px 10px;font-size:13.5px;border-radius:8px;
-    cursor:pointer;color:var(--dim);transition:background .15s,color .15s;user-select:none}
-  .kaseg .seg.on{background:var(--grouped);color:var(--fg);font-weight:600;
-    box-shadow:0 1px 3px rgba(0,0,0,.15)}
   .modal{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.45);display:none;
     align-items:center;justify-content:center;padding:24px}
   .modal.show{display:flex}
@@ -504,78 +450,6 @@
       </div></div>
   </section>
 
-  <!-- ============ TAB: 保活 ============ -->
-  <section class="pane" id="pane-keepalive">
-    <div class="section">
-      <div class="kaseg" id="kaSeg">
-        <div class="seg on" data-kind="notif">通知使用权保活</div>
-        <div class="seg" data-kind="a11y">无障碍服务保活</div>
-      </div>
-      <div class="list">
-        <div class="cell"><div class="ic" style="background:#ff9f0a" id="kaIcon">🔔</div>
-          <div class="body"><div class="k" id="kaTitle">通知使用权保活</div>
-            <div class="d" id="kaStatus">正在读取…</div></div>
-          <div class="val">
-            <label class="sw"><input type="checkbox" id="swKaMaster"><i></i></label>
-          </div></div>
-      </div>
-      <div class="sfoot" id="kaFoot">
-        保活名单内的应用，其通知使用权掉线后会被自动重新授权（每 15 秒检查一次）。
-        总开关对应配置项 <code id="kaSwitchKey">notif_keepalive_enable</code>。
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="stitle" id="kaAppTitle">已声明该权限的应用 · 勾选加入</div>
-      <div class="list">
-        <div class="cell"><div class="ic" style="background:#0a84ff">🔎</div>
-          <div class="body"><div class="k">搜索应用</div>
-            <div class="d">按包名或应用名过滤；勾选即加入下方保活名单</div></div>
-          <div class="val"><input class="txt" id="kaSearch" placeholder="搜索…" style="width:150px"></div></div>
-      </div>
-      <div id="kaAppList" class="kaapplist"><div class="oempty">正在加载…</div></div>
-      <div class="sfoot">
-        仅列出「manifest 中已声明该权限」的应用。系统应用默认隐藏，搜索框输入 <code>@sys</code> 显示。
-        勾选后自动写入名单并保存（无需点下方保存按钮）。
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="stitle">保活名单 · 手动编辑（一行一个包名）</div>
-      <div class="list">
-        <div class="cell"><div class="ic" style="background:#8e8e93">✎</div>
-          <div class="body"><div class="k" id="kaFileTitle">名单文件</div>
-            <div class="d mono" id="kaFileHint">正在读取…</div></div>
-          <div class="val">
-            <button class="btn sm" id="btnKaRefresh">刷新</button>
-            <button class="btn sm primary" id="btnKaSave">保存</button>
-          </div></div>
-        <div class="cell"><div class="ic" style="background:#34c759">✓</div>
-          <div class="body"><div class="k">当前状态</div>
-            <div class="d" id="kaListStatus">—</div></div></div>
-      </div>
-      <textarea id="kaText" class="kaedit" spellcheck="false" placeholder="com.example.app&#10;# 一行一个包名，支持 # 注释"></textarea>
-      <div class="sfoot">
-        保存后立即生效（无需重启）。非法行（非包名格式）会被自动过滤。
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="stitle">已学习组件路径（自动维护）</div>
-      <div class="list">
-        <div class="cell"><div class="ic" style="background:#af52de">🔗</div>
-          <div class="body"><div class="k">路径映射文件</div>
-            <div class="d mono" id="kaPathsHint">正在读取…</div></div>
-          <div class="val"><button class="btn sm" id="btnKaPathsRefresh">刷新</button></div></div>
-      </div>
-      <div id="kaPathsList" class="kaapplist"><div class="oempty">加载中…</div></div>
-      <div class="sfoot">
-        守护模块会自动记录每个保活应用实际生效的组件路径（<code>包名=组件</code>），
-        掉线恢复时直接复用，免去每次重新探测。此文件由模块自动维护，一般无需手动编辑。
-      </div>
-    </div>
-  </section>
-
   <!-- ============ TAB 5: 清理 ============ -->
   <section class="pane" id="pane-clean">
     <div class="cleanhead">
@@ -613,6 +487,7 @@
       <div class="sfoot">所有删除均经过中心化安全审查（路径规范化、白名单与违禁规则校验），
         违禁规则可在「审查规则」中自定义。</div>
     </div>
+    <div id="cleanGroups"></div>
 
     <!-- ============ 在线规则（多源直链 + 定期拉取）============ -->
     <div class="section" id="onlinePanel" style="display:none">
@@ -667,9 +542,6 @@
         <div class="d" id="edMeta" style="margin-top:4px;color:var(--dim);font-size:12px"></div>
       </div>
     </div>
-
-    <!-- 规则分组列表（扫描/清理命中项）放在在线规则与编辑器之后 -->
-    <div id="cleanGroups"></div>
   </section>
 </main>
 
@@ -705,7 +577,6 @@
   <div class="tab" data-tab="switch"><span class="tico">⚙</span><span>开关</span></div>
   <div class="tab" data-tab="power"><span class="tico">⚡</span><span>电源</span></div>
   <div class="tab" data-tab="clean"><span class="tico">🧹</span><span>清理</span></div>
-  <div class="tab" data-tab="keepalive"><span class="tico">🔔</span><span>保活</span></div>
   <div class="tab" data-tab="settings"><span class="tico">☰</span><span>设置</span></div>
 </nav>
 <script>
@@ -1666,16 +1537,21 @@ function renderOomApps(){
   host.appendChild(frag);
 }
 async function loadOom(){
-  // 状态（总开关 + 受保护进程）
+  // 状态（总开关 + 受保护进程 + 来自保活名单的自动项）
   try{
     const st = await api("/api/oom/status");
     const m = $("#swOomMaster");
     if (m) m.checked = !!(st && st.enabled);
     const prot = (st && st.protected) || [];
+    const auto = (st && st.fromKeepAlive) || [];
     const el = $("#oomStatus");
-    if (el) el.textContent = prot.length
-      ? ("当前保护 " + prot.length + " 个应用：" + prot.join("、"))
-      : "当前没有运行中的受保护进程";
+    if (el) {
+      let s = prot.length
+        ? ("当前保护 " + prot.length + " 个应用：" + prot.join("、"))
+        : "当前没有运行中的受保护进程";
+      if (auto.length) s += "（其中 " + auto.length + " 个来自保活名单，自动纳入）";
+      el.textContent = s;
+    }
   }catch(e){ /* 后端未就绪时静默 */ }
   // 名单文本
   try{
@@ -1720,233 +1596,9 @@ async function setOomSwitch(key, on){
 }
 
 /* ------------------------------------------------------------------ *
- * 保活页：通知使用权保活 / 无障碍服务保活
- * ------------------------------------------------------------------ */
-let KA_KIND = "notif";            // notif | a11y
-let KA_LIST = new Set();          // 当前名单（包名）
-let KA_APPS = [];                 // 已声明该权限的应用 [{pkg,label,system,inList,enabled}]
-let KA_ENABLED = new Set();       // 系统侧当前已启用的包
-let KA_SWITCH_KEY = "notif_keepalive_enable";
-const KA_META = {
-  notif: {
-    switchKey: "notif_keepalive_enable",
-    title: "通知使用权保活",
-    icon: "🔔",
-    icBg: "#ff9f0a",
-    file: "notif_keepalive.conf",
-    appTitle: "已声明通知监听服务的应用 · 勾选加入",
-    foot: "保活名单内的应用，其通知使用权掉线后会被自动重新授权（每 15 秒检查一次）。",
-  },
-  a11y: {
-    switchKey: "a11y_keepalive_enable",
-    title: "无障碍服务保活",
-    icon: "♿",
-    icBg: "#5856d6",
-    file: "a11y_keepalive.conf",
-    appTitle: "已声明无障碍服务的应用 · 勾选加入",
-    foot: "保活名单内的应用，其无障碍服务掉线后会被自动重新启用（每 15 秒检查一次）。",
-  },
-};
-
-function kaParseList(text){
-  const seen = new Set(); const out = [];
-  String(text || "").replace(/\r\n/g, "\n").split("\n").forEach(function(line){
-    let s = line.trim();
-    if (!s || s.charAt(0) === "#") return;
-    s = s.split("#")[0].trim();
-    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(s)) return;
-    if (seen.has(s)) return;
-    seen.add(s); out.push(s);
-  });
-  return out;
-}
-
-function kaRenderText(){
-  const ta = $("#kaText");
-  if (ta) ta.value = KA_LIST.size ? (Array.from(KA_LIST).join("\n") + "\n") : "";
-}
-
-function kaRenderHeader(){
-  const m = KA_META[KA_KIND];
-  KA_SWITCH_KEY = m.switchKey;
-  const ic = $("#kaIcon"); if (ic){ ic.textContent = m.icon; ic.style.background = m.icBg; }
-  const t = $("#kaTitle"); if (t) t.textContent = m.title;
-  const ft = $("#kaFoot");
-  if (ft) ft.innerHTML = m.foot + ' 总开关对应配置项 <code>' + esc(m.switchKey) + '</code>。';
-  const at = $("#kaAppTitle"); if (at) at.textContent = m.appTitle;
-  const fh = $("#kaFileHint");
-  if (fh && !fh.dataset.path) fh.textContent = "文件：" + m.file;
-  const segs = $$("#kaSeg .seg");
-  segs.forEach(function(s){ s.classList.toggle("on", s.dataset.kind === KA_KIND); });
-}
-
-function kaUpdateStatus(){
-  const st = $("#kaStatus");
-  if (st){
-    const n = KA_LIST.size;
-    const on = KA_ENABLED.size;
-    st.textContent = "保活名单 " + n + " 个应用 · 系统当前已启用 " + on + " 个";
-  }
-  const ls = $("#kaListStatus");
-  if (ls){
-    const missing = Array.from(KA_LIST).filter(function(p){ return !KA_ENABLED.has(p); });
-    ls.textContent = KA_LIST.size
-      ? (missing.length
-          ? ("名单 " + KA_LIST.size + " 项；其中 " + missing.length + " 项当前未启用（守护模块会尝试恢复）")
-          : ("名单 " + KA_LIST.size + " 项，全部已启用 ✓"))
-      : "名单为空";
-  }
-}
-
-function kaRenderApps(){
-  const host = $("#kaAppList");
-  if (!host) return;
-  const q = (($("#kaSearch") && $("#kaSearch").value) || "").trim().toLowerCase();
-  const showSys = q.indexOf("@sys") >= 0;
-  const kw = q.replace("@sys", "").trim();
-  const shown = KA_APPS.filter(function(a){
-    if (!showSys && a.system) return false;
-    if (!kw) return true;
-    const label = (a.label || "").toLowerCase();
-    return a.pkg.toLowerCase().indexOf(kw) >= 0 || label.indexOf(kw) >= 0;
-  });
-  if (!shown.length){ host.innerHTML = '<div class="oempty">没有匹配的应用</div>'; return; }
-  const frag = document.createDocumentFragment();
-  shown.forEach(function(a){
-    const row = document.createElement("div");
-    row.className = "oapp";
-    // 勾选框（加入名单）
-    const chk = document.createElement("div");
-    chk.className = "ochk";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = KA_LIST.has(a.pkg);
-    cb.onchange = function(){ kaToggle(a.pkg, cb.checked); };
-    chk.appendChild(cb);
-    // 正文
-    const body = document.createElement("div");
-    body.className = "oname";
-    const lab = document.createElement("div");
-    lab.className = "olabel";
-    lab.textContent = a.label || a.pkg;
-    const pk = document.createElement("div");
-    pk.className = "opkg";
-    pk.textContent = a.pkg;
-    body.appendChild(lab); body.appendChild(pk);
-    // 标签
-    const tags = document.createElement("div");
-    if (a.enabled){
-      const tg = document.createElement("span");
-      tg.className = "otag on"; tg.textContent = "已启用";
-      tags.appendChild(tg);
-    }
-    if (a.system){
-      const tg = document.createElement("span");
-      tg.className = "otag"; tg.textContent = "系统";
-      tags.appendChild(tg);
-    }
-    row.appendChild(chk); row.appendChild(body); row.appendChild(tags);
-    frag.appendChild(row);
-  });
-  host.innerHTML = "";
-  host.appendChild(frag);
-}
-
-/** 勾选/取消：立即写入名单并保存（无需点保存按钮）。 */
-async function kaToggle(pkg, on){
-  if (on) KA_LIST.add(pkg); else KA_LIST.delete(pkg);
-  kaRenderText();
-  kaUpdateStatus();
-  await kaSave(true);
-}
-
-async function kaSave(silent){
-  const text = ($("#kaText") && $("#kaText").value) || "";
-  const normalized = kaParseList(text);
-  try{
-    const r = await api("/api/keepalive/set", { kind: KA_KIND, content: normalized.join("\n") + "\n" });
-    KA_LIST = new Set((r && r.list) || normalized);
-    kaRenderText();
-    kaUpdateStatus();
-    kaRenderApps();
-    if (!silent) toast("已保存 " + KA_LIST.size + " 项", "ok");
-  }catch(e){
-    toast("保存失败：" + (e && e.message ? e.message : e), "err");
-  }
-}
-
-async function setKaSwitch(key, on){
-  try{
-    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
-    toast(on ? "保活已开启" : "保活已关闭", "ok");
-  }catch(e){
-    toast("切换失败：" + (e && e.message ? e.message : e), "err");
-  }
-}
-
-function kaRenderPaths(paths){
-  const host = $("#kaPathsList");
-  if (!host) return;
-  const entries = Object.keys(paths || {});
-  if (!entries.length){
-    host.innerHTML = '<div class="oempty">暂无已学习路径（保活应用生效后会自动记录）</div>';
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  entries.forEach(function(pkg){
-    const row = document.createElement("div");
-    row.className = "oapp";
-    const body = document.createElement("div");
-    body.className = "oname";
-    const lab = document.createElement("div");
-    lab.className = "olabel";
-    lab.textContent = pkg;
-    const pk = document.createElement("div");
-    pk.className = "opkg";
-    pk.textContent = paths[pkg];
-    body.appendChild(lab); body.appendChild(pk);
-    row.appendChild(body);
-    frag.appendChild(row);
-  });
-  host.innerHTML = "";
-  host.appendChild(frag);
-}
-
-async function loadKeepAlive(){
-  kaRenderHeader();
-  // 名单 + 状态 + 总开关 + 路径
-  try{
-    const r = await api("/api/keepalive/get?kind=" + KA_KIND);
-    KA_LIST = new Set((r && r.list) || []);
-    KA_ENABLED = new Set((r && r.enabled) || []);
-    kaRenderText();
-    kaUpdateStatus();
-    const sw = $("#swKaMaster");
-    if (sw) sw.checked = !!(r && r.switchEnabled);
-    const fh = $("#kaFileHint");
-    if (fh && r && r.file){ fh.textContent = "文件：" + r.file; fh.dataset.path = "1"; }
-    const ph = $("#kaPathsHint");
-    if (ph && r && r.pathsFile) ph.textContent = "文件：" + r.pathsFile;
-    kaRenderPaths((r && r.paths) || {});
-  }catch(e){
-    toast("读取保活名单失败：" + (e && e.message ? e.message : e), "err");
-  }
-  // 已声明权限的应用
-  try{
-    const r = await api("/api/keepalive/apps?kind=" + KA_KIND);
-    KA_APPS = (r && r.apps) || [];
-    kaRenderApps();
-  }catch(e){
-    const host = $("#kaAppList");
-    if (host) host.innerHTML = '<div class="oempty">无法读取应用清单：' + esc(String(e.message||e)) + '</div>';
-  }
-}
-
-
-/* ------------------------------------------------------------------ *
  * 底栏 Tab 切换
  * ------------------------------------------------------------------ */
-const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", clean:"清理", keepalive:"保活", settings:"设置" };
+const TAB_TITLES = { home:"概览", switch:"开关", power:"电源", clean:"清理", settings:"设置" };
 function switchTab(name){
   if (!TAB_TITLES[name]) name = "home";
   $$(".pane").forEach(p=> p.classList.toggle("active", p.id === "pane-" + name));
@@ -1957,7 +1609,6 @@ function switchTab(name){
   if (name === "home") refreshOverview();
   if (name === "power") refreshPowerStatus();
   if (name === "clean") loadCleanState();
-  if (name === "keepalive") loadKeepAlive();
   if (name === "settings") loadOom();
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
@@ -2351,20 +2002,18 @@ function renderOnlineSources(){
   OL_SOURCES.forEach(s=>{
     const status = s.lastStatus === "SUCCESS" ? "成功" : (s.lastStatus === "FAILED" ? "失败" : "未拉取");
     const stColor = s.lastStatus === "SUCCESS" ? "#30d158" : (s.lastStatus === "FAILED" ? "#ff453a" : "#8e8e93");
-    h += '<div class="cell actrow">'
+    h += '<div class="cell">'
       +   '<div class="ic" style="background:' + stColor + '">⇩</div>'
       +   '<div class="body"><div class="k">' + esc(s.name || "规则源") + '</div>'
-      +     '<div class="d url">' + esc(s.url) + '</div>'
+      +     '<div class="d">' + esc(s.url) + '</div>'
       +     '<div class="d">状态：' + status + ' · 规则 ' + (s.ruleCount||0) + ' 条 · 间隔 ' + (s.intervalHours||24) + 'h'
       +       ' · 上次 ' + esc(fmtTime(s.lastFetchMs)) + (s.lastError ? (' · ' + esc(s.lastError)) : '') + '</div></div>'
       +   '<div class="val">'
       +     '<label class="sw"><input type="checkbox" data-olen="' + esc(s.id) + '"' + (s.enabled ? ' checked' : '') + '><i></i></label>'
-      +     '<div class="btns">'
-      +       '<button class="btn sm ghost" data-olfetch="' + esc(s.id) + '">拉取</button>'
-      +       '<button class="btn sm ghost" data-oled="' + esc(s.id) + '">编辑</button>'
-      +       '<button class="btn sm ghost" data-olimp="' + esc(s.id) + '">导入到编辑器</button>'
-      +       '<button class="btn sm ghost" data-olrm="' + esc(s.id) + '">删除</button>'
-      +     '</div>'
+      +     '<button class="btn sm ghost" data-olfetch="' + esc(s.id) + '">拉取</button>'
+      +     '<button class="btn sm ghost" data-oled="' + esc(s.id) + '">编辑</button>'
+      +     '<button class="btn sm ghost" data-olimp="' + esc(s.id) + '">导入到编辑器</button>'
+      +     '<button class="btn sm ghost" data-olrm="' + esc(s.id) + '">删除</button>'
       +   '</div></div>';
   });
   h += '</div></div>';
@@ -2659,15 +2308,6 @@ function bind(){
   const oomR = $("#btnOomRefresh"); if (oomR) oomR.onclick = loadOom;
   const oomS = $("#btnOomSave"); if (oomS) oomS.onclick = saveOom;
   const oomQ = $("#oomSearch"); if (oomQ) oomQ.oninput = renderOomApps;
-  // ---- 保活页 ----
-  const kaMaster = $("#swKaMaster"); if (kaMaster) kaMaster.onchange = ()=> setKaSwitch(KA_SWITCH_KEY, kaMaster.checked);
-  const kaSaveBtn = $("#btnKaSave"); if (kaSaveBtn) kaSaveBtn.onclick = ()=> kaSave(false);
-  const kaRefresh = $("#btnKaRefresh"); if (kaRefresh) kaRefresh.onclick = loadKeepAlive;
-  const kaSearch = $("#kaSearch"); if (kaSearch) kaSearch.oninput = kaRenderApps;
-  const kaPathsR = $("#btnKaPathsRefresh"); if (kaPathsR) kaPathsR.onclick = loadKeepAlive;
-  $$("#kaSeg .seg").forEach(function(s){
-    s.onclick = function(){ KA_KIND = s.dataset.kind || "notif"; loadKeepAlive(); };
-  });
   $$(".tab").forEach(t=> t.onclick = ()=> switchTab(t.dataset.tab));
 }
 

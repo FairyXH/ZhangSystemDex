@@ -428,9 +428,12 @@ class ConfigManager(private val modDir: String) {
         copyOrInit("autorun.conf", DEFAULT_AUTORUN_CONF)
         copyOrInit("HideMyAppList_MoreBlack.txt", DEFAULT_HMA_MORE_BLACK)
         copyOrInit("power_bg_stop_list.conf", DEFAULT_POWER_BG_STOP_LIST)
-        // OOM 保护名单（一行一个包名，默认内置 com.ai.assistance.operit）
+        // OOM 保护名单（一行一个包名，默认内置 Operit/滤盒/Scene/GKD）
         copyOrInit(io.github.fairyxh.zhangsystemdex.core.OomProtectList.FILE_NAME,
             io.github.fairyxh.zhangsystemdex.core.OomProtectList.DEFAULT_CONTENT)
+        // 旧版已存在的 oom_protect.conf 只含旧默认项：把缺失的内置默认包补齐，
+        // 保证升级后新默认（滤盒/Scene/GKD）真正生效。用户手工条目不受影响。
+        ensureOomDefaults()
         File(rootDir, "app_manager").mkdirs()
         copyOrInit("app_manager/disable_app_list.conf", DEFAULT_DISABLE_APP_LIST)
         copyOrInit("app_manager/disable_app_list_onlydisable.conf", DEFAULT_DISABLE_APP_LIST_ONLY)
@@ -454,6 +457,35 @@ class ConfigManager(private val modDir: String) {
             Logger.i("ConfigManager", "已初始化 $rel")
         } catch (t: Throwable) {
             Logger.w("ConfigManager", "初始化 $rel 失败: ${t.message}")
+        }
+    }
+
+    /**
+     * 把缺失的内置默认 OOM 保护包补进已存在的 `oom_protect.conf`。
+     *
+     * 为什么需要：`copyOrInit` 只在文件不存在时写入，因此从旧版本升级时，
+     * 已有文件仍只含旧默认项，新的内置默认（滤盒 / Scene / GKD）不会生效。
+     * 这里按「只增不改」原则补齐：保留用户全部条目与注释顺序，仅在末尾追加
+     * 缺失的内置默认包。
+     */
+    private fun ensureOomDefaults() {
+        val f = io.github.fairyxh.zhangsystemdex.core.OomProtectList.file(File(rootDir))
+        if (!f.exists()) return
+        try {
+            val existing = io.github.fairyxh.zhangsystemdex.core.OomProtectList.read(File(rootDir))
+            val missing = io.github.fairyxh.zhangsystemdex.core.OomProtectList.DEFAULT_PACKAGES
+                .filter { it !in existing }
+            if (missing.isEmpty()) return
+            val text = f.readText(Charsets.UTF_8).trimEnd('\n')
+            f.writeText(
+                text + "\n" +
+                    "# 内置默认（升级补齐）：\n" +
+                    missing.joinToString("\n") { it } + "\n",
+                Charsets.UTF_8,
+            )
+            Logger.i("ConfigManager", "oom_protect.conf 已补齐内置默认: $missing")
+        } catch (t: Throwable) {
+            Logger.w("ConfigManager", "补齐 oom_protect.conf 失败: ${t.message}")
         }
     }
 
@@ -573,7 +605,7 @@ class ConfigManager(private val modDir: String) {
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
             "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
-            "oom_protect_enable" to "OOM 保护名单：保活名单内任意应用（可在清理页编辑，一行一个包名），oom_score_adj 钳制到系统安全上限 -900，关闭时自动还原",
+            "oom_protect_enable" to "OOM 保护名单：保活名单（通知使用权/无障碍）中的应用自动纳入，另可在清理页手工追加；oom_score_adj 钳制到 -900，关闭时自动还原",
             "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转",
             "bt_offload_guard_enable" to "蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，修复卡顿/无声/断连）",
 

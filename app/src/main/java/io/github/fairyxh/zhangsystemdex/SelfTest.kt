@@ -14,6 +14,8 @@ import io.github.fairyxh.zhangsystemdex.core.SqliteUtils
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.OomProtectList
+import io.github.fairyxh.zhangsystemdex.core.KeepAliveKind
+import io.github.fairyxh.zhangsystemdex.core.KeepAliveList
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
@@ -938,17 +940,34 @@ object SelfTest {
             s.add("OOM.名单读写往返", Status.FAIL, t.message ?: "")
         }
 
-        // 14) 默认内置包名正确（用户要求 com.ai.assistance.operit）。
+        // 14) 默认内置包名正确（用户指定：Operit / 滤盒 / Scene / GKD）。
         try {
-            val has = OomProtectList.normalize(OomProtectList.DEFAULT_CONTENT)
-                .contains(OomProtectList.DEFAULT_PACKAGE)
+            val got = OomProtectList.normalize(OomProtectList.DEFAULT_CONTENT)
+            val missing = OomProtectList.DEFAULT_PACKAGES.filter { it !in got }
             s.add(
                 "OOM.默认内置包名",
-                if (has) Status.PASS else Status.FAIL,
-                "默认内容含 ${OomProtectList.DEFAULT_PACKAGE}"
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                "默认内容=$got 缺失=$missing"
             )
         } catch (t: Throwable) {
             s.add("OOM.默认内置包名", Status.FAIL, t.message ?: "")
+        }
+        // 14b) 保活名单自动并入 OOM 保护名单（用户要求）。
+        try {
+            val tmpDir = File("/data/media/0/.zsd_selftest/oommerge")
+            if (tmpDir.exists()) tmpDir.deleteRecursively()
+            tmpDir.mkdirs()
+            OomProtectList.file(tmpDir).writeText("com.tencent.mm\n", Charsets.UTF_8)
+            KeepAliveList.write(tmpDir, KeepAliveKind.NOTIFICATION, listOf("com.catchingnow.np"))
+            KeepAliveList.write(tmpDir, KeepAliveKind.ACCESSIBILITY, listOf("li.songe.gkd"))
+            val eff = OomProtectList.effectivePackages(tmpDir)
+            val ok = eff.containsAll(
+                listOf("com.tencent.mm", "com.catchingnow.np", "li.songe.gkd")
+            ) && eff.size == 3
+            s.add("OOM.并入保活名单", if (ok) Status.PASS else Status.FAIL, "生效名单=$eff")
+            tmpDir.deleteRecursively()
+        } catch (t: Throwable) {
+            s.add("OOM.并入保活名单", Status.FAIL, t.message ?: "")
         }
 
         // 15) 配置键齐备（oom_protect_enable）。

@@ -169,11 +169,18 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
 
     /** mtime 门控的名单刷新（文件没变就不重读）。 */
     private fun refreshList(force: Boolean) {
-        val f: File = OomProtectList.file(File(ctx.config.rootDir))
-        val mtime = if (f.exists()) f.lastModified() else -1L
+        // 生效名单 = oom_protect.conf ∪ 通知保活名单 ∪ 无障碍保活名单
+        // （保活的应用自动获得 OOM 保护，见 OomProtectList.effectivePackages）
+        val files = buildList {
+            add(OomProtectList.file(File(ctx.config.rootDir)))
+            for (kind in io.github.fairyxh.zhangsystemdex.core.KeepAliveKind.entries) {
+                add(io.github.fairyxh.zhangsystemdex.core.KeepAliveList.file(File(ctx.config.rootDir), kind))
+            }
+        }
+        val mtime = files.sumOf { if (it.exists()) it.lastModified() else 0L }
         val now = System.currentTimeMillis()
         if (!force && mtime == lastListMtime && now - lastListRefresh < 60_000L) return
-        val list = OomProtectList.read(File(ctx.config.rootDir))
+        val list = OomProtectList.effectivePackages(File(ctx.config.rootDir))
         if (list != packages) {
             Logger.i(name, "OOM 保护名单更新：${packages.size} → ${list.size}")
         }

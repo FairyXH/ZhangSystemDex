@@ -1644,8 +1644,13 @@ class HttpBackend(
     /** 名单 + 运行时状态。 */
     private fun apiOomStatus(): String {
         val enabled = ctx.config.switch("oom_protect_enable")
-        val f = OomProtectList.file(File(ctx.config.rootDir))
-        val known = OomProtectList.read(File(ctx.config.rootDir))
+        val root = File(ctx.config.rootDir)
+        val f = OomProtectList.file(root)
+        // 手工名单（oom_protect.conf）与生效名单（∪ 保活名单）分别上报，
+        // 便于 UI 说明「保活的应用自动获得 OOM 保护」。
+        val manual = OomProtectList.read(root)
+        val effective = OomProtectList.effectivePackages(root)
+        val fromKeepAlive = effective.filter { it !in manual.toSet() }
         val protectedList = RuntimeRegistry.get("oom_protect")
             ?.let { state ->
                 (state.extras["protectedList"] as? String)?.split(',')
@@ -1655,7 +1660,9 @@ class HttpBackend(
         sb.append('{').append("\"ok\":true")
         sb.append(",\"enabled\":").append(enabled)
         sb.append(",\"path\":").append(q(f.absolutePath))
-        sb.append(",\"known\":").append(known.size)
+        sb.append(",\"manual\":").append(manual.size)
+        sb.append(",\"known\":").append(effective.size)
+        sb.append(",\"fromKeepAlive\":").append(jsonStrArray(fromKeepAlive))
         sb.append(",\"count\":").append(protectedList.size)
         sb.append(",\"protected\":").append(jsonStrArray(protectedList))
         sb.append(",\"safeFloor\":").append(io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.SAFE_FLOOR)

@@ -1621,3 +1621,89 @@ APK 内 so 是 `Defl:N` 完全正常。
 - **取代** 此前的 zip，作为当前发布包。
 
 
+
+---
+
+## §47 新功能：模块内置应用默认保活（不听配置）+ WebUI 名单展示（2026-10-06）
+
+### 需求（用户）
+1. 模块自身携带（`system/app/` 下）的全部内置 app **默认**加入 **Doze 白名单** 与
+   **多任务 Lock**，且 **不听配置**（不受任何开关控制）。
+2. **无障碍保活 / 通知使用权保活 / OOM 保活** 也默认对内置 app 生效，同样**不听配置**。
+3. 在对应 WebUI 卡片旁**显示说明 + 列出名单**。
+
+### 实现（4 个 commit）
+- `9d6699f` 数据层：新增 `core/BuiltinApps.kt`
+  - `root(modDir)` = `<modDir>/system/app`；`packages(modDir)` 枚举子目录下的 APK，
+    取 **父目录名 == 包名**（兼容 `.Apk` 大小写），mtime 缓存。
+  - `packagesFromRoot(rootDir)` 由 `/data/adb/Zhang` 反推 `/data/adb/modules/Zhang`
+    （失败回退约定路径），供各模块 / HTTP 共用。
+  - `KeepAliveList.read/ensureFile` 始终 union 内置应用；新增 `readUserOnly()`
+    （WebUI 回写用，内置不入文件，隐式生效）。
+  - `OomProtectList.effectivePackages` 始终 union 内置应用；新增 `builtinPackages()`。
+- `9b1331f` 模块强制：
+  - `PowerManagerModule.applyDozeList` 无条件并入内置应用；`onStart` 在
+    `doze_enable=false` 时也写内置应用白名单。
+  - `applyLockedApps` 无条件并入内置应用；抽出 `writeLockedApps()`；`onStart`
+    在 `locked_apps_enable=false` 时仍写内置应用锁定数据。
+  - `OomProtectModule.tick` 在 `oom_protect_enable=false` 时不再整体停用，改为
+    **仅保护内置应用**（用户名单停用）。
+  - `Main`：`oom_protect` / `notif_keepalive` / `a11y_keepalive` 三个条目改为
+    **常驻**（`{ true }`）；总开关只控制用户名单。
+  - `ConfigManager`：`doze_enable` / `locked_apps_enable` / `notif_keepalive_enable` /
+    `a11y_keepalive_enable` / `oom_protect_enable` 5 条描述补「内置应用不受此开关控制」。
+- `76ddbf4` API + WebUI + SelfTest：
+  - 新端点 `GET /api/builtin/apps`（清单 + enforced）、`GET /api/builtin/status`
+    （Doze / locked / notif / a11y / oom 命中集合）。
+  - `/api/keepalive/get` 增 `userList/builtin/builtinCount/enforced`；
+    `/api/keepalive/set` 只写用户名单；`/api/oom/status` 增 `builtin/builtinCount/builtinProtected`。
+  - WebUI：设置页顶部「模块内置应用 · 默认保活」区块（说明 + 名单 + 刷新）；
+    通知 / 无障碍 / OOM 三卡各加 `.builtin-note` 说明区 + 名单 chip（命中绿色）；
+    新增 `renderBuiltinChips/loadBuiltinApps`，接入 `loadKeepAliveAll/loadOom/tab/bind`。
+  - SelfTest 新增 `builtinChecks`（5 项：枚举 / Doze / 通知 / 无障碍 / OOM 强制并入）。
+- `c7ebcf5` 重建 `Main.dex`（`ac868fb9e514b8a8cab83f768cb0f3bf`，2,739,124B）+ 设计文档
+  `docs/plans/2026-10-06_builtin_app_default_keepalive.md`。
+
+### 踩坑（重要）
+- **Kotlin 允许嵌套块注释**：KDoc / 块注释里写 `system/app/*` 会被解析为 `/*`
+  开启嵌套注释 → `Syntax error: Unclosed comment`（本次首轮构建真踩）。
+  已在所有 `.kt` 注释 / 文案中改为 `system/app/`（无 `*`）。**后续写注释务必避免 `/*` 序列**。
+- WebUI 里 `$()` 是 `document.querySelector` 简写，**必须带 `#`**（`$("#id")`）；
+  写成 `$("id")` 会静默返回 null（本次踩坑，已修）。
+- 跨环境写母版 `/sdcard/Download/Files/ZhangProtect-Android/`：Ubuntu 侧 `cp` 会
+  `Operation not permitted`（FUSE），必须用 **Android shell** 复制；busybox `cp -f`
+  可能返回 rc=1 但内容已写入，**用 md5 / cmp 校验而非 rc**。
+
+### 验证（真机，OPLUS / ColorOS Android 15）
+- SelfTest：**PASS=73 FAIL=0 WARN=2 SKIP=7（total 82）**，其中：
+  `内置应用.枚举(system/app)=45`、`Doze白名单强制 缺失=0`、`通知保活强制 缺失=0`、
+  `无障碍保活强制 缺失=0`、`OOM保护强制 缺失=0`。
+- 实时 API：`/api/builtin/apps` count=45（label / apk 正确，含 `ac.no.screenshot.Apk`）；
+  `/api/builtin/status`：doze=45、notifKeepAlive=45、a11yKeepAlive=45、
+  oomProtected=10（当前存活）、locked=8（`settings get system locked_apps` 会被系统重写，
+  实际以 **ColorOS launcher 文件**为准：`/data/user_de/0/com.android.launcher/files/oplus/
+  recenttask/app_lock_data_file_name` = 412 条 / 103 包，含全部内置应用）。
+- **不听配置实测**：把 `doze_enable / locked_apps_enable / oom_protect_enable /
+  notif_keepalive_enable / a11y_keepalive_enable` 全改 false，重启 daemon 后：
+  - 手工 `dumpsys deviceidle whitelist -com.catchingnow.np -com.omarea.vtools` 移除后
+    **被自动重新加入**（`user,com.catchingnow.np` / `user,com.omarea.vtools`）；
+  - `/api/oom/status`：`enabled=false` 但 `count=10 == builtinProtected=10`（内置仍全保护）；
+  - `/api/keepalive/get`：`switchEnabled=false` 但 `list=46`（= 用户 1 + 内置 45）。
+  → 验证后已还原 `switches.conf`（备份 `/data/local/tmp/switches.bak`）并重启。
+- WebUI 无头渲染（node + linkedom，`/tmp/zsd_new/builtin_harness.mjs`，**不入库**）：
+  `builtinList / notifKaBuiltin / a11yKaBuiltin / oomBuiltin` 各 3 chips（命中高亮 1），
+  `RENDER_TEST: PASS`；`node --check` JS_SYNTAX_OK。
+
+### 部署形态（当前）
+- 模块：`/data/adb/modules/Zhang/Main.dex=ac868fb9`、`webroot/index.html=23a8c5bd`。
+- 运行：`/data/adb/Zhang/Main.dex=ac868fb9`（已重启 daemon）。
+- 母版：`/sdcard/Download/Files/ZhangProtect-Android/{Main.dex=ac868fb9,
+  webroot/index.html=23a8c5bd}` 已同步（DEX_SAME / UI_SAME）。
+- 仓库：`Main.dex=ac868fb9`、`app/src/main/assets/webroot/index.html=23a8c5bd`；
+  `webroot/index.html` 交付副本同步（gitignore）。
+- **未打 zip、未 push**（`main` 领先 origin/main 4 个 commit）。
+- 回滚备份：`/data/adb/Zhang/_backup_builtin_20261006-135332/`（旧 dex + index.html）。
+
+### 后续可选
+- 打包发布 zip（`cd /sdcard/Download/Files/ZhangProtect-Android && sh pack.sh`）。
+- `git push origin main`。

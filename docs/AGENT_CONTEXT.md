@@ -2034,4 +2034,53 @@ if (ProcessUtils.writeFile("/proc/$pid/oom_score_adj", adj.toString())) { ... }
 
 ### 新 dex
 - **`17a13d0da1fbe6a39ff35357483d9398`**（2,770,396 B），已免重启更新三副本 + 重启 daemon。
-- Git：`75ae8a6`（applyAdj 实地读回）。
+- Git：`75ae8a6`（applyAdj 实地读回）。---
+
+## §55 内置应用名单「来源显示为母版」问题（2026-10-06 19:xx）
+
+### 用户疑问
+WebUI 显示「名单来源：/data/media/0/Download/Files/ZhangProtect-Android/system/app」，
+为何不是模块自身的 system/app？
+
+### 根因（两层）
+1. **`ctx.modDir` 指向母版**：我们的免重启更新流程是在**母版目录**执行
+   `sh 重启Dex.sh` → `service.sh` 的 `MODDIR=$(dirname "$0")` = 母版 → 传给 daemon
+   的 modDir = `/data/media/0/Download/Files/ZhangProtect-Android`。
+   （开机时由 KernelSU 执行 `/data/adb/modules/Zhang/service.sh`，那时是正确的。）
+2. **API 直接用 `ctx.modDir` 显示/枚举**：`/api/builtin/apps|status|guard/get`
+   用 `ctx.modDir` 拼 `system/app` → 指向母版。
+
+注：守护逻辑（`BuiltinConfig`/`KeepAliveList` 走 `packagesFromRoot`）**一直是优先
+`/data/adb/modules/Zhang`**，所以**功能未受影响**；仅 API 展示与部分枚举走错。
+
+### 修复
+- `BuiltinApps` 新增：
+  - `effectiveRoot(rootDir, modDir)` → 返回实际生效的 `<模块>/system/app`（用于展示）；
+  - `effectiveModuleDir(rootDir, modDir)` → 返回模块根 `<模块>`（用于 `packages()`）；
+  - 两者均**优先 `/data/adb/modules/Zhang`，仅当不存在才回退 `modDir`**。
+- `HttpBackend` 新增私有 helper `builtinRoot()/builtinModuleDir()/builtinPackages()`，
+  统一 `/api/builtin/apps`、`/api/builtin/status`、`/api/builtin/guard/get`、
+  `/api/builtin/guard/set` 的名单真源。
+- `SelfTest.builtinChecks` 同步使用 `effectiveModuleDir`。
+
+### 踩坑记录（重要）
+`effectiveRoot()` 返回的是 **`system/app` 目录**，而 `BuiltinApps.packages(modDir)`
+期望的是 **模块根**（内部再拼 `system/app`）。首次修复时误把
+`effectiveRoot(...).parentFile.path`（= `<模块>/system`）当作 modDir 传入，
+导致拼成 `<模块>/system/system/app` → 枚举 0 个。
+**修正**：用 `effectiveModuleDir()`（上两级）。
+
+### 验证（原始数据）
+- `/api/builtin/apps` → `dir=/data/adb/modules/Zhang/system/app count=45` ✅
+- `/api/builtin/status` → `45 / 守护 45 / 强制 OOM 8 / OOM 生效 9 / Doze 45` ✅
+- 自检：`内置应用.枚举(system/app): 目录=/data/adb/modules/Zhang/system/app 数量=45`，
+  总体 **74 PASS / 0 FAIL**。
+
+### 新 dex
+- **`ae83380e9cc59591c04a138fd189be9f`**，已免重启更新三副本 + 重启 daemon。
+- Git：`80886d9`。
+
+### 遗留建议（未做）
+母版与已安装模块的 `system/app` 目前完全一致（45 vs 45）。
+若担心长期漂移，可让 `重启Dex.sh` 显式传入模块目录，或让 `service.sh`
+把 `MODDIR` 固定为 `/data/adb/modules/Zhang`（需评估其他路径用途）。

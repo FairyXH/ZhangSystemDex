@@ -230,7 +230,7 @@ class ConfigManager(private val modDir: String) {
             missing.add("shizuku_keepalive_enable=true\t# Shizuku 保活：主进程/服务端任一掉线即自动重启 starter")
         }
         if (switches["system_app_libs_fix_enable"] == null) {
-            missing.add("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动补齐：修复被挂到 system/app 后 .so 找不到导致崩溃（Shizuku 服务端起不来即此因）")
+            missing.add("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动修正：把 APK 内 .so 重打包为未压缩(Stored)，修复 system/app 挂载后 dlopen(APK!/lib) 失败（Shizuku 服务端起不来即此因）")
         }
         if (switches["shizuku_keepalive_interval"] == null) {
             missing.add("shizuku_keepalive_interval=30\t# Shizuku 保活检查周期（秒，10-600，默认 30）")
@@ -371,7 +371,7 @@ class ConfigManager(private val modDir: String) {
             sb.append("shizuku_keepalive_interval=30\t# Shizuku 保活检查周期（秒，10-600）\n")
             sb.append("shizuku_detect_enable=false\t# Shizuku 防检测：清理 /data/local* 痕迹\n")
             sb.append("shizuku_detect_clean_starter=false\t# 同时清理 starter/服务端二进制（影响自启）\n")
-            sb.append("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动补齐（修复 system/app 挂载后 .so 找不到）\n")
+            sb.append("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动修正（APK 内 .so 重打包为 Stored）\n")
             sb.append("\n# 电源与后台调度优化参数（可选项，总开关见上方 power_optimize_enable）\n")
             sb.append("power_low_battery_threshold=20\t# 低电量阈值（百分比，0-100，默认 20）\n")
             sb.append("power_low_battery_cpu_cap=55\t# 低电量时 CPU 最高频率上限百分比（1-100，默认 55）\n")
@@ -603,7 +603,7 @@ class ConfigManager(private val modDir: String) {
             "shizuku_keepalive_interval" to "Shizuku 保活检查周期（秒，10-600，默认 30）",
             "shizuku_detect_enable" to "Shizuku 防检测：周期清理 /data/local* 下的 shizuku 痕迹文件（默认关闭）",
             "shizuku_detect_clean_starter" to "Shizuku 防检测：同时清理 starter 与服务端二进制（会短暂影响 Shizuku 自启，默认关闭）",
-            "system_app_libs_fix_enable" to "挂载应用 native lib 自动补齐（默认开启，修复 system/app 挂载后 .so 找不到导致的崩溃）",
+            "system_app_libs_fix_enable" to "挂载应用 native lib 自动修正（默认开启，把 APK 内 .so 重打包为 Stored，修复 dlopen 失败）",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
             "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，默认亮屏也执行，是否仅息屏由 heavy_screen_off_only 控制，间隔周期数可配置）",

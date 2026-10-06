@@ -342,7 +342,17 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
             if (lastAdj.remove(pid) != null) touchedPids.remove(pid)
             return
         }
-        if (lastAdj[pid] == adj) return
+        // 关键修复（2026-10-06）：不能只信任本地缓存 lastAdj——
+        // Android 的 AMS（ColorOS 的 OomAdjusterSocExtImpl）会周期性重算并**覆盖**
+        // 我们写入的 oom_score_adj（实测 Shizuku 主进程被改回 900，而缓存仍以为
+        // 是 -450，导致永久不再写回 → 保护失效 → 应用被回收）。
+        // 因此改为**实地读回**：与目标一致才跳过，否则重写。
+        val current = ProcessUtils.readFile("/proc/$pid/oom_score_adj")?.trim()?.toIntOrNull()
+        if (current == adj) {
+            lastAdj[pid] = adj
+            touchedPids.add(pid)
+            return
+        }
         if (ProcessUtils.writeFile("/proc/$pid/oom_score_adj", adj.toString())) {
             lastAdj[pid] = adj
             touchedPids.add(pid)

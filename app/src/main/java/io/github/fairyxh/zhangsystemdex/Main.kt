@@ -194,6 +194,64 @@ object Main {
             return
         }
 
+        // Accessibility service CLI: run a single action then exit.
+        // Usage: app_process ... Main <moddir> accessibility <action> <pkg...>
+        //   actions: enable | disable | check | probe | list | bound | summary
+        //            | clean | restart
+        if (args.contains("accessibility")) {
+            val idx = args.indexOf("accessibility")
+            val action = args.getOrNull(idx + 1) ?: "check"
+            val pkgs = args.drop(idx + 2).filter { it.isNotBlank() }
+            Logger.i("Main", "无障碍 CLI: action=$action pkgs=$pkgs")
+            try {
+                val ag = io.github.fairyxh.zhangsystemdex.core.AccessibilityGrant
+                when (action) {
+                    "enable", "set" -> {
+                        if (pkgs.isEmpty()) {
+                            println("用法: accessibility enable <pkg> [pkg...]")
+                        } else {
+                            for (p in pkgs) {
+                                val ok = ag.enable(p)
+                                println("enable $p: ok=$ok 实际绑定=${ag.isBound(p)}")
+                            }
+                        }
+                    }
+                    "disable", "revoke" -> {
+                        for (p in pkgs) println("disable $p: ${ag.disable(p)}")
+                    }
+                    "list" -> ag.listPackages().forEach { println(it) }
+                    "bound" -> print(ag.boundDiff())
+                    "summary" -> println(ag.summary())
+                    "check", "probe" -> {
+                        if (pkgs.isEmpty()) {
+                            ag.listComponents().forEach { println("  $it") }
+                        } else {
+                            for (p in pkgs) print(ag.inspect(p))
+                        }
+                    }
+                    "clean" -> {
+                        val n = ag.cleanInvalid { println(it) }
+                        println("clean: 移除 $n 条")
+                    }
+                    "restart" -> {
+                        for (p in pkgs) {
+                            io.github.fairyxh.zhangsystemdex.core.ShellExecutor.run("am force-stop $p", 15000L)
+                            println("restart $p")
+                        }
+                    }
+                    else -> println(
+                        "未知 action: $action\n" +
+                            "可选: enable | disable | check | probe | list | bound | summary | clean | restart"
+                    )
+                }
+            } catch (t: Throwable) {
+                Logger.e("Main", "无障碍 CLI 失败", t)
+                println("错误: ${t}")
+            }
+            Logger.i("Main", "无障碍 CLI 完成，退出")
+            return
+        }
+
         // Debug menu mode: run a single feature once by number, then exit.
         if (args.contains("menu")) {
             Logger.i("Main", "调试菜单模式")

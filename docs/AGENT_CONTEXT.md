@@ -2083,4 +2083,37 @@ WebUI 显示「名单来源：/data/media/0/Download/Files/ZhangProtect-Android/
 ### 遗留建议（未做）
 母版与已安装模块的 `system/app` 目前完全一致（45 vs 45）。
 若担心长期漂移，可让 `重启Dex.sh` 显式传入模块目录，或让 `service.sh`
-把 `MODDIR` 固定为 `/data/adb/modules/Zhang`（需评估其他路径用途）。
+把 `MODDIR` 固定为 `/data/adb/modules/Zhang`（需评估其他路径用途）。---
+
+## §56 文档工程：ADAPT.md + CHANGELOG.md + README 更新（2026-10-06 19:xx）
+
+### 用户需求
+1. 母版新增 `ADAPT.md`：整合所有 docs，供 Agent 阅读，说明项目如何工作、结构、git 仓库、如何在新系统适配，尽量全面。
+2. 依据最近版本写 `CHANGELOG.md` 并更新 `README.md`。
+3. 检查母版最新 → git push → 重新 pack。
+
+### 产出
+- **`ADAPT.md`**（母版，21,874 B，338 行）：面向 Agent 的工作手册，含
+  §0 概要 / §1 三条“轨”/ §2 Git / §3 运行时架构 / §4 源码结构 / §5 核心机制（开关热加载、
+  线程模型、Framework-first、内置应用清单、OOM 保护、WebUI+API、事故哨兵）/ §6 构建与部署
+  （含发版清单）/ §7 新系统适配（前置条件、硬编码路径、10 条适配要点、最短路径）/ §8 历史事故
+  与教训 / §9 命令速查 / §10 给下一个 Agent 的建议。
+- **`CHANGELOG.md`**（母版，4,948 B）：2026-10-06 / 10-05 / 10-03 / 08-07 / 08-06 分节记录，
+  突出软重启根因、Shizuku 修复、名单真源修复、事故哨兵、内置守护增强。
+- **`README.md`**（母版，更新）：
+  - 顶部加导航（ADAPT.md / CHANGELOG.md / 仓库地址）；
+  - 新增 **§7.5 本地 HTTP API**、**§7.6 事故哨兵**、**§7.7 内置应用守护与 OOM 保护**；
+  - **§9 版本记录**新增 2026-10-06 / 10-05 条目，并**修复了旧版 §9 与 §4 拼接在一行的格式错误**。
+- 同步到代码仓：`/home/projects/ZhangSystemDex/{ADAPT.md,CHANGELOG.md,README.md}`。
+
+### 一致性核对（发版前）
+- `Main.dex` md5 = **`ae83380e9cc59591c04a138fd189be9f`**，四处一致：
+  母版 / `/data/adb/modules/Zhang` / `/data/adb/Zhang` / 仓库根。
+- `webroot/index.html` md5 = **`0275291e52d78498e6d7c2610ce53754`**，母版 = 模块 = assets。
+- Git：`ab28322`（docs 提交）已 push（`4e08a80..ab28322`）。
+- Pack：`ZhangProtect-Android.zip` = **510,984,995 B**，**124 个文件**（+ADAPT.md +CHANGELOG.md），
+  SHA256 全部一致。
+
+### 备注
+- 文档均**未写进运行数据根**，只进母版与仓库；打包会把它们带进 zip 根目录。
+- 后续若改 README 的模块/开关表，记得同时看 `ADAPT.md §5` 是否需同步。

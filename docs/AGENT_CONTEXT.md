@@ -1490,46 +1490,46 @@ cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh
 
 ---
 
-## 2026-10-06 追加：系统应用 native lib（Stored 重打包）+ Shizuku 服务端修复
+## 2026-10-06 追加（已修正）：系统应用 APK 必须保持原版，不做任何修改
 
-### 结论（最重要）
-**被挂载为系统应用的 APK，若其进程以 `APK!/lib/<abi>` 方式 dlopen，
-APK 内 `.so` 必须是 Stored（未压缩），否则 UnsatisfiedLinkError。**
+### 最终结论（以此为准）
+**`system/app` 下挂载的 APK 必须保持原版，禁止修改（包括重打包 so、改压缩方式）。**
 
-Shizuku 即是此例：starter 用 `pm path` 拿到 `/data/app/.../base.apk` 并传
-`-Dshizuku.library.path=<apk>!/lib/arm64-v8a`，而原 APK 内 12 个 so 全为
-`Defl:N` → 服务端 `rikka.shizuku.server.ShizukuService` 永远起不来。
+设计意图（`一键更新系统apk.sh`）：模块的 `system/app/<pkg>/<pkg>.apk` 是
+**从设备 `pm path` 提取的原版 APK 副本**，用于把应用挂载/提升为系统应用。
+原版即正确，不需要也不要「修」。
 
-### 已废弃的旧结论（勿再沿用）
-早期认为根因是「模块只放 APK、没放 `/system/app/<pkg>/lib` 目录」。
-**错。** Shizuku 走 APK 内路径，与 `/system/app/<pkg>/lib` 无关。
-据此补的 134 个 `.so`（25 应用，约 30–50MB）已全部清理。
+### 为什么原版能工作
+原版 Shizuku（`extractNativeLibs=true`）安装时，系统已把 APK 内 .so
+**解压到 `/data/app/.../lib/arm64/`**（真机确认存在 `librish.so` 等），
+dlopen 从那里加载，没有压缩映射问题。
+APK 内 so 是 `Defl:N` 完全正常。
 
-### 产出
-- `SystemAppLibFixer.kt`：重写为「检测 so 压缩方式 → 非 Stored 则重打包 APK」
-  （纯 JDK；临时文件→校验→原子替换；保留 `.pre-stored.bak`；幂等）。
-- `scripts/fix_system_app_apk_so.py`（批量，`--dry-run`）、
-  `scripts/repack_apk_stored_so.py`（单 APK）。
-- 已删除 `scripts/fix_system_app_libs.sh`（旧方案）。
-- 母版 4 个应用已重打包：`com.bintianqi.owndroid`、`com.huawei.hwid`、
-  `com.ktls.fileinfo`、`io.github.fairyxh.VirtualEnv`；Shizuku APK
-  `so=12→stored=12`（2571964→2858166 字节）。
+### 已被彻底推翻的两次错误尝试（勿再重复）
+1. **「补 `/system/app/<pkg>/lib` 目录」** —— 错。已清理全部 134 个 .so。
+2. **「把 APK 内 so 重打包为 Stored」** —— 也错（改了原版）。
+   用户明确要求：**保持原版，不改 APK 包**。
 
-### 切换开关
-`system_app_libs_fix_enable=true` —— 调用点在 `AppManagerModule.copyMount()` 之后。
+### 本轮动作
+- 删除 `SystemAppLibFixer.kt`、`scripts/fix_system_app_apk_so.py`、
+  `scripts/repack_apk_stored_so.py`；删除开关 `system_app_libs_fix_enable`；
+  `AppManagerModule` 回退到未动 lib 的版本。
+- 5 个被改过的 APK 全部恢复原版（md5 与 `/data/app` 原版一致）：
+  `moe.shizuku.privileged.api`、`com.bintianqi.owndroid`、`com.huawei.hwid`、
+  `com.ktls.fileinfo`、`io.github.fairyxh.VirtualEnv`（母版 + 模块）。
+- 删除所有 `.pre-stored.bak` 残留。
 
-### 构建注意（本机 proot）
+### 构建注意（本机 proot，保留）
 `./gradlew :app:assembleRelease` 会因 **AAPT2 SIGILL** 失败（x86_64 二进制
 在 aarch64 宿主上经 qemu 模拟）。解法见 `docs/BUILD_NOTES.md`：
 做 `/opt/aapt2wrap/aapt2` 包装脚本 + `android.aapt2FromMavenOverride`
 （本机配置，不入库）。
 
 ### 本次构建/部署
-- Main.dex：`d5d82e9e` → `b536e0fa`（含新版 SystemAppLibFixer）
-- 母版 + 模块 Main.dex / webroot 已同步；母版 webroot 之前陈旧（无 Shizuku 面板），已更新
-- `pack.sh` 打包成功：527MB，SHA256 逐文件校验通过
-- Git：`ac5ac8c`（SystemAppLibFixer 重写）、`062aff8`（重建 Main.dex + 构建笔记）
+- Main.dex：`b536e0fa` → `df66afc9`（移除 lib 修复逻辑，保留 OOM/Shizuku 保活防检测）
+- 母版 + 模块 Main.dex 与 webroot 已同步一致
 
-### 当前状态
-**已就绪，等待用户重启设备验证**（APK 挂载需完整重启，软重启无效）。
-重启后检查：`curl -s 127.0.0.1:26437/api/shizuku/status` → `healthy=true`。
+### 运行时应保持不同、不要同步的文件
+母版与模块在以下文件上本就会不同，属运行时/用户数据，**不属同步范围**：
+`ZhangSetting/config.json`、`ZhangSetting/隐藏应用列表全隐藏.json`、
+`system/webroot/index.html`（该文件由模块 app 端自行生成，不含 shizuku 面板）。

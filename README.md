@@ -7,6 +7,9 @@
 - 启动方式：`app_process -Djava.class.path=... /system/bin --nice-name=zhangsystemdex Main <模块目录>`
 - 运行身份：root（UID 0），默认无 Activity、无 Application、无多 dex
 
+> 配套文档：**`ADAPT.md`**（面向 Agent 的项目工作手册：结构 / 构建 / 部署 / 新系统适配 / 踩坑）、
+> **`CHANGELOG.md`**（更新日志）。源码仓库：`https://github.com/FairyXH/ZhangSystemDex`。
+
 ---
 
 ## 1. 架构总览
@@ -43,10 +46,42 @@ Magisk 模块目录                       运行时数据目录
 | 7 个保留工具脚本 | 格式化 / 删除多开 / 设置 Dhizuku / 修正 Apk 名 / 一键安装 / 一键更新 / 重置系统 等（**不迁移，保持原样**） |
 | `aapt` / `shfmt` | 被上述保留工具依赖的二进制 |
 | `pack.sh` | **打包脚本**（可 MT 管理器直接运行）：生成上一级目录的 `ZhangProtect-Android.zip`。仅依赖模块内置 Python，无需系统 `zip`；含前置检查 + SHA256 逐文件自检 + 最多 3 次重试 |
-| `tools/` | **pack.sh 的随模块工具链**：`zippack.py`（打包，保留 Unix 权限位）、`zipcheck.py`（解压+SHA256 校验）、`python3`（内置运行时入口，设 `PYTHONHOME`/`LD_LIBRARY_PATH`） |
+| `tools/` | **pack.sh 的随模块工具链**：`zippack.py`（打包，保留 Unix 权限位）、`zipcheck.py`（解压+SHA256 校验）、`python3`（内置运行时入口，设 `PYTHONHOME`/`LD_LIBRARY_PATH`）；另含权限工具 `notif.sh`（通知使用权/发送通知权限）、`a11y.sh`（无障碍服务），用法见下表 |
 | `Python.zip` | **内置 Python 运行时包**（87MB / 8751 文件 / 解压 ≈270MB）：`service.sh` 首次开机释放到 `/data/Python`，供 pack.sh 与后续脚本使用；与独立 `PythonforAndroid` 模块同源同路径，可共存 |
 | `system/` | Magisk overlay 内置系统应用（`system/product/app/...`），daemon 不会改动/删除 |
 | `ZhangSetting/` | 配置与模块包集合，heavy 周期与 HMA/DNTA 生成时**整目录释放**到 `/data/media/0/Download/ZhangSetting`（cp -rf 语义，目录缺失允许） |
+
+### 权限工具 `tools/notif.sh` / `tools/a11y.sh`
+
+root 下免点击授予/撤销通知与无障碍权限（组件自动探测）。可直接 `sh` 运行。
+
+| 命令 | 作用 |
+|---|---|
+| `sh tools/notif.sh set <包名> [...]` | 开启通知使用权 + 发送通知权限 + 电池优化白名单 + 后台放行 |
+| `sh tools/notif.sh list` | 列出已开启通知使用权的包（一行一个） |
+| `sh tools/notif.sh del [--purge] <包名> [...]` | 关闭/删除通知权限（`--purge` 含 POST_NOTIFICATIONS 与 Doze） |
+| `sh tools/notif.sh check <包名> [...]` | 查看详情 |
+| `sh tools/notif.sh clean [--dry-run]` | 清理失效条目（fail-safe） |
+| `sh tools/notif.sh rebind <包名> [...]` | 强制刷新绑定（应对“服务已断开”） |
+| `sh tools/a11y.sh set <包名> [...]` | 启用无障碍服务（自动探测组件 + 开总开关） |
+| `sh tools/a11y.sh list` | 列出已启用无障碍的包（一行一个） |
+| `sh tools/a11y.sh del <包名> [...]` | 关闭无障碍服务 |
+| `sh tools/a11y.sh check <包名> [...]` | 查看详情 |
+| `sh tools/a11y.sh bound` | 显示实际绑定服务数 + 已启用配置 |
+| `sh tools/a11y.sh clean [--dry-run]` | 清理失效条目（fail-safe） |
+| `sh tools/a11y.sh restart <包名> [...]` | 重启应用（触发重新绑定） |
+
+同时 `Main.dex` 内置等价的 CLI（供脚本调用，无需 shell 工具）：
+
+```sh
+app_process -Djava.class.path=$MODDIR/Main.dex /system/bin --nice-name=zt \
+  io.github.fairyxh.zhangsystemdex.Main $MODDIR notification  <action> [pkg...]
+app_process -Djava.class.path=$MODDIR/Main.dex /system/bin --nice-name=zt \
+  io.github.fairyxh.zhangsystemdex.Main $MODDIR accessibility <action> [pkg...]
+```
+
+`notification` 动作：`grant|revoke|revoke-post|check|probe|list|summary|clean|doze-on|doze-off|rebind`
+`accessibility` 动作：`enable|disable|check|probe|list|bound|summary|clean|restart`
 
 ### 运行时数据目录 `/data/adb/Zhang/`
 
@@ -256,6 +291,46 @@ HMA 生成/DNTA/target 列表/LSPosed 扫描/MIUI 调优/温控遮蔽），每�
 
 ---
 
+## 7.5 本地 HTTP API（WebUI 后端）
+
+daemon 内置 `HttpBackend`，监听 `http://127.0.0.1:26437`，为 WebUI 与脚本提供只读/配置接口：
+
+| 端点 | 作用 |
+|---|---|
+| `/api/ping` | 存活探测 |
+| `/api/paths` | 返回 `rootDir`/`modDir`/端口/pid 等 |
+| `/api/overview` | 后端 dex md5、模块数、开关数等总览 |
+| `/api/oom/status` | OOM 保护名单与生效情况（`safeFloor` 等） |
+| `/api/builtin/status` | 内置应用在 Doze/保活/OOM 各子系统的生效汇总 |
+| `/api/builtin/apps` | 内置应用清单（`dir` 固定为**已安装模块**的 `system/app`） |
+| `/api/builtin/guard/get` / `guard/set` | 逐应用「守护 / OOM」开关读写 |
+| `/api/keepalive/*` | 通知使用权 / 无障碍保活名单 |
+| `/api/shizuku/status` / `residue` | Shizuku 保活与防检测状态 |
+| `/api/guard/alerts` | **事故哨兵**：watchdog / 崩溃 / 软重启 / 内存低点记录（零 shell） |
+
+> 诊断系统级异常时**优先**查 `/api/guard/alerts`，避免反复 `dumpsys` / `logcat` 加重系统负担。
+
+## 7.6 事故哨兵（`IncidentWatchModule`）
+
+每 15s **纯文件读取** `PROC/uptime`、`/data/system/dropbox/`、`/data/anr/`、`/proc/meminfo`，
+把 `reboot / watchdog / pre_watchdog / restart / native_crash / crash / anr / mem_low` 追加到
+`/data/adb/Zhang/incidents.log`（单行 JSON，>256KB 保留末 64KB），经 `/api/guard/alerts` 读取。
+**完全零 shell**，可在系统卡顿时安全取证。
+
+## 7.7 内置应用守护与 OOM 保护
+
+- **内置应用**（随模块挂载为系统应用，如 Shizuku/GKD/通知滤盒/Operit 等）默认保活、不听从开关，
+  可在 WebUI「内置应用」页**逐应用**关闭守护、或勾选 OOM 保护；
+  **含无障碍服务或通知使用权组件的应用强制 OOM**（不可关）。
+  配置：`builtin_guard.conf`（`pkg=guard,oom`）、`builtin_forced.conf`（异步探测缓存）。
+- **OOM 保护**（`OomProtectModule`，周期 5s）：把生效名单内应用的 `oom_score_adj` 设为 **≈ -500**
+  （主 -500 / 子 -450），并在每次 tick **实地读回**——被系统 AMS 覆盖后会 ≤5s 自动纠回。
+  **绝不触碰 `system_server`/`init`/`zygote*` 等系统核心进程**。
+- **内存看门狗**：物理内存已用 ≥90% 且受保护进程占用异常（合计 ≥40% 或单个 ≥25%）时，
+  自动取消保护并 force-stop，冷却 60s。
+
+---
+
 ## 8. 已知限制与注意事项
 
 - **Xposed 扫描仅依赖 LSPosed 数据**：已移除 PackageManager metadata 扫描
@@ -301,6 +376,24 @@ HMA 生成/DNTA/target 列表/LSPosed 扫描/MIUI 调优/温控遮蔽），每�
 
 ## 9. 版本记录
 
+> 完整变更见 `CHANGELOG.md`；面向 Agent 的工作手册见 `ADAPT.md`。
+
+- 2026-10-06：**稳定性大修 + 事故哨兵 + 内置应用守护增强**。
+  - 定位并修复**软重启根因**：内置应用组件探测曾对 45 个应用**同步**执行 `cmd package dump`，
+    并发进入 `system_server` 后卡在同一把锁 → Binder 线程池耗尽 → `watchdog.monitor` 超时 →
+    Watchdog 杀掉 system_server → 软重启。现改为**后台异步探测 + 落盘缓存**（`builtin_forced.conf`），
+    **启动/tick 路径不再同步跑重 IPC**；新增 `ShellExecutor` 全局节流与 `pidsOf` 严格化（仅匹配 arg0）。
+  - 修复 **Shizuku 频繁 “is not running”**：`applyAdj` 改为**实地读回** `/proc/<pid>/oom_score_adj`，
+    被 ColorOS `OomAdjusterSocExtImpl` 覆盖后 ≤5s 自动纠回（此前因只信本地缓存而永久失效）。
+  - 修复**内置应用名单来源显示为母版**：统一以**已安装模块** `/data/adb/modules/Zhang/system/app`
+    为运行期真源（`BuiltinApps.effectiveRoot/effectiveModuleDir`）。
+  - 新增**事故哨兵** `IncidentWatchModule` + `/api/guard/alerts`（零 shell 采集 watchdog/崩溃/
+    软重启/内存低点）。
+  - 新增**内置应用逐应用守护开关 + OOM 可选/强制**（含无障碍或通知组件者强制）、**内存看门狗**。
+  - OOM 保护值统一为 **≈ -500**，**绝不触碰系统核心进程**；`PowerManagerModule` 启动重操作延后后台执行。
+  - 修复 SelfTest `AppOps` 误报 FAIL（区分系统强控 op）；自测恢复 **74 PASS / 0 FAIL**。
+- 2026-10-05：修复 OTA 陈旧降级 + 分片缓存暖扫命中率；`disableApp` 增加 installed 判断；
+  明确**发版必须同步仓库根 `Main.dex` 与 `app/src/main/assets/webroot/index.html`**，否则 OTA 降级。
 - 2026-10-03：**打包链模块自包含 + 内置 Python 运行时**。`pack.sh` 改为纯 Python 实现（`tools/zippack.py` + `tools/zipcheck.py`），不再依赖 Android 上普遍缺失的 `zip` 命令，保留 Unix 权限位（安装脚本可执行的前提）并含 SHA256 逐文件自检；整合 `Python_for_Android-3.13.5` 的运行时（`Python.zip` → `/data/Python`，md5 `921bc3c6`），`service.sh` 首次开机释放，`tools/python3` 为统一入口（自动设 `PYTHONHOME`/`LD_LIBRARY_PATH`）。可在 MT 管理器直接运行 `pack.sh` 出包。
 - 2026-10-03：**垃圾清理安全加固**（清理为高危功能，安全优先）：修复 7 处缺陷，其中 2 处严重——`uninstalled_leftover` 原会误删 `/data/media/*/Android/data` 下全部应用数据（新增 `UNINSTALLED_SCAN` 模式，运行时逐个校验包是否仍安装）、`DIR_JUNK` 宽泛词（`dump`/`debug`/`trace`）导致误删（拆出 `DIR_JUNK_STRONG`）。另修：`core*` 前缀误匹配、零字节无条件删、`DIR_CONTENT` 容器审查过严导致 `/data/anr` 清不掉、`deleteOne` 误报 FAIL、`.nomedia` 拒绝刷屏；`app_cache` 改为 `filesOnly`（不递归子目录，保护 AGC 相机等把配置放在 cache 里的应用）。真机全类型清理 `rejected=0`。
 - 2026-08-07：新增 `skip_mount_guard_enable`（默认 true）模块目录防护：自动删除模块目录下 `skip_mount` 等残留文件（Magisk 安装模板残留会让 system/ 挂载被跳过）；监听列表 `WATCH_FILES` 易维护、不受省电模式影响；调试菜单新增 21、SelfTest 新增检查项。模块侧 install.sh/update-binary 已移除 SKIPMOUNT 创建逻辑（永不创建 skip_mount）。构建并部署 Main.dex（单一 classes.dex，字节验证通过）。
@@ -313,4 +406,4 @@ HMA 生成/DNTA/target 列表/LSPosed 扫描/MIUI 调优/温控遮蔽），每�
 - 2026-08-07：新增 `SelfTest` 自测工具（调试菜单 20 / `selftest` 参数）：无视开关调用所有模块并带验证断言；自测发现并修复 app_process 下 framework SQLite 不可用的问题——内置 sqlite3 CLI（`sqlite_lib/`）自动同步与兜底，LSPosed 扫描恢复（55 模块/29 启用）；真机自测 27 PASS / 0 FAIL。
 - 2026-08-07：新增 `FrameworkOps`，批量将可 API 化的 shell 调用改为 Android API（包管理/AppOps/force-stop/Doze 白名单/WiFi/蓝牙/唤醒/媒体按键/Intent 启动/ctl 服务/HOME 与输入法解析/Os.chown·chmod·rm·mv/renice），失败自动降级 shell 且警告去重；98 处 ShellExecutor 调用降至约 74 处（含 fallback），真机验证蓝牙/WiFi API 成功、Doze 白名单与媒体按键正确 fallback。
 - 2026-08-07：修复 SystemContext（Looper+systemMain fallback，失败缓存防刷屏）；防错误弹窗纳入 heavy；新增周期参数 `tuning_interval_seconds`/`heavy_interval_cycles` 并自动补写旧配置；未息屏跳过时下一周期立即补执行；新增 `启动Dex.sh`/`停止Dex.sh`/`重启Dex.sh`。
-- 2026-08-06：Shell → Dex 全量迁移完成；开关体系 + 热加载；LSPosed 数据库扫描；调试菜单；heavy 任务独立开关；12 个特殊开关默认开启（doze/hma/游戏暂停/无障碍/lock/prop/heavy/target/禁用应用/服务守护/读游戏列表/MIUI 调优）。- 2026-10-05：**修复 OTA 陈旧降级 + 分片缓存暖扫命中率 + 安全加固**。要点：(1) `ParallelScanner` 增量落盘时误用不完整的 aliveShards 做 retainShards，导致未扫描分片的聚合被整片删除，暖扫命中率仅 ~70/777；现改为扫描开始即预填全体分片、增量落盘不 retain、并发读写 shardAggs 统一持锁——`junk_all_apps` 冷 72s→暖 <1s（777/777）。(2) `AppManagerModule.disableApp` 增加 installed 判断，跳过不存在的包，消除每维护周期重复的 Unknown package 告警。(3) **发布流程要求**：OTA 源为 `repo/Main.dex`，发版必须同步仓库根 `Main.dex` 与 `app/src/main/assets/webroot/index.html`，否则在线更新会把设备降级回旧版本（曾因仓库 Main.dex 陈旧埋下降级风险，已修复并把仓库 dex 更新为当前构建 105b0252）。
+- 2026-08-06：Shell → Dex 全量迁移完成；开关体系 + 热加载；LSPosed 数据库扫描；调试菜单；heavy 任务独立开关；12 个特殊开关默认开启（doze/hma/游戏暂停/无障碍/lock/prop/heavy/target/禁用应用/服务守护/读游戏列表/MIUI 调优）。

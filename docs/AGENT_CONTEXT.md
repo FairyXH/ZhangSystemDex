@@ -2117,3 +2117,62 @@ WebUI 显示「名单来源：/data/media/0/Download/Files/ZhangProtect-Android/
 ### 备注
 - 文档均**未写进运行数据根**，只进母版与仓库；打包会把它们带进 zip 根目录。
 - 后续若改 README 的模块/开关表，记得同时看 `ADAPT.md §5` 是否需同步。
+---
+
+## §57 **重大修复：system_server 软重启根治（2026-10-06 20:5x）**
+
+### 用户报告
+「已经很长时间没卡住了，一用你就软重启了」→ 反复出现，不到 10 分钟一次。
+
+### 取证（决定性证据）
+- `/data/system/dropbox/SYSTEM_SERVER_WATCHDOG@*.txt.gz`（**双 gzip**：先 gzip.decompress 解一层；头部若干行文本之后是二进制，需再解）。
+- 解开后：**31 个 binder:<pid>_N 线程**栈完全相同，全部停在 `com.android.server.am.AppBatteryTracker.updateBatteryUsageStatsIfNecessary(AppBatteryTracker.java:494)`；`grep -c '0x0944335c'` = **62**（同一把锁）。调用链：`ActivityManager.dumpPackageStateStatic` ← `PackageManagerShellCommand.runDump` ← `cmd package dump`。
+- 结论：**Binder 线程池（上限 16）被数十条悬停的 dump 占满 → Watchdog 15s → 杀 system_server**。
+
+### 现场抓凶（`ps -A -o pid,ppid,args | awk '$2==<daemonPid>'`）
+连续采样发现 daemon **每秒都在跑**：`cmd package dump <pkg>`（遍历 45 个内置应用）、`dumpsys notification`、`cmd appops get <pkg>`、`dumpsys deviceidle whitelist +<pkg>`、`settings get/put`。修复前「重IPC 进程数」持续 **10~13** 且增长。
+
+### 根因链（多处叠加，逐个都不致命）
+1. **`KeepAliveList.read()` union 45 个内置应用** → 保活 tick（15s）遍历 45 包 → 每包 `probeComponents` → `dumpsys package` / `cmd package dump`；**没有组件的包被永久重试**（无负缓存）。
+2. **`ModuleAppOps`（60s）** 对 ~51 个历史包 × ~40 个 OP 逐个 `cmd appops get/set` → 数千条 IPC/轮。
+3. **`BuiltinConfig.isForcedOom`** 每次调用都 `pendingProbe.add`（无去重），被 tick/HTTP 高频调用 → 队列永不空；且 `saveForcedCache` 只在队列空时落盘 → **缓存永不更新** → 每次重启全部重探。
+4. **`NotificationGrant.liveListeners()`** 无缓存，`dumpsys notification` 输出 1MB+、超时 20s。
+5. `AccessibilityGuardModule`（10s）、`NotificationKeepAliveModule`（15s）等也在跑。
+
+### 修复（6 文件，commit 3d7929e）
+| 文件 | 改动 |
+|---|---|
+| `core/ShellExecutor.kt` | **新增全局熔断闸门**：重命令先判 `psiHot()`（只读 `/proc/pressure/memory`，零 binder）+ `circuitOpen()`（失败/超时 ≥6s → 指数退避冷却 20s→120s）；命中则**直接返回 rc=-1**。并发 2→1、间隔 120→300ms、吃紧 600→1200ms。 |
+| `core/BuiltinConfig.kt` | 探测改**批量枚举**（`PackageManager.queryIntentServices`，2 条 IPC 取代 90 条）；`probeQueued` 去重；每 8 包增量落盘；探测间隔 250→500ms。 |
+| `core/NotificationGrant.kt` | `probeComponents` 加**含空结果负缓存**（IPC 失败不缓存）；`liveListeners` 加 10s 缓存、超时 20s→8s；`grant()` 无 listener 组件时**提前返回**。 |
+| `core/AccessibilityGrant.kt` | 同上负缓存 + 超时 8s。 |
+| `modules/AppManagerModule.kt` | `applyModuleAppOps`/`applyAppOps` **增量**：完成包落盘 `appops_done.conf` / `appops_doze_done.conf`，后续轮次跳过。 |
+| `Main.kt` | `ModuleAppOps` 周期 60s→**300s**。 |
+
+### 修复后实测（部署 dex `5a1dc058ab73bb420e490000a1e60c66`）
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 重 IPC 进程 | 10~13（持续增长） | **0~3，且归零** |
+| uptime | ~160s 就重启 | **稳定 11 分钟+ 无重启** |
+| MemAvailable | 680MB | 2373~2421MB |
+| 新增 watchdog | 频繁 | **无** |
+
+API 验证：`/api/builtin/status` count=45、guard 45、forcedOom 8 项；`/api/oom/status` enabled=true；`/api/guard/alerts` 正常。
+
+### 沉淀的硬规则（写进 ADAPT.md §7.6 与 §8）
+1. **任何遍历数十个包的循环，禁止逐包发 system_server IPC** —— 必须批量枚举或读文件/DB。
+2. 探测结果（**含空结果**）必须缓存并落盘，避免永久重试。
+3. 重命令必须走 `ShellExecutor`（熔断+串行），**不要绕过它直接 ProcessBuilder**。
+4. 新增 daemon 循环前先算「每轮 IPC 条数 × 频率」，>10 条/分钟即需警惕。
+
+### 排查技巧（零/低 IPC，避免诊断本身加压）
+```sh
+cut -d' ' -f1 /proc/uptime                     # uptime 是否被重置（软重启）
+ls -t /data/system/dropbox/ | grep -iE 'WATCHDOG|RESTART' | head
+ps -A -o pid,ppid,args | grep -E 'cmd package|dumpsys|appops|settings ' | grep -v grep | wc -l
+ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
+```
+
+### 注意
+- `ShizukuResidue.ALWAYS_CLEAN` 含 `/data/local/tmp/shizuku_starter`（Shizuku 官方 `start.sh` 的标准部署位置）—— **删除与官方流程冲突**，已在 switches 里 `shizuku_detect_clean_starter=false`（默认关）。若用户反馈 Shizuku 起不来，优先查此项与 `system/app` 下 Shizuku APK 的 so 压缩方式（Deflate 会导致 dlopen 失败）。
+- Shizuku APK（`f9bc1ae7…`）内 `lib/arm64-v8a/*.so` 为 Deflate 压缩，`app_process -Dshizuku.library.path=<apk>!/lib/arm64-v8a` 会**静默起不来**；治本需重打包为 STORED。**本会话已生成一个 STORED 版 APK 于 /data/local/tmp/shizuku_stored/base.apk，但尚未替换到模块/母版**。

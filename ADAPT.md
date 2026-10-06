@@ -279,7 +279,84 @@ cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh
 
 ---
 
+## 7.6 ShellExecutor 全局熔断闸门（**软重启根治，勿动**）
+
+### 为什么存在
+
+daemon 有 30+ 个循环线程（各模块一个），它们都会通过 `ShellExecutor`
+发起 `dumpsys` / `cmd package` / `cmd appops` / `settings` / `pm` 等**重命令**。
+这些命令最终都在 **system_server 内执行**，占用其 Binder 线程池。
+
+实测事故：短时间内数十条此类命令同时悬停在
+`AppBatteryTracker.updateBatteryUsageStatsIfNecessary` 的同一把锁上
+（ColorOS 特有），Binder 线程池（上限 16）被占满 →
+`Watchdog$BinderThreadMonitor.blockUntilThreadAvailable` 等 15s 超时 →
+**Watchdog 杀死 system_server → 系统软重启**。
+
+dropbox 证据：`SYSTEM_SERVER_WATCHDOG@*.txt.gz` 中会有数十个
+`binder:NNNN_N` 线程栈，全部停在 `PackageManagerShellCommand.runDump`。
+
+### 机制（`core/ShellExecutor.kt`）
+
+1. **重命令判定** `isHeavyCommand(cmd)`：前缀为 `dumpsys`/`cmd `/`pm `/`am `/`service `/`settings `，
+   或含 `dumpsys `、`cmd package `、`cmd appops `、`cmd notification `、`settings `。
+2. **熔断闸门**（在并发闸门前）：
+   - `psiHot()`：只读 `/proc/pressure/memory` 的 `some avg10`，超过 25.0 视为内存压力高；
+     **纯文件读，零 binder**，每 2s 才真读一次。
+   - `circuitOpen()`：冷却窗是否打开。重命令失败（rc<0）或耗时 >= 6s 即调用
+     `onHeavyFailure()`，按 20s→40s→…→120s 指数退避打开冷却窗；3s 内只记一次。
+   - 冷却期或内存压力高 → **直接返回 code=-1，不发往 system_server**。
+3. **硬限流**：`MAX_CONCURRENT=1`（重命令完全串行）、启动间隔 `MIN_INTERVAL_MS=300`、
+   内存吃紧 `BUSY_INTERVAL_MS=1200`。
+4. **超时收紧**：相关方法由 15~20s 收到 8s，减少 Binder 线程悬停时间。
+
+### 副作用与应对
+
+熔断期间重命令会**返回失败**。调用方必须把"重命令失败"视为可重试的
+正常情况（不要当成致命错误、不要立即重试风暴）。功能上最终一致：
+冷却结束或压力下降后自动恢复。
+
+### 验证方法（零/低 IPC）
+
+```sh
+# 重 IPC 进程数（应长期为 0~3，修复前是持续 10~13）
+ps -A -o pid,args | grep -E 'cmd package|dumpsys|appops|settings ' | grep -v grep | wc -l
+# 熔断日志
+strings /data/adb/Zhang/log/zhang.log | grep -a 熔断
+# 是否新增 watchdog（uptime 应稳定增长）
+cut -d' ' -f1 /proc/uptime; ls -t /data/system/dropbox/ | grep -iE 'WATCHDOG|RESTART' | head
+```
+
 ## 8. 历史事故与教训（务必遵守）
+
+### 事故：system_server Watchdog 软重启（2026-10-06，已根治）
+
+- **现象**：daemon 运行数分钟后 system_server 被 Watchdog 杀死（软重启）；
+  严重时"一开就重启"。
+- **证据**：`/data/system/dropbox/SYSTEM_SERVER_WATCHDOG@*.txt.gz`（双 gzip，
+  第一层解开后头部是文本，其余需 zlib/gzip 再解）中 **31 个 binder 线程**
+  全部停在 `AppBatteryTracker.updateBatteryUsageStatsIfNecessary`；
+  62 处等待同一把锁。调用链含 `PackageManagerShellCommand.runDump`。
+- **根因**：daemon 各模块循环对数十个包**逐个**跑
+  `cmd package dump` / `dumpsys package` / `cmd appops get` / `dumpsys deviceidle`；
+  叠加 ColorOS 的 `AppBatteryTracker` 全局锁 → Binder 池耗尽。
+- **放大器**（单独看都不致命，叠加才爆）：
+  - `KeepAliveList.read()` 会把 **45 个内置应用** union 进保活名单，
+    于是保活 tick（15s）会遍历 45 个包，对每个未授权包跑 `probeComponents`；
+    而**没有监听/无障碍组件的包会被永久重试**（无负缓存）。
+  - `ModuleAppOps`（60s）对 ~50 个历史包 × ~40 个 OP 逐个 `cmd appops get/set`。
+  - `BuiltinConfig.isForcedOom` 每次调用都入队探测，队列被 tick/HTTP 持续灌入
+    → 后台线程永不停歇；且只在"队列空"时落盘 → 缓存永不更新。
+  - `NotificationGrant.liveListeners()` 无缓存，且 `dumpsys notification` 输出 1MB+、
+    超时 20s。
+- **教训（务必遵守）**：
+  1. **任何遍历数十个包的循环，禁止逐包发 system_server IPC**；
+     必须批量枚举（如 `PackageManager.queryIntentServices`）或读文件/数据库。
+  2. 探测结果（**包括空结果**）必须缓存并落盘，避免"永久重试"。
+  3. 重命令必须走 `ShellExecutor`（熔断 + 串行）；**不要绕过它直接 ProcessBuilder**。
+  4. 新增任何 daemon 循环前，先算"每轮 IPC 条数 × 频率"，超过 ~10 条/分钟就要警惕。
+
+
 
 > 完整复盘见仓库 `docs/incidents/` 与 `docs/AGENT_CONTEXT.md` §51–§55。
 

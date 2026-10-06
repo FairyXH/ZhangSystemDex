@@ -81,15 +81,48 @@ object BuiltinApps {
      * 并在失败时回退到约定的模块路径。
      */
     fun packagesFromRoot(rootDir: File): List<String> {
-        val candidates = listOf(
-            File(rootDir.parentFile ?: File("/data/adb"), "modules/Zhang"),
-            File("/data/adb/modules/Zhang"),
-        )
-        for (c in candidates) {
+        for (c in moduleDirCandidates(rootDir)) {
             val list = packages(c.path)
             if (list.isNotEmpty()) return list
         }
         return emptyList()
+    }
+
+    /**
+     * 实际生效的「模块系统应用根目录」。
+     *
+     * 运行期真源是**已安装模块** `/data/adb/modules/Zhang/system/app`；
+     * 免重启更新时 daemon 可能由母版目录的 `service.sh` 启动（`$0` 指向母版），
+     * 此时 `ctx.modDir` 会是母版路径（`/data/media/0/.../ZhangProtect-Android`）。
+     * 母版只是**发布副本**，不应作为运行期真源（两者若出现差异会加载到
+     * 未安装的包）。因此这里始终优先返回已安装模块目录。
+     *
+     * @param rootDir 配置根（`/data/adb/Zhang`）
+     * @param modDir  调用方已知的模块目录（可能是母版），仅作兜底
+     */
+    fun effectiveRoot(rootDir: File, modDir: String): File {
+        for (c in moduleDirCandidates(rootDir)) {
+            if (root(c.path).exists()) return root(c.path)
+        }
+        return root(modDir)
+    }
+
+    /**
+     * 实际生效的**模块根目录**（`.../Zhang`），供 `packages(modDir)` / `apkOf(modDir, pkg)` 使用。
+     *
+     * 与 [effectiveRoot] 的区别：本方法返回模块根（`packages` 期望的层级），
+     * [effectiveRoot] 返回其下的 `system/app` 目录（用于 UI 展示）。
+     */
+    fun effectiveModuleDir(rootDir: File, modDir: String): String =
+        effectiveRoot(rootDir, modDir).parentFile?.parentFile?.path ?: modDir
+
+    /** 候选模块目录（按优先级）：已安装模块 → 约定路径 → 调用方给定。 */
+    private fun moduleDirCandidates(rootDir: File): List<File> {
+        val out = LinkedHashSet<File>()
+        // rootDir 通常为 /data/adb/Zhang → parent 为 /data/adb → modules/Zhang
+        rootDir.parentFile?.let { out.add(File(it, "modules/Zhang")) }
+        out.add(File("/data/adb/modules/Zhang"))
+        return out.toList()
     }
 
     /** 目录内是否存在 APK 文件（大小写兼容）。 */

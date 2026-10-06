@@ -510,8 +510,10 @@ object SelfTest {
     // OOM 保护：含无障碍/通知组件者**强制**，其余可选（勾选）。
     // 这里只做只读断言（枚举 + 集合关系），不写系统状态。
     private fun builtinChecks(s: Summary, ctx: DexContext) {
-        val modDir = ctx.modDir
         val rootDir = java.io.File(ctx.config.rootDir)
+        // 名单真源 = 已安装模块的 system/app（母版仅发布副本）。
+        // effectiveModuleDir 返回**模块根**（`.../Zhang`），即 packages() 期望的层级。
+        val modDir = BuiltinApps.effectiveModuleDir(rootDir, ctx.modDir)
         val pkgs = try {
             BuiltinApps.packages(modDir)
         } catch (t: Throwable) {

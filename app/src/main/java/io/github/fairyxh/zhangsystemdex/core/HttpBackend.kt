@@ -250,6 +250,24 @@ class HttpBackend(
     // Endpoints
     // ------------------------------------------------------------------
 
+    /**
+     * 内置应用清单的「运行期真源」目录（即 `<模块>/system/app`）。
+     *
+     * 优先**已安装模块** `/data/adb/modules/Zhang/system/app`；仅当它不存在时
+     * 才退回到 `ctx.modDir`（免重启更新时 daemon 可能由母版目录启动）。
+     * 母版只是发布副本，不作为运行期真源。
+     */
+    private fun builtinRoot(): File =
+        BuiltinApps.effectiveRoot(File(ctx.config.rootDir), ctx.modDir)
+
+    /** 内置应用的**模块根目录**（`.../Zhang`），`BuiltinApps.packages` 期望此层级。 */
+    private fun builtinModuleDir(): String =
+        BuiltinApps.effectiveModuleDir(File(ctx.config.rootDir), ctx.modDir)
+
+    /** 内置应用包名（真源同上）。 */
+    private fun builtinPackages(): List<String> =
+        BuiltinApps.packages(builtinModuleDir())
+
     /** Page bootstrap: absolute paths + fixed port, so the UI need not shell out. */
     private fun apiPaths(): String {
         val root = ctx.config.rootDir
@@ -1906,10 +1924,13 @@ class HttpBackend(
      */
     private fun apiBuiltinApps(): String {
         val rootDir = File(ctx.config.rootDir)
-        val list = BuiltinApps.packages(ctx.modDir)
+        // 名单真源 = 已安装模块的 system/app（母版仅发布副本）。
+        val effDir = builtinRoot()
+        val modDir = builtinModuleDir()
+        val list = BuiltinApps.packages(modDir)
         val sb = StringBuilder()
         sb.append("{\"ok\":true")
-        sb.append(",\"dir\":").append(q(BuiltinApps.root(ctx.modDir).absolutePath))
+        sb.append(",\"dir\":").append(q(effDir.absolutePath))
         sb.append(",\"count\":").append(list.size)
         sb.append(",\"packages\":").append(JsonBuilder.arr {
             var first = true
@@ -1919,7 +1940,7 @@ class HttpBackend(
                     key("pkg"); value(pkg); comma()
                     key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
                     key("installed"); value(AppListProvider.installed(pkg)); comma()
-                    key("apk"); value(BuiltinApps.apkOf(ctx.modDir, pkg)?.name ?: ""); comma()
+                    key("apk"); value(BuiltinApps.apkOf(modDir, pkg)?.name ?: ""); comma()
                     key("guard"); value(BuiltinConfig.isGuardEnabled(rootDir, pkg)); comma()
                     key("oomChecked"); value(BuiltinConfig.isOomChecked(rootDir, pkg)); comma()
                     key("forcedOom"); value(BuiltinConfig.isForcedOom(pkg)); comma()
@@ -1939,7 +1960,8 @@ class HttpBackend(
      */
     private fun apiBuiltinGuardGet(): String {
         val rootDir = File(ctx.config.rootDir)
-        val list = BuiltinApps.packages(ctx.modDir)
+        // 与 /api/builtin/apps 保持一致：名单真源 = 已安装模块。
+        val list = builtinPackages()
         val sb = StringBuilder()
         sb.append("{\"ok\":true,\"file\":").append(q(BuiltinConfig.file(rootDir).absolutePath))
         sb.append(",\"count\":").append(list.size)
@@ -1972,7 +1994,7 @@ class HttpBackend(
         val pkg = obj["pkg"]?.trim().orEmpty()
         if (pkg.isEmpty()) return jsonError("缺少 pkg")
         val rootDir = File(ctx.config.rootDir)
-        if (pkg !in BuiltinApps.packages(ctx.modDir)) return jsonError("非内置应用: $pkg")
+        if (pkg !in builtinPackages()) return jsonError("非内置应用: $pkg")
         val guard = obj["guard"]?.trim()?.let { it == "true" || it == "1" }
         val oom = obj["oom"]?.trim()?.let { it == "true" || it == "1" }
         if (guard == null && oom == null) return jsonError("缺少 guard 或 oom")
@@ -1995,7 +2017,7 @@ class HttpBackend(
      *   - oom：当前实际受 OOM 保护的内置应用（运行时快照）。
      */
     private fun apiBuiltinStatus(): String {
-        val list = BuiltinApps.packages(ctx.modDir)
+        val list = builtinPackages()
         val set = list.toHashSet()
         val rootDir = File(ctx.config.rootDir)
         val guardSet = BuiltinConfig.guardPackages(rootDir).toHashSet()

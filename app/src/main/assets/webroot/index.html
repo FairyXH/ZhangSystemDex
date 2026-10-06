@@ -204,6 +204,19 @@
     font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.5;padding:12px 14px;resize:vertical}
   .txt{background:var(--grouped);border:0;border-radius:9px;padding:7px 10px;color:var(--txt);
     font-size:13px;font-family:inherit}
+  /* ---------- 内置应用默认保活说明 ---------- */
+  .builtin-note{margin-top:12px;background:rgba(255,159,10,.12);border-radius:var(--radius);
+    padding:12px 14px}
+  .builtin-note .bn-title{font-size:13px;font-weight:700;color:var(--warn);margin-bottom:5px}
+  .builtin-note .bn-desc{font-size:12.5px;line-height:1.55;color:var(--fg);opacity:.9}
+  .builtin-note .bn-list{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+  .builtin-note .bn-list .bnp{font-family:ui-monospace,monospace;font-size:11.5px;
+    background:var(--card);border:1px solid var(--sep);border-radius:6px;padding:2px 7px;
+    color:var(--dim);word-break:break-all}
+  .builtin-note .bn-list .bnp b{color:var(--fg);font-weight:600}
+  .builtin-note .bn-empty{font-size:12px;color:var(--dim);margin-top:9px}
+  .builtin-note .bn-list .bnp.on{color:var(--ok);border-color:rgba(52,199,89,.4)}
+
   .oomapps::-webkit-scrollbar{width:6px}
   .oomapps::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:3px}
   .grouphdr{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;
@@ -382,6 +395,22 @@
 
   <!-- ============ TAB 4: 设置 ============ -->
   <section class="pane" id="pane-settings">
+    <div class="section"><div class="stitle">模块内置应用 · 默认保活</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#ff3b30">📦</div>
+          <div class="body"><div class="k">内置应用（<span class="mono">system/app/*</span>）默认保活</div>
+            <div class="d">模块自带的全部应用<b>始终</b>获得：Doze 白名单、多任务 Lock、
+              通知使用权保活、无障碍服务保活、OOM 保护。<b>不受任何开关 / 配置控制</b>，
+              关闭下方对应开关也不会停止对内置应用的保活。</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnBuiltinRefresh">刷新</button></div></div>
+        <div class="cell"><div class="ic" style="background:#34c759">📋</div>
+          <div class="body"><div class="k">内置应用名单</div>
+            <div class="d" id="builtinSummary">读取中…</div></div></div>
+      </div>
+      <div id="builtinList" class="oomapps" style="max-height:260px"></div>
+      <div class="sfoot">名单来源：<span class="mono" id="builtinDir">—</span>。保活执行：
+        Doze / 多任务 Lock 由电源管理模块写入；通知使用权 / 无障碍 由保活模块维护；OOM 由 OOM 保护模块提升 oom_score_adj。</div>
+    </div>
     <div class="section"><div class="stitle">调优循环参数</div>
       <div class="list" id="tuningList"></div>
       <div class="sfoot">留空使用默认值；修改后建议重启 daemon 生效。</div></div>
@@ -438,6 +467,11 @@
       </div>
       <textarea id="notifKaText" class="oomedit" spellcheck="false" placeholder="com.catchingnow.np"></textarea>
       <div class="sfoot">仅列出<b>已声明通知使用权</b>的应用。勾选即写入名单，保存后立即生效；非法行会被自动过滤。系统应用默认隐藏，搜索 <code>@sys</code> 显示。</div>
+      <div class="builtin-note">
+        <div class="bn-title">内置应用默认保活（不受开关控制）</div>
+        <div class="bn-desc">模块自身携带（<span class="mono">system/app/*</span>）的应用<b>始终</b>保活其通知使用权，即使上方总开关关闭也生效，无需手动加入名单。</div>
+        <div class="bn-list" id="notifKaBuiltin">读取中…</div>
+      </div>
     </div>
     <div class="section"><div class="stitle">无障碍服务保活名单</div>
       <div class="list">
@@ -463,6 +497,11 @@
       </div>
       <textarea id="a11yKaText" class="oomedit" spellcheck="false" placeholder="com.example.app"></textarea>
       <div class="sfoot">仅列出<b>已声明无障碍服务</b>的应用。勾选即写入名单，保存后立即生效；非法行会被自动过滤。</div>
+      <div class="builtin-note">
+        <div class="bn-title">内置应用默认保活（不受开关控制）</div>
+        <div class="bn-desc">模块自身携带（<span class="mono">system/app/*</span>）的应用<b>始终</b>保活其无障碍服务，即使上方总开关关闭也生效，无需手动加入名单。</div>
+        <div class="bn-list" id="a11yKaBuiltin">读取中…</div>
+      </div>
     </div>
     <div class="section"><div class="stitle">OOM 保护名单</div>
       <div class="list">
@@ -478,6 +517,11 @@
       <div class="sfoot">
         <b>安全约束：</b>列表应用的 oom_score_adj 被钳制到 -900（system_server 同级），
         永不越过系统核心；仅温和提升，不做 RT 抢占。名单以「一行一个包名」保存，<code>#</code> 开头为注释。
+      </div>
+      <div class="builtin-note">
+        <div class="bn-title">内置应用默认受保护（不受开关控制）</div>
+        <div class="bn-desc">模块自身携带（<span class="mono">system/app/*</span>）的应用<b>始终</b>受 OOM 保护，即使上方总开关关闭也生效，无需手动加入名单。</div>
+        <div class="bn-list" id="oomBuiltin">读取中…</div>
       </div>
     </div>
     <div class="section"><div class="stitle">OOM 保护名单 · 应用选择器</div>
@@ -1623,14 +1667,18 @@ async function loadOom(){
     if (m) m.checked = !!(st && st.enabled);
     const prot = (st && st.protected) || [];
     const auto = (st && st.fromKeepAlive) || [];
+    const bset = new Set((st && st.builtin) || []);
+    const bprot = (st && st.builtinProtected) || [];
     const el = $("#oomStatus");
     if (el) {
       let s = prot.length
         ? ("当前保护 " + prot.length + " 个应用：" + prot.join("、"))
         : "当前没有运行中的受保护进程";
       if (auto.length) s += "（其中 " + auto.length + " 个来自保活名单，自动纳入）";
+      if (bset.size) s += "；内置应用 " + bset.size + " 个始终受保护（不受开关控制）";
       el.textContent = s;
     }
+    renderBuiltinChips($("#oomBuiltin"), Array.from(bset), new Set(bprot));
   }catch(e){ /* 后端未就绪时静默 */ }
   // 名单文本
   try{
@@ -1745,6 +1793,17 @@ async function loadKeepAlive(k){
         : "名单为空";
     }
   }catch(e){ toast("读取" + k.label + "保活名单失败：" + (e && e.message ? e.message : e), "err"); }
+  // 内置应用（强制保活，不受开关控制）—— 展示已生效的内置应用
+  try{
+    if (BUILTIN_STATUS){
+      const pkgs = BUILTIN_APPS.map(a=>a.pkg);
+      const hit = k.id === "notif" ? BUILTIN_STATUS.notifKeepAlive : BUILTIN_STATUS.a11yKeepAlive;
+      renderBuiltinChips($("#" + (k.id === "notif" ? "notifKaBuiltin" : "a11yKaBuiltin")), pkgs, new Set(hit || []));
+    } else {
+      const base = (r && r.builtin) || [];
+      renderBuiltinChips($("#" + (k.id === "notif" ? "notifKaBuiltin" : "a11yKaBuiltin")), base);
+    }
+  }catch(e){}
   // 应用选择器
   try{
     if (!KA_APPS[k.id]){
@@ -1768,6 +1827,7 @@ async function saveKeepAlive(k){
   }catch(e){ toast("保存失败：" + (e && e.message ? e.message : e), "err"); }
 }
 async function loadKeepAliveAll(){
+  await loadBuiltinApps();
   for (const k of KA_KINDS) { await loadKeepAlive(k); }
 }
 async function setKeepAliveSwitch(k, on){
@@ -1787,6 +1847,73 @@ async function setOomSwitch(key, on){
     toast("切换失败：" + (e && e.message ? e.message : e), "err");
   }
 }
+/* ------------------------------------------------------------------ *
+ * 模块内置应用（system/app/*）—— 默认保活，不受开关控制
+ *
+ * 后端 /api/builtin/apps 返回模块自带应用清单；/api/builtin/status
+ * 返回它们在 Doze / 多任务 Lock / 通知保活 / 无障碍保活 / OOM 中的命中情况。
+ * 这些保活由守护模块强制执行，与用户开关无关，此处仅作展示与说明。
+ * ------------------------------------------------------------------ */
+let BUILTIN_APPS = [];      // [{pkg,label,installed,apk}]
+let BUILTIN_STATUS = null;  // /api/builtin/status 结果
+
+/** 渲染「内置应用名单」小标签列表。host 为空时静默。 */
+function renderBuiltinChips(host, pkgs, hitSet){
+  if (!host) return;
+  if (!pkgs || !pkgs.length){
+    host.innerHTML = '<div class="bn-empty">未检测到内置应用（模块 system/app 目录为空）</div>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  pkgs.forEach(function(p){
+    const sp = document.createElement("span");
+    sp.className = "bnp" + ((hitSet && hitSet.has(p)) ? " on" : "");
+    const code = document.createElement("b");
+    code.textContent = p;
+    sp.appendChild(code);
+    frag.appendChild(sp);
+  });
+  host.innerHTML = "";
+  host.appendChild(frag);
+}
+
+/** 读取内置应用清单 + 命中状态，并渲染到所有展示位。 */
+async function loadBuiltinApps(){
+  try{
+    const r = await api("/api/builtin/apps");
+    BUILTIN_APPS = (r && r.packages) || [];
+    const dir = $("#builtinDir");
+    if (dir) dir.textContent = (r && r.dir) || "—";
+    const sum = $("#builtinSummary");
+    if (sum){
+      sum.textContent = BUILTIN_APPS.length
+        ? ("共 " + BUILTIN_APPS.length + " 个：" + BUILTIN_APPS.map(a=>a.pkg).join("、"))
+        : "未检测到内置应用";
+    }
+    renderBuiltinChips($("#builtinList"), BUILTIN_APPS.map(a=>a.pkg));
+  }catch(e){
+    const sum = $("builtinSummary");
+    if (sum) sum.textContent = "读取失败：" + (e && e.message ? e.message : e);
+  }
+  // 命中状态（Doze / Lock / 保活 / OOM）
+  let st = null;
+  try{
+    st = await api("/api/builtin/status");
+    BUILTIN_STATUS = st;
+  }catch(e){ BUILTIN_STATUS = null; }
+  const pkgs = BUILTIN_APPS.map(a=>a.pkg);
+  const setOf = (arr)=> new Set(arr || []);
+  if (st){
+    renderBuiltinChips($("#notifKaBuiltin"), pkgs, setOf(st.notifKeepAlive));
+    renderBuiltinChips($("#a11yKaBuiltin"),  pkgs, setOf(st.a11yKeepAlive));
+    renderBuiltinChips($("#oomBuiltin"),     pkgs, setOf(st.oomProtected));
+  } else {
+    renderBuiltinChips($("#notifKaBuiltin"), pkgs);
+    renderBuiltinChips($("#a11yKaBuiltin"),  pkgs);
+    renderBuiltinChips($("#oomBuiltin"),     pkgs);
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Shizuku 守护（保活 + 防检测）
  * ------------------------------------------------------------------ */
@@ -1852,7 +1979,7 @@ function switchTab(name){
   if (name === "home") refreshOverview();
   if (name === "power") refreshPowerStatus();
   if (name === "clean") loadCleanState();
-  if (name === "settings") { loadOom(); loadShizuku(); loadKeepAliveAll(); }
+  if (name === "settings") { loadBuiltinApps(); loadOom(); loadShizuku(); loadKeepAliveAll(); }
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
 }
@@ -2560,6 +2687,8 @@ function bind(){
   const kanS = $("#btnNotifKaSave");    if (kanS) kanS.onclick = ()=> saveKeepAlive(KA_KINDS[0]);
   const kaaR = $("#btnA11yKaRefresh"); if (kaaR) kaaR.onclick = ()=> loadKeepAlive(KA_KINDS[1]);
   const kaaS = $("#btnA11yKaSave");    if (kaaS) kaaS.onclick = ()=> saveKeepAlive(KA_KINDS[1]);
+  // 内置应用（system/app/*）默认保活
+  const bnr = $("#btnBuiltinRefresh"); if (bnr) bnr.onclick = loadBuiltinApps;
   // Shizuku 守护
   const szk = $("#swShizukuKeepAlive"); if (szk) szk.onchange = ()=> setShizukuSwitch("shizuku_keepalive_enable", szk.checked);
   const szd = $("#swShizukuDetect"); if (szd) szd.onchange = ()=> setShizukuSwitch("shizuku_detect_enable", szd.checked);

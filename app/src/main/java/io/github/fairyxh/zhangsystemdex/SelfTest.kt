@@ -2,6 +2,7 @@ package io.github.fairyxh.zhangsystemdex
 
 import android.database.sqlite.SQLiteDatabase
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
+import io.github.fairyxh.zhangsystemdex.core.BuiltinApps
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps
@@ -98,6 +99,7 @@ object SelfTest {
         toolChecks(s, ctx)
         moduleChecks(s, ctx)
         powerChecks(s, ctx)
+        builtinChecks(s, ctx)
         rubbishChecks(s, ctx)
         onlineRuleChecks(s, ctx)
         s.print()
@@ -501,6 +503,102 @@ object SelfTest {
     // instantiated (its constructor registers nothing and performs no I/O);
     // its daemon loop is driven by Main, not by SelfTest. This keeps the
     // regression suite non-destructive while still exercising all 6 classes.
+    // ---------- 模块内置应用（system/app/）默认保活 ----------
+    //
+    // 用户要求（2026-10-06）：内置应用必须默认获得 Doze 白名单、多任务 Lock、
+    // 通知使用权保活、无障碍服务保活、OOM 保护，且**不听从任何开关**。
+    // 这里只做只读断言（枚举 + 集合包含），不写系统状态，避免副作用。
+    private fun builtinChecks(s: Summary, ctx: DexContext) {
+        val modDir = ctx.modDir
+        val rootDir = java.io.File(ctx.config.rootDir)
+        val pkgs = try {
+            BuiltinApps.packages(modDir)
+        } catch (t: Throwable) {
+            s.add("内置应用.枚举", Status.FAIL, t.message ?: "")
+            return
+        }
+        s.add(
+            "内置应用.枚举(system/app)",
+            if (pkgs.isNotEmpty()) Status.PASS else Status.WARN,
+            "目录=${BuiltinApps.root(modDir).path} 数量=${pkgs.size}",
+        )
+        if (pkgs.isEmpty()) {
+            // 无内置应用时后续断言无意义，显式跳过。
+            s.add("内置应用.Doze白名单强制", Status.SKIP, "无内置应用")
+            s.add("内置应用.通知保活强制", Status.SKIP, "无内置应用")
+            s.add("内置应用.无障碍保活强制", Status.SKIP, "无内置应用")
+            s.add("内置应用.OOM保护强制", Status.SKIP, "无内置应用")
+            return
+        }
+
+        // Doze 生效集合（buildWhiteList ∪ builtin）—— 与 applyDozeList 语义一致。
+        try {
+            val white = LinkedHashSet<String>()
+            white.addAll(parseDozeConf(ctx))
+            white.addAll(pkgs)
+            val missing = pkgs.filter { it !in white }
+            s.add(
+                "内置应用.Doze白名单强制",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                "内置=${pkgs.size} 缺失=${missing.size}",
+            )
+        } catch (t: Throwable) {
+            s.add("内置应用.Doze白名单强制", Status.FAIL, t.message ?: "")
+        }
+
+        // 通知使用权 / 无障碍保活名单（KeepAliveList.read 已强制 union 内置应用）。
+        try {
+            val notif = KeepAliveList.read(rootDir, KeepAliveKind.NOTIFICATION)
+            val a11y = KeepAliveList.read(rootDir, KeepAliveKind.ACCESSIBILITY)
+            val mN = pkgs.filter { it !in notif }
+            val mA = pkgs.filter { it !in a11y }
+            s.add(
+                "内置应用.通知保活强制",
+                if (mN.isEmpty()) Status.PASS else Status.FAIL,
+                "生效名单=${notif.size} 缺失=${mN.size}",
+            )
+            s.add(
+                "内置应用.无障碍保活强制",
+                if (mA.isEmpty()) Status.PASS else Status.FAIL,
+                "生效名单=${a11y.size} 缺失=${mA.size}",
+            )
+        } catch (t: Throwable) {
+            s.add("内置应用.通知保活强制", Status.FAIL, t.message ?: "")
+            s.add("内置应用.无障碍保活强制", Status.FAIL, t.message ?: "")
+        }
+
+        // OOM 生效名单（effectivePackages 已强制 union 内置应用）。
+        try {
+            val eff = OomProtectList.effectivePackages(rootDir)
+            val missing = pkgs.filter { it !in eff }
+            s.add(
+                "内置应用.OOM保护强制",
+                if (missing.isEmpty()) Status.PASS else Status.FAIL,
+                "生效名单=${eff.size} 缺失=${missing.size}",
+            )
+        } catch (t: Throwable) {
+            s.add("内置应用.OOM保护强制", Status.FAIL, t.message ?: "")
+        }
+    }
+
+    /** 复刻 PowerManagerModule.buildWhiteList 的白名单解析（只读，用于断言）。 */
+    private fun parseDozeConf(ctx: DexContext): List<String> {
+        val text = try {
+            val f = java.io.File(ctx.config.rootDir, "doze.conf")
+            if (ctx.config.switch("only_base_enable") || !f.exists()) {
+                io.github.fairyxh.zhangsystemdex.core.ConfigManager.DEFAULT_DOZE_CONF
+            } else {
+                f.readText()
+            }
+        } catch (_: Throwable) {
+            io.github.fairyxh.zhangsystemdex.core.ConfigManager.DEFAULT_DOZE_CONF
+        }
+        return text.lineSequence()
+            .map { it.trim().removePrefix("+") }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .toList()
+    }
+
     private fun powerChecks(s: Summary, ctx: DexContext) {
         // 1) PowerStatistics: counter + snapshot contract.
         try {
@@ -963,10 +1061,17 @@ object SelfTest {
             KeepAliveList.write(tmpDir, KeepAliveKind.NOTIFICATION, listOf("com.catchingnow.np"))
             KeepAliveList.write(tmpDir, KeepAliveKind.ACCESSIBILITY, listOf("li.songe.gkd"))
             val eff = OomProtectList.effectivePackages(tmpDir)
-            val ok = eff.containsAll(
+            // 生效名单 = 用户名单 ∪ 保活名单 ∪ 模块内置应用（内置应用强制并入）。
+            val builtin = OomProtectList.builtinPackages(tmpDir)
+            val expected = LinkedHashSet(
                 listOf("com.tencent.mm", "com.catchingnow.np", "li.songe.gkd")
-            ) && eff.size == 3
-            s.add("OOM.并入保活名单", if (ok) Status.PASS else Status.FAIL, "生效名单=$eff")
+            ).also { it.addAll(builtin) }
+            val ok = eff.containsAll(expected) && eff.size == expected.size
+            s.add(
+                "OOM.并入保活名单",
+                if (ok) Status.PASS else Status.FAIL,
+                "生效名单=${eff.size}（含内置 ${builtin.size}），期望=${expected.size}"
+            )
             tmpDir.deleteRecursively()
         } catch (t: Throwable) {
             s.add("OOM.并入保活名单", Status.FAIL, t.message ?: "")

@@ -231,6 +231,9 @@ class HttpBackend(
             "/api/keepalive/get" -> apiKeepAliveGet(query)
             "/api/keepalive/set" -> apiKeepAliveSet(method, body)
             "/api/keepalive/apps" -> apiKeepAliveApps(query)
+            // ===== 模块内置应用（system/app/，默认保活不听配置）=====
+            "/api/builtin/apps" -> apiBuiltinApps()
+            "/api/builtin/status" -> apiBuiltinStatus()
             // ===== Shizuku 守护（保活 + 防检测）=====
             "/api/shizuku/status" -> apiShizukuStatus()
             "/api/shizuku/residue" -> apiShizukuResidue()
@@ -1666,6 +1669,12 @@ class HttpBackend(
         sb.append(",\"manual\":").append(manual.size)
         sb.append(",\"known\":").append(effective.size)
         sb.append(",\"fromKeepAlive\":").append(jsonStrArray(fromKeepAlive))
+        // 模块内置应用（system/app/）：始终受 OOM 保护，不听从 oom_protect_enable。
+        val builtin = OomProtectList.builtinPackages(root)
+        val builtinSet = builtin.toHashSet()
+        sb.append(",\"builtin\":").append(jsonStrArray(builtin))
+        sb.append(",\"builtinCount\":").append(builtin.size)
+        sb.append(",\"builtinProtected\":").append(jsonStrArray(protectedList.filter { it in builtinSet }))
         sb.append(",\"count\":").append(protectedList.size)
         sb.append(",\"protected\":").append(jsonStrArray(protectedList))
         sb.append(",\"safeFloor\":").append(io.github.fairyxh.zhangsystemdex.modules.OomProtectModule.SAFE_FLOOR)
@@ -1739,7 +1748,15 @@ class HttpBackend(
         }
         sb.append('}')
         sb.append(",\"title\":").append(q(kind.title))
+        // userList = 文件中的用户名单（不含内置应用，供 UI 回写）；
+        // list = 实际生效名单（用户名单 ∪ 内置应用）；builtin = 内置应用。
+        val userOnly = KeepAliveList.readUserOnly(rootDir, kind)
+        val builtin = KeepAliveList.builtinPackages(rootDir)
+        sb.append(",\"userList\":").append(jsonStrArray(userOnly))
         sb.append(",\"list\":").append(jsonStrArray(list))
+        sb.append(",\"builtin\":").append(jsonStrArray(builtin))
+        sb.append(",\"builtinCount\":").append(builtin.size)
+        sb.append(",\"enforced\":").append(jsonStrArray(list))
         sb.append(",\"enabled\":").append(jsonStrArray(enabledPkgs.sorted()))
         // 总开关当前值（供页面直接读取，无需再解析 switches.conf）
         val swOn = try { ctx.config.switch(kind.let {
@@ -1792,13 +1809,17 @@ class HttpBackend(
             else -> return jsonError("缺少 content 或 packages")
         }
 
-        if (!KeepAliveList.write(rootDir, kind, normalized)) {
+        // 只把用户名单写盘（内置应用不入文件，始终隐式生效）。
+        val toWrite = normalized.filter { it !in KeepAliveList.builtinPackages(rootDir).toSet() }
+        if (!KeepAliveList.write(rootDir, kind, toWrite)) {
             return jsonError("写入失败: ${kind.fileName}")
         }
+        val effective = KeepAliveList.read(rootDir, kind)
         val sb = StringBuilder()
         sb.append("{\"ok\":true,\"code\":0,\"kind\":").append(q(kind.name.lowercase()))
-        sb.append(",\"count\":").append(normalized.size)
-        sb.append(",\"list\":").append(jsonStrArray(normalized)).append('}')
+        sb.append(",\"count\":").append(effective.size)
+        sb.append(",\"userList\":").append(jsonStrArray(toWrite))
+        sb.append(",\"list\":").append(jsonStrArray(effective)).append('}')
         return jsonRaw(sb.toString())
     }
 
@@ -1855,6 +1876,101 @@ class HttpBackend(
     // ==================================================================
     // Shizuku 守护
     // ==================================================================
+
+    // ==================================================================
+    // 模块内置应用（system/app/）—— 默认保活，不听从配置
+    // ==================================================================
+    /**
+     * GET /api/builtin/apps
+     *
+     * 列出模块自身携带（挂载为系统应用）的全部内置应用。这些应用由
+     * [BuiltinApps] 从 `<modDir>/system/app/` 枚举（目录名即包名），
+     * **默认**且**强制**获得下列保活（不受任何开关控制）：
+     *   - Doze 白名单（电池优化白名单）
+     *   - 多任务 Lock（MIUI locked_apps / ColorOS launcher）
+     *   - 通知使用权保活、无障碍服务保活
+     *   - OOM 保护（oom_score_adj）
+     */
+    private fun apiBuiltinApps(): String {
+        val list = BuiltinApps.packages(ctx.modDir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"dir\":").append(q(BuiltinApps.root(ctx.modDir).absolutePath))
+        sb.append(",\"count\":").append(list.size)
+        sb.append(",\"packages\":").append(JsonBuilder.arr {
+            var first = true
+            for (pkg in list) {
+                if (!first) comma(); first = false
+                raw(JsonBuilder.obj {
+                    key("pkg"); value(pkg); comma()
+                    key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
+                    key("installed"); value(AppListProvider.installed(pkg)); comma()
+                    key("apk"); value(BuiltinApps.apkOf(ctx.modDir, pkg)?.name ?: "")
+                })
+            }
+        })
+        sb.append(",\"enforced\":").append(JsonBuilder.obj {
+            key("doze"); value(true); comma()
+            key("multitaskLock"); value(true); comma()
+            key("notifKeepAlive"); value(true); comma()
+            key("a11yKeepAlive"); value(true); comma()
+            key("oomProtect"); value(true)
+        })
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * GET /api/builtin/status
+     *
+     * 汇总内置应用在四个保活子系统中的生效情况（供 WebUI 展示）：
+     *   - doze：当前 `dumpsys deviceidle whitelist` 中命中的内置应用；
+     *   - keepalive：两个保活名单里命中的内置应用；
+     *   - oom：当前实际受 OOM 保护的内置应用（运行时快照）。
+     */
+    private fun apiBuiltinStatus(): String {
+        val list = BuiltinApps.packages(ctx.modDir)
+        val set = list.toHashSet()
+        val rootDir = File(ctx.config.rootDir)
+
+        // Doze 命中
+        val dozeHit = try {
+            val out = io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+                .run("dumpsys deviceidle whitelist", 15000L) ?: ""
+            val text = out
+            list.filter { text.contains(it) }
+        } catch (_: Throwable) { emptyList() }
+
+        // 保活名单命中
+        val notifHit = KeepAliveList.read(rootDir, KeepAliveKind.NOTIFICATION).filter { it in set }
+        val a11yHit = KeepAliveList.read(rootDir, KeepAliveKind.ACCESSIBILITY).filter { it in set }
+
+        // OOM 运行时快照
+        val oomProtected = RuntimeRegistry.get("oom_protect")
+            ?.let { st ->
+                (st.extras["protectedList"] as? String)?.split(',')
+                    ?.filter { it.isNotBlank() && it in set } ?: emptyList()
+            } ?: emptyList()
+
+        // 多任务 Lock 命中（MIUI 写入 settings system locked_apps）
+        val locked = try {
+            val v = io.github.fairyxh.zhangsystemdex.core.ShellExecutor
+                .run("settings get system locked_apps", 15000L) ?: ""
+            list.filter { v.contains(it) }
+        } catch (_: Throwable) { emptyList() }
+
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"count\":").append(list.size)
+        sb.append(",\"packages\":").append(jsonStrArray(list))
+        sb.append(",\"doze\":").append(jsonStrArray(dozeHit))
+        sb.append(",\"locked\":").append(jsonStrArray(locked))
+        sb.append(",\"notifKeepAlive\":").append(jsonStrArray(notifHit))
+        sb.append(",\"a11yKeepAlive\":").append(jsonStrArray(a11yHit))
+        sb.append(",\"oomProtected\":").append(jsonStrArray(oomProtected))
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
 
     /**
      * Shizuku 运行状态：

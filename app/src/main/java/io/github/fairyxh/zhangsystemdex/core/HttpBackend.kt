@@ -227,6 +227,10 @@ class HttpBackend(
             "/api/oom/write" -> apiOomWrite(method, body)
             "/api/oom/status" -> apiOomStatus()
             "/api/oom/apps" -> apiOomApps()
+            // ===== 权限保活（通知使用权 / 无障碍服务）=====
+            "/api/keepalive/get" -> apiKeepAliveGet(query)
+            "/api/keepalive/set" -> apiKeepAliveSet(method, body)
+            "/api/keepalive/apps" -> apiKeepAliveApps(query)
             else -> jsonError("未知接口: $path")
         }
     }
@@ -1675,6 +1679,152 @@ class HttpBackend(
                 raw(JsonBuilder.obj {
                     key("pkg"); value(pkg); comma()
                     key("system"); value(pkg in system)
+                })
+            }
+        }).append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    // ==================================================================
+    // 权限保活（通知使用权 / 无障碍服务）
+    // ==================================================================
+
+    /** 解析 kind 参数：notif|a11y（默认 notif）。 */
+    private fun keepAliveKind(param: String?): KeepAliveKind =
+        if (param == "a11y" || param == "accessibility") KeepAliveKind.ACCESSIBILITY
+        else KeepAliveKind.NOTIFICATION
+
+    /**
+     * GET /api/keepalive/get?kind=notif|a11y
+     * 返回：名单、当前系统已启用的包、以及每个名单项的当前状态。
+     */
+    private fun apiKeepAliveGet(query: Map<String, String>): String {
+        val kind = keepAliveKind(query["kind"])
+        val rootDir = java.io.File(ctx.config.rootDir)
+        val list = KeepAliveList.read(rootDir, kind)
+
+        // 系统侧当前已启用的包
+        val enabledPkgs: Set<String> = try {
+            when (kind) {
+                KeepAliveKind.NOTIFICATION -> NotificationGrant.listPackages().toSet()
+                KeepAliveKind.ACCESSIBILITY -> AccessibilityGrant.listPackages().toSet()
+            }
+        } catch (t: Throwable) {
+            Logger.w(name, "读取 ${kind.fileName} 系统状态失败: ${t.message}")
+            emptySet()
+        }
+
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"kind\":").append(q(kind.name.lowercase()))
+        sb.append(",\"file\":").append(q(KeepAliveList.file(rootDir, kind).absolutePath))
+        sb.append(",\"title\":").append(q(kind.title))
+        sb.append(",\"list\":").append(jsonStrArray(list))
+        sb.append(",\"enabled\":").append(jsonStrArray(enabledPkgs.sorted()))
+        // 总开关当前值（供页面直接读取，无需再解析 switches.conf）
+        val swOn = try { ctx.config.switch(kind.let {
+            when (it) {
+                KeepAliveKind.NOTIFICATION -> "notif_keepalive_enable"
+                KeepAliveKind.ACCESSIBILITY -> "a11y_keepalive_enable"
+            }
+        }) } catch (_: Throwable) { false }
+        sb.append(",\"switchEnabled\":").append(swOn)
+        sb.append(",\"items\":").append(JsonBuilder.arr {
+            var first = true
+            for (pkg in list) {
+                if (!first) comma()
+                first = false
+                raw(JsonBuilder.obj {
+                    key("pkg"); value(pkg); comma()
+                    key("enabled"); value(pkg in enabledPkgs); comma()
+                    key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
+                    key("installed"); value(AppListProvider.installed(pkg))
+                })
+            }
+        })
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * POST /api/keepalive/set  {kind, content} 或 {kind, packages:[...]}
+     * 归一化后原子落盘。
+     */
+    private fun apiKeepAliveSet(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val obj = MiniJson.parseObject(body) ?: return jsonError("请求体不是 JSON")
+        val kind = keepAliveKind(obj["kind"])
+        val rootDir = java.io.File(ctx.config.rootDir)
+
+        val normalized: List<String> = when {
+            obj["content"] != null -> KeepAliveList.normalize(obj["content"]!!)
+            obj["packages"] != null -> {
+                // 支持 JSON 数组或以换行/逗号分隔的字符串
+                val raw = obj["packages"]!!
+                val parts = if (raw.trimStart().startsWith("[")) {
+                    raw.trim().trimStart('[').trimEnd(']')
+                        .split(',').map { it.trim().trim('"') }
+                } else {
+                    raw.split('\n', ',')
+                }
+                KeepAliveList.normalize(parts.joinToString("\n"))
+            }
+            else -> return jsonError("缺少 content 或 packages")
+        }
+
+        if (!KeepAliveList.write(rootDir, kind, normalized)) {
+            return jsonError("写入失败: ${kind.fileName}")
+        }
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0,\"kind\":").append(q(kind.name.lowercase()))
+        sb.append(",\"count\":").append(normalized.size)
+        sb.append(",\"list\":").append(jsonStrArray(normalized)).append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /**
+     * GET /api/keepalive/apps?kind=notif|a11y
+     * 枚举所有「已声明」该权限的应用（供 WebUI 勾选列表）。
+     * 额外标注：是否在保活名单、是否已启用、是否系统应用。
+     */
+    private fun apiKeepAliveApps(query: Map<String, String>): String {
+        val kind = keepAliveKind(query["kind"])
+        val rootDir = java.io.File(ctx.config.rootDir)
+        val inList = KeepAliveList.read(rootDir, kind).toHashSet()
+
+        val apps: List<String> = try {
+            when (kind) {
+                KeepAliveKind.NOTIFICATION -> AppListProvider.notificationListenerApps()
+                KeepAliveKind.ACCESSIBILITY -> AppListProvider.accessibilityApps()
+            }
+        } catch (t: Throwable) {
+            Logger.w(name, "枚举 ${kind.fileName} 应用失败: ${t.message}")
+            emptyList()
+        }
+
+        val system: Set<String> = try {
+            AppListProvider.systemPackages().toHashSet()
+        } catch (_: Throwable) { emptySet() }
+
+        val enabledPkgs: Set<String> = try {
+            when (kind) {
+                KeepAliveKind.NOTIFICATION -> NotificationGrant.listPackages().toSet()
+                KeepAliveKind.ACCESSIBILITY -> AccessibilityGrant.listPackages().toSet()
+            }
+        } catch (_: Throwable) { emptySet() }
+
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"kind\":").append(q(kind.name.lowercase()))
+        sb.append(",\"apps\":").append(JsonBuilder.arr {
+            var first = true
+            for (pkg in apps) {
+                if (!first) comma()
+                first = false
+                raw(JsonBuilder.obj {
+                    key("pkg"); value(pkg); comma()
+                    key("label"); value(AppListProvider.label(pkg) ?: pkg); comma()
+                    key("system"); value(pkg in system); comma()
+                    key("inList"); value(pkg in inList); comma()
+                    key("enabled"); value(pkg in enabledPkgs)
                 })
             }
         }).append('}')

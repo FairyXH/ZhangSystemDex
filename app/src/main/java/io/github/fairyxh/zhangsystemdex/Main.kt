@@ -13,6 +13,8 @@ import io.github.fairyxh.zhangsystemdex.core.RuntimeRegistry
 import io.github.fairyxh.zhangsystemdex.core.SystemContext
 import io.github.fairyxh.zhangsystemdex.core.power.PowerOptimizer
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.AccessibilityKeepAliveModule
+import io.github.fairyxh.zhangsystemdex.modules.NotificationKeepAliveModule
 import io.github.fairyxh.zhangsystemdex.modules.AccelerometerRotationModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.AppManagerModule
@@ -323,6 +325,18 @@ object Main {
             },
             ModuleEntry("accessibility_guard", { true }, label = "无障碍守护", desc = "常驻守护无障碍服务不被系统关闭") {
                 AccessibilityGuardModule(ctx)
+            },
+            ModuleEntry(
+                "notif_keepalive", { sw.switch("notif_keepalive_enable") },
+                label = "通知使用权保活", desc = "名单内应用的通知使用权掉线后自动恢复（WebUI「保活」页维护）",
+            ) {
+                NotificationKeepAliveModule(ctx)
+            },
+            ModuleEntry(
+                "a11y_keepalive", { sw.switch("a11y_keepalive_enable") },
+                label = "无障碍服务保活", desc = "名单内应用的无障碍服务掉线后自动恢复（WebUI「保活」页维护）",
+            ) {
+                AccessibilityKeepAliveModule(ctx)
             },
             ModuleEntry(
                 "service_guard", { enabled("service_guard_enable") || enabled("extra_features_enable") },

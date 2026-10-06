@@ -47,8 +47,16 @@ class AppManagerModule(private val ctx: DexContext) {
             .map { it.trim().removePrefix("+") }
             .filter { it.isNotEmpty() && !it.startsWith("#") }
         val groups = permissionGroups()
+        // 同 applyModuleAppOps：已处理过的包不再重复跑逐包 `appops get`（这些命令
+        // 在 system_server 内执行，是软重启的放大器）。
+        val doneFile = File(ctx.config.rootDir, APPOPS_DOZE_DONE_CONF)
+        val done = readDonePackages(doneFile)
         for (pkg in packages) {
-            if (!AppListProvider.installed(pkg)) continue
+            if (pkg in done) continue
+            if (!AppListProvider.installed(pkg)) {
+                done.add(pkg); saveDonePackages(doneFile, done)
+                continue
+            }
             val ops = ShellExecutor.run("appops get $pkg") ?: continue
             for (line in ops.lineSequence()) {
                 val op = line.trim().substringBefore(':').trim()
@@ -57,6 +65,7 @@ class AppManagerModule(private val ctx: DexContext) {
             for (g in groups) {
                 if (g.isNotEmpty()) FrameworkOps.grantPermission(pkg, g)
             }
+            done.add(pkg); saveDonePackages(doneFile, done)
             Logger.i("AppManager", "AppOps/权限放行完成: $pkg")
         }
     }
@@ -94,7 +103,23 @@ class AppManagerModule(private val ctx: DexContext) {
         var opSuccess = 0
         var opFailure = 0
         val ops = availableOps()
-        for (pkg in packages) {
+        // ---- 已完成包缓存：避免每 60s 对 50 个包 × ~40 个 OP 重复跑数千条 IPC ----
+        // 这是 2026-10-06 软重启事故的主力放大器之一：ModuleAppOps 周期 60s，
+        // 每轮对全部历史包逐个 `cmd appops get` + `cmd appops set`，这些命令都在
+        // system_server 内执行，叠加 ColorOS 的 AppBatteryTracker 同一把锁 →
+        // Binder 线程池耗尽 → Watchdog 杀死 system_server。
+        // 现改为：**每包只完整处理一次**，结果落盘；之后仅处理新出现的包。
+        val doneFile = File(ctx.config.rootDir, MODULE_APPOPS_DONE_CONF)
+        val done = readDonePackages(doneFile)
+        val todo = packages.filterNot { it in done }
+        if (todo.isEmpty()) {
+            Logger.i("AppOps", "全部 ${packages.size} 个包已完成授权（缓存命中），本轮跳过")
+            return
+        }
+        if (todo.size < packages.size) {
+            Logger.i("AppOps", "增量处理：已完成 ${done.size} 个，本轮待处理 ${todo.size} 个")
+        }
+        for (pkg in todo) {
             try {
                 if (!packageExists(pkg)) {
                     missing++
@@ -114,6 +139,9 @@ class AppManagerModule(private val ctx: DexContext) {
                     }
                 }
                 applyVendorPermissionDatabases(pkg)
+                // 完成后立即记录，避免下轮重复处理（增量落盘）。
+                done.add(pkg)
+                saveDonePackages(doneFile, done)
                 Logger.i("AppOps", "包处理完成: $pkg")
             } catch (t: Throwable) {
                 Logger.w("AppOps", "包处理异常，继续下一个: $pkg (${t.message})")
@@ -531,8 +559,46 @@ class AppManagerModule(private val ctx: DexContext) {
         return defaults
     }
 
+    /** 已完成 AppOps 授权的包（增量缓存，避免每轮重复数千条 IPC）。 */
+    private fun readDonePackages(f: File): MutableSet<String> {
+        val out = mutableSetOf<String>()
+        try {
+            if (f.exists()) {
+                for (raw in f.readLines()) {
+                    val line = raw.trim().substringBefore('#').trim()
+                    if (line.isNotEmpty()) out.add(line)
+                }
+            }
+        } catch (t: Throwable) {
+            Logger.w("AppOps", "读取 $MODULE_APPOPS_DONE_CONF 失败: ${t.message}")
+        }
+        return out
+    }
+
+    private fun saveDonePackages(f: File, packages: Set<String>) {
+        try {
+            val text = buildString {
+                append("# 已完成 AppOps 授权的模块包（由守护自动维护，勿手改）\n")
+                append("# 一行一个包名。文件存在即视为该包已处理完毕，不再重复跑 cmd appops。\n")
+                for (p in packages.sorted()) append(p).append('\n')
+            }
+            val tmp = File(f.parentFile, f.name + ".tmp")
+            tmp.writeText(text, Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(text, Charsets.UTF_8)
+                tmp.delete()
+            }
+        } catch (t: Throwable) {
+            Logger.w("AppOps", "写入 $MODULE_APPOPS_DONE_CONF 失败: ${t.message}")
+        }
+    }
+
     companion object {
         const val MODULE_APPOPS_CONF = "appops_packages.conf"
+        /** 已完成授权包名缓存文件（增量处理用）。 */
+        const val MODULE_APPOPS_DONE_CONF = "appops_done.conf"
+        /** doze.conf 包的 AppOps 放行完成缓存。 */
+        const val APPOPS_DOZE_DONE_CONF = "appops_doze_done.conf"
         val PACKAGE_PATTERN = Regex("[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+")
         const val APPOPS_TEST_PACKAGE_LIMIT = 3
         const val APPOPS_TEST_OP_LIMIT = 3

@@ -293,7 +293,11 @@ object Main {
                 label = "模块 AppOps 授权",
                 desc = "为模块目录 APK 授予运行所需 AppOps",
             ) {
-                object : DaemonLoop(ctx, 60000L, pauseAware = false) {
+                // 周期放宽到 300s：applyModuleAppOps 已改为「每包只完整处理一次」的
+                // 增量模式，正常情况下一轮后即无待处理包；周期加长只是兜底新装包。
+                // （旧值 60s 会让未命中缓存的包反复触发数千条 cmd appops IPC，
+                //  叠加 ColorOS AppBatteryTracker 锁竞争导致 system_server 软重启。）
+                object : DaemonLoop(ctx, 300_000L, pauseAware = false) {
                     override val name: String = "ModuleAppOps"
                     override fun tick() {
                         if (!ctx.config.switch("module_appops_auth_enable")) return

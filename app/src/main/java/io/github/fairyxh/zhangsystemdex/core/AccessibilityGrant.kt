@@ -137,10 +137,14 @@ object AccessibilityGrant {
 
     /** 探测某包的 AccessibilityService 组件（相对形式，如 `pkg/.Service`）。 */
     fun probeComponents(pkg: String): List<String> {
-        val dump = ShellExecutor.run("cmd package dump $pkg", 20000L)
-            ?: ShellExecutor.run("dumpsys package $pkg", 20000L)
-            ?: return emptyList()
-
+        // 结果缓存（含空结果）：保住「本包没有 AccessibilityService」这一负结论，
+        // 避免保活 tick（15s）对 45 个内置应用**每轮**重新 dump。
+        // 无缓存时没有无障碍组件的应用会被永久重试 → 每 15s 一条
+        // `cmd package dump` → system_server Binder 池耗尽 → Watchdog 软重启。
+        probeCache[pkg]?.let { return it }
+        val dump = ShellExecutor.run("cmd package dump $pkg", 8_000L)
+            ?: ShellExecutor.run("dumpsys package $pkg", 8_000L)
+            ?: return emptyList() // IPC 失败：不缓存，允许下次重试
         val result = mutableListOf<String>()
         var inSection = false
         for (raw in dump.lineSequence()) {
@@ -162,8 +166,16 @@ object AccessibilityGrant {
                 }
             }
         }
-        return result.distinct()
+        val out = result.distinct()
+        probeCache[pkg] = out
+        return out
     }
+
+    /** 组件探测结果缓存（含空结果，避免无无障碍组件的包被永久重复 dump）。 */
+    private val probeCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /** 探查失败（IPC 超时）时清空缓存，允许下一次重试。 */
+    fun invalidateProbe(pkg: String) { probeCache.remove(pkg) }
 
     /** 把 `pkg/.Svc` 规范化为 `pkg/pkg.Svc`。 */
     fun normalizeComponent(comp: String): String {

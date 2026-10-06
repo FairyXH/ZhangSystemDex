@@ -122,19 +122,35 @@ object NotificationGrant {
      * 解析失败时返回 null，调用方应保守处理（不误判为掉线）。
      */
     fun liveListeners(): Set<String>? {
-        val dump = ShellExecutor.run("dumpsys notification", 20_000L)
+        // 结果缓存 [LIVE_TTL_MS]：本方法会被遍历循环（保活 tick）反复调用，而
+        // `dumpsys notification` 输出可达 1MB+、且最终在 system_server 内执行；
+        // 无缓存时一轮遍历就会发起 N 条该命令 → system_server Binder 池耗尽 →
+        // Watchdog 杀死 system_server（2026-10-06 软重启事故放大器）。
+        val now = System.currentTimeMillis()
+        liveCache?.let { if (now - liveAt < LIVE_TTL_MS) return it }
+        // 超时从 20s 收紧到 5s：该命令若被 system_server 卡住，20s 足够触发
+        // Watchdog（15s）级联；5s 让其尽早放弃，减少悬停 binder 线程占用。
+        val dump = ShellExecutor.run("dumpsys notification", 5_000L)
         if (dump == null) {
             Logger.w(TAG, "liveListeners: dumpsys notification 执行失败/超时")
-            return null
+            return liveCache
         }
         val parsed = parseLiveListeners(dump)
         if (parsed == null) {
             Logger.w(TAG, "liveListeners: 输出中未找到 Live 段（长度=${dump.length}，" +
                 "含 NotificationService=${dump.contains("NotificationService")}，" +
                 "含 Live=${dump.contains("Live")}）")
+        } else {
+            liveCache = parsed
+            liveAt = now
         }
         return parsed
     }
+
+    @Volatile private var liveCache: Set<String>? = null
+    @Volatile private var liveAt: Long = 0L
+    /** `dumpsys notification` 结果缓存时长（毫秒）。 */
+    private const val LIVE_TTL_MS = 10_000L
 
     /** 从 dumpsys notification 输出中解析 live listener 组件集合。 */
     fun parseLiveListeners(dump: String): Set<String>? {
@@ -194,10 +210,15 @@ object NotificationGrant {
      * 探测某包的 NotificationListenerService 组件（相对形式，如 `pkg/.E$V`）。
      */
     fun probeComponents(pkg: String): List<String> {
-        val dump = ShellExecutor.run("dumpsys package $pkg", 20000L)
-            ?: ShellExecutor.run("cmd package dump $pkg", 20000L)
-            ?: return emptyList()
-
+        // 结果缓存（含空结果）：保住「本包没有 NotificationListenerService」这一
+        // 负结论，避免保活 tick（15s）对 45 个内置应用**每轮**重新 dump。
+        // 不加缓存时，没有监听组件的应用会被永久重试 → 每 15s 一条
+        // `dumpsys package`/`cmd package dump` → system_server Binder 池耗尽
+        // → Watchdog 杀死 system_server（2026-10-06 软重启事故主力放大器）。
+        probeCache[pkg]?.let { return it }
+        val dump = ShellExecutor.run("dumpsys package $pkg", 8_000L)
+            ?: ShellExecutor.run("cmd package dump $pkg", 8_000L)
+            ?: return emptyList() // IPC 失败：**不缓存**，允许下次重试
         val result = mutableListOf<String>()
         var inSection = false
         for (raw in dump.lineSequence()) {
@@ -222,10 +243,18 @@ object NotificationGrant {
                 }
             }
         }
-        return result.distinct()
+        val out = result.distinct()
+        probeCache[pkg] = out
+        return out
     }
 
-    /** 把 `pkg/.E$V` 规范化为 `pkg/pkg.E$V`（与 framework flattenToString 一致）。 */
+    /** 组件探测结果缓存（含空结果，避免无监听组件的包被永久重复 dump）。 */
+    private val probeCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /** 探查失败（IPC 超时）时清空缓存，允许下一次重试。 */
+    fun invalidateProbe(pkg: String) { probeCache.remove(pkg) }
+
+/** 把 `pkg/.E$V` 规范化为 `pkg/pkg.E$V`（与 framework flattenToString 一致）。 */
     fun normalizeComponent(comp: String): String {
         val pkg = comp.substringBefore('/')
         var cls = comp.substringAfter('/', "")
@@ -306,6 +335,11 @@ object NotificationGrant {
             if (comps.isEmpty()) {
                 warnings.add("未找到 NotificationListenerService 组件")
                 Logger.w(TAG, "[listener] $pkg 未找到 listener 组件，跳过")
+                // 无监听组件 → 后续的 POST_NOTIFICATIONS / appop / Doze 白名单全部无意义，
+                // **直接返回**，不再为该包发起 3~4 条 system_server IPC。
+                // 保活 tick 会对全部内置应用（45 个）调用本方法，若继续执行，
+                // 每轮就是 45×4 ≈ 180 条 IPC，是软重启的主力放大器之一。
+                return GrantResult(pkg, listeners, false, null, false, false, warnings)
             } else {
                 for (c in comps) {
                     val norm = normalizeComponent(c)

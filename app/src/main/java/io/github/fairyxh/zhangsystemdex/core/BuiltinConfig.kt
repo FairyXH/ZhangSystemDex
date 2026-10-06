@@ -89,12 +89,18 @@ object BuiltinConfig {
      */
     fun isForcedOom(pkg: String): Boolean {
         forcedCache[pkg]?.let { return it }
-        pendingProbe.add(pkg)
+        // 已排入探测队列（尚未出结果）的包不再重复入队。
+        // 旧实现每次调用都 add，而本方法被 tick / HTTP / refreshList 高频调用，
+        // 会让同一个包被反复灌入队列 → 后台线程永不停歇地跑 `cmd package dump`。
+        if (probeQueued.add(pkg)) pendingProbe.add(pkg)
         return false
     }
 
     private val forcedCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
+    /** 已入过探测队列的包（去重，避免同一包被反复灌入）。 */
+    private val probeQueued = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    )
     /** 待后台探测的包名（去重、有序）。 */
     private val pendingProbe = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
@@ -105,7 +111,7 @@ object BuiltinConfig {
     const val FORCED_FILE_NAME = "builtin_forced.conf"
 
     /** 两次后台探测之间的最小间隔（毫秒），避免连续冲击 system_server。 */
-    private const val PROBE_INTERVAL_MS = 250L
+    private const val PROBE_INTERVAL_MS = 500L
 
     private fun forcedCacheFile(rootDir: File): File = File(rootDir, FORCED_FILE_NAME)
 
@@ -159,18 +165,22 @@ object BuiltinConfig {
             probeThreadStarted = true
         }
         val t = Thread({
-            var dirty = false
+            var dirty = 0
             while (true) {
                 val pkg = pendingProbe.poll()
                 if (pkg == null) {
-                    if (dirty) { saveForcedCache(rootDir); dirty = false }
+                    if (dirty > 0) { saveForcedCache(rootDir); dirty = 0 }
                     try { Thread.sleep(1500L) } catch (_: InterruptedException) { return@Thread }
                     continue
                 }
                 if (forcedCache.containsKey(pkg)) continue
                 val v = probeHasNotifOrA11y(pkg)
                 forcedCache[pkg] = v
-                dirty = true
+                dirty++
+                // 每处理 8 个包即增量落盘一次。
+                // 旧实现只在「队列为空」时落盘，而队列会被 tick/HTTP 持续灌入、
+                // 长期不为空 → 缓存永不落盘 → 重启后全部当作未命中重新探测。
+                if (dirty >= 8) { saveForcedCache(rootDir); dirty = 0 }
                 try { Thread.sleep(PROBE_INTERVAL_MS) } catch (_: InterruptedException) { saveForcedCache(rootDir); return@Thread }
             }
         }, "builtin-forced-probe")
@@ -180,15 +190,52 @@ object BuiltinConfig {
         Logger.i("BuiltinConfig", "组件探测后台线程已启动（串行限速 ${PROBE_INTERVAL_MS}ms/个）")
     }
 
+    /**
+     * 判断某包是否「声明了无障碍服务或通知监听服务」。
+     *
+     * ## 为什么不逐包跑 `cmd package dump`（2026-10-06 软重启事故根因）
+     *
+     * 旧实现对每个包 fork `cmd package dump` / `dumpsys package`，45 个内置应用
+     * 就是 90 条命令；这些命令在 **system_server** 内执行，叠加 ColorOS 的
+     * `AppBatteryTracker.updateBatteryUsageStatsIfNecessary` 同一把锁竞争，
+     * 实测有 31 个 Binder 线程排队等锁 → Binder 池（上限 16）耗尽 →
+     * `Watchdog` 15s 超时 → 杀死 system_server → **软重启**。
+     *
+     * 现改为：**一次性批量枚举**（`PackageManager.queryIntentServices`，
+     * 单次 IPC），得到「全部无障碍应用」与「全部通知监听应用」两个集合，
+     * 之后每个包只做一次 Set 查询。90 条命令 → 2 条，且不逐包悬停。
+     *
+     * 批量枚举失败（返回空）时保守返回 `false`（不强制保护），
+     * 不再回退到逐包 dump —— 逐包 dump 正是事故成因。
+     */
     private fun probeHasNotifOrA11y(pkg: String): Boolean {
         return try {
-            AccessibilityGrant.probeComponents(pkg).isNotEmpty() ||
-                NotificationGrant.probeComponents(pkg).isNotEmpty()
+            notifOrA11yPackages().contains(pkg)
         } catch (t: Throwable) {
-            Logger.w("BuiltinConfig", "探测 $pkg 通知/无障碍组件失败: ${t.message}")
+            Logger.w("BuiltinConfig", "批量探测 $pkg 通知/无障碍组件失败: ${t.message}")
             false
         }
     }
+
+    /** 批量枚举「声明了通知监听 / 无障碍服务」的包（带 30s 结果缓存，单次 IPC）。 */
+    private fun notifOrA11yPackages(): Set<String> {
+        val now = System.currentTimeMillis()
+        val cached = notifA11ySet
+        if (cached != null && now - notifA11yAt < NOTIF_A11Y_TTL_MS) return cached
+        val set = LinkedHashSet<String>()
+        set.addAll(AppListProvider.accessibilityApps())
+        set.addAll(AppListProvider.notificationListenerApps())
+        if (set.isNotEmpty()) {
+            notifA11ySet = set
+            notifA11yAt = now
+        }
+        return set
+    }
+
+    @Volatile private var notifA11ySet: Set<String>? = null
+    @Volatile private var notifA11yAt: Long = 0L
+    /** 批量枚举结果缓存时长（毫秒）。 */
+    private const val NOTIF_A11Y_TTL_MS = 30_000L
 
     /** 内置应用是否参与 OOM 保护（强制 ∪ 用户勾选）。 */
     fun isOomEnabled(rootDir: File, pkg: String): Boolean =

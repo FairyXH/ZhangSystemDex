@@ -89,21 +89,22 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
     }
 
     override fun tick() {
+        // 总开关关闭：用户名单停用，但**模块内置应用**仍必须受保护
+        // （用户要求：内置应用的 OOM 保活不听从配置）。
         if (!ctx.config.switch("oom_protect_enable")) {
-            // 开关被关闭：若仍有改动过的进程，做一次还原后清空。
-            if (touchedPids.isNotEmpty()) {
-                for (pid in touchedPids.toList()) {
-                    if (ProcessUtils.readFile("/proc/$pid/oom_score_adj") != null) {
-                        ProcessUtils.writeFile("/proc/$pid/oom_score_adj", "0")
-                    }
-                }
-                touchedPids.clear()
-                lastAdj.clear()
+            val builtin = OomProtectList.builtinPackages(File(ctx.config.rootDir))
+            if (builtin.isEmpty()) {
+                // 无内置应用：做一次还原后清空（保持原行为）。
+                if (touchedPids.isNotEmpty()) restoreAll()
+                packages = emptyList()
+                protected.clear()
+                publish()
+                return
             }
-            protected.clear()
-            return
+            packages = builtin
+        } else {
+            refreshList(force = false)
         }
-        refreshList(force = false)
         if (packages.isEmpty()) {
             // 名单为空：把所有曾改动的进程还原，避免"改过但不保护"的悬挂状态。
             restoreAll()

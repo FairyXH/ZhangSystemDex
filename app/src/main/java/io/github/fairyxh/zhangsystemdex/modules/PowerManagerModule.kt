@@ -1,6 +1,7 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
 import io.github.fairyxh.zhangsystemdex.core.AppListProvider
+import io.github.fairyxh.zhangsystemdex.core.BuiltinApps
 import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
@@ -26,6 +27,8 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     override fun onStart() {
         Logger.i(name, "模块启动")
+        // 内置应用（system/app/）的 Doze 白名单与多任务 Lock **始终**生效，
+        // 不听从 doze_enable / locked_apps_enable（用户要求）。
         if (ctx.config.switch("doze_enable")) {
             applyDozeList()
         } else {
@@ -33,14 +36,41 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         }
         if (ctx.config.switch("locked_apps_enable")) {
             applyLockedApps()
+        } else {
+            applyBuiltinLockedApps()
         }
     }
 
+    /** 内置应用（system/app/）—— 强制保活名单，来源见 [BuiltinApps]。 */
+    private fun builtinPackages(): List<String> = try {
+        BuiltinApps.packages(ctx.modDir)
+    } catch (t: Throwable) {
+        Logger.w(name, "枚举内置应用失败: ${t.message}")
+        emptyList()
+    }
+
+    /**
+     * 必要 Doze 白名单 + **全部内置应用**（内置应用不听从开关）。
+     * 在 `doze_enable=false` 时调用。
+     */
     private fun applyRequiredDozePackages() {
-        for (pkg in requiredDozePackages) {
+        val pkgs = LinkedHashSet(requiredDozePackages)
+        pkgs.addAll(builtinPackages())
+        for (pkg in pkgs) {
             FrameworkOps.addPowerSaveWhitelist(pkg)
         }
-        Logger.i(name, "必要 Doze 白名单已应用: ${requiredDozePackages.size} 个包")
+        Logger.i(name, "必要 + 内置应用 Doze 白名单已应用: ${pkgs.size} 个包")
+    }
+
+    /**
+     * 仅把内置应用写入多任务 Lock（`locked_apps_enable=false` 时调用），
+     * 保证「内置应用默认多任务锁定」不听从配置。
+     */
+    private fun applyBuiltinLockedApps() {
+        val pkgs = builtinPackages()
+        if (pkgs.isEmpty()) return
+        writeLockedApps(pkgs)
+        Logger.i(name, "内置应用多任务 Lock 已应用: ${pkgs.size} 个包（开关关闭仍生效）")
     }
 
     override fun tick() {
@@ -52,7 +82,9 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
     /** White-list maintenance, replacing DozeListChange.sh. */
     fun applyDozeList(xposedModules: List<String> = emptyList()) {
         try {
-            val white = buildWhiteList(xposedModules)
+            // 内置应用 **无条件** 加入（不听从 only_base_enable / doze.conf 配置）。
+            val white = LinkedHashSet(buildWhiteList(xposedModules))
+            white.addAll(builtinPackages())
             val out = ShellExecutor.run("dumpsys deviceidle whitelist") ?: return
             val current = out.lineSequence()
                 .mapNotNull { line ->
@@ -106,14 +138,22 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     /** Locked-app writing for MIUI/ColorOS, replacing LockedAppsAdd.sh. */
     fun applyLockedApps() {
+        // 内置应用 **无条件** 加入多任务锁定（不听从 locked_apps_enable 与 doze.conf）。
+        val packages = LinkedHashSet(buildWhiteList(emptyList()))
+        packages.addAll(builtinPackages())
+        writeLockedApps(packages.toList())
+    }
+
+    /** 实际写入 MIUI / ColorOS 的多任务锁定数据。 */
+    private fun writeLockedApps(packages: List<String>) {
         try {
-            val packages = buildWhiteList(emptyList())
             // MIUI locked_apps JSON.
             val arr = JSONArray()
             for (pkg in packages) arr.put(pkg)
             val root = JSONObject().put("u", -100).put("pkgs", arr)
             val locked = JSONArray().put(root)
             SettingsUtils.putSystem("locked_apps", locked.toString())
+            Logger.i(name, "已写入 MIUI 锁定应用（${arr.length()} 个）")
 
             // ColorOS launcher lock file.
             val launcherFile = File("/data/user_de/0/com.android.launcher/files/oplus/recenttask/app_lock_data_file_name")

@@ -318,24 +318,31 @@ object Main {
             ) {
                 GameOomProtectModule(ctx)
             },
+            // OOM 保护：**常驻**。总开关只控制「用户名单」，模块内置应用
+            // （system/app/）始终受保护，不听从配置（用户要求 2026-10-06）。
             ModuleEntry(
-                "oom_protect", { enabled("oom_protect_enable") },
-                label = "OOM 保护名单", desc = "保活名单内任意应用（可编辑），oom_score_adj 钳制到系统安全上限",
+                "oom_protect", { true },
+                label = "OOM 保护名单",
+                desc = "内置应用始终保护（不受开关控制）；用户名单受总开关控制，oom_score_adj 钳制到系统安全上限",
             ) {
                 OomProtectModule(ctx)
             },
             ModuleEntry("accessibility_guard", { true }, label = "无障碍守护", desc = "常驻守护无障碍服务不被系统关闭") {
                 AccessibilityGuardModule(ctx)
             },
+            // 通知使用权 / 无障碍服务保活：**常驻**。总开关只控制「用户名单」，
+            // 模块内置应用（system/app/）始终保活，不听从配置（用户要求 2026-10-06）。
             ModuleEntry(
-                "notif_keepalive", { sw.switch("notif_keepalive_enable") },
-                label = "通知使用权保活", desc = "名单内应用的通知使用权掉线后自动恢复（WebUI「保活」页维护）",
+                "notif_keepalive", { true },
+                label = "通知使用权保活",
+                desc = "内置应用始终保活（不受开关控制）；用户名单见 WebUI「保活」页",
             ) {
                 NotificationKeepAliveModule(ctx)
             },
             ModuleEntry(
-                "a11y_keepalive", { sw.switch("a11y_keepalive_enable") },
-                label = "无障碍服务保活", desc = "名单内应用的无障碍服务掉线后自动恢复（WebUI「保活」页维护）",
+                "a11y_keepalive", { true },
+                label = "无障碍服务保活",
+                desc = "内置应用始终保活（不受开关控制）；用户名单见 WebUI「保活」页",
             ) {
                 AccessibilityKeepAliveModule(ctx)
             },

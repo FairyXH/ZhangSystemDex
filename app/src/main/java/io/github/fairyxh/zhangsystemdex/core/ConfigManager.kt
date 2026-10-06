@@ -587,18 +587,18 @@ class ConfigManager(private val modDir: String) {
 
         /** Ordered switch descriptions (key -> Chinese description). */
         val SWITCH_DESCRIPTIONS: Map<String, String> = linkedMapOf(
-            "doze_enable" to "Doze 处理：电池优化白名单维护与夜间强制 Doze",
+            "doze_enable" to "Doze 处理：电池优化白名单维护与夜间强制 Doze（模块内置应用始终加入白名单，不受此开关控制）",
             "hma_config_enable" to "HideMyAppList 模板列表自动写入（含 Xposed 模块扫描）",
             "game_pause_enable" to "游戏在前台时暂停其他功能",
             "accessibility_guard_enable" to "无障碍服务守护",
-            "notif_keepalive_enable" to "通知使用权保活（WebUI「保活」页维护名单）",
-            "a11y_keepalive_enable" to "无障碍服务保活（WebUI「保活」页维护名单）",
+            "notif_keepalive_enable" to "通知使用权保活（WebUI「保活」页维护名单）（模块内置应用始终保活，不受此开关控制）",
+            "a11y_keepalive_enable" to "无障碍服务保活（WebUI「保活」页维护名单）（模块内置应用始终保活，不受此开关控制）",
             // ===== Shizuku 守护（保活 + 防检测）=====
             "shizuku_keepalive_enable" to "Shizuku 保活：主进程/服务端任一掉线即自动重启 starter（默认开启）",
             "shizuku_keepalive_interval" to "Shizuku 保活检查周期（秒，10-600，默认 30）",
             "shizuku_detect_enable" to "Shizuku 防检测：周期清理 /data/local* 下的 shizuku 痕迹文件（默认关闭）",
             "shizuku_detect_clean_starter" to "Shizuku 防检测：同时清理 starter 与服务端二进制（会短暂影响 Shizuku 自启，默认关闭）",
-            "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
+            "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）（模块内置应用始终锁定，不受此开关控制）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
             "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，默认亮屏也执行，是否仅息屏由 heavy_screen_off_only 控制，间隔周期数可配置）",
             "heavy_screen_off_only" to "高占用任务是否仅在息屏时执行（false=亮屏也允许执行，默认 false）",
@@ -629,7 +629,7 @@ class ConfigManager(private val modDir: String) {
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
             "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
-            "oom_protect_enable" to "OOM 保护名单：保活名单（通知使用权/无障碍）中的应用自动纳入，另可在清理页手工追加；oom_score_adj 钳制到 -900，关闭时自动还原",
+            "oom_protect_enable" to "OOM 保护名单：模块内置应用始终受保护（不受此开关控制）；保活名单（通知使用权/无障碍）中的应用自动纳入，另可手工追加；oom_score_adj 钳制到 -900",
             "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转",
             "bt_offload_guard_enable" to "蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，修复卡顿/无声/断连）",
 

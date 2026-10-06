@@ -1701,7 +1701,8 @@ class HttpBackend(
     private fun apiKeepAliveGet(query: Map<String, String>): String {
         val kind = keepAliveKind(query["kind"])
         val rootDir = java.io.File(ctx.config.rootDir)
-        val list = KeepAliveList.read(rootDir, kind)
+        // 首次访问即落盘默认配置（通知类默认含 com.catchingnow.np）
+        val list = KeepAliveList.ensureFile(rootDir, kind)
 
         // 系统侧当前已启用的包
         val enabledPkgs: Set<String> = try {
@@ -1717,6 +1718,16 @@ class HttpBackend(
         val sb = StringBuilder()
         sb.append("{\"ok\":true,\"kind\":").append(q(kind.name.lowercase()))
         sb.append(",\"file\":").append(q(KeepAliveList.file(rootDir, kind).absolutePath))
+        sb.append(",\"pathsFile\":").append(q(KeepAliveList.pathsFile(rootDir, kind).absolutePath))
+        val paths = KeepAliveList.readPaths(rootDir, kind)
+        sb.append(",\"paths\":{")
+        var pf = true
+        paths.forEach { (p, c) ->
+            if (!pf) sb.append(',')
+            pf = false
+            sb.append(q(p)).append(':').append(q(c))
+        }
+        sb.append('}')
         sb.append(",\"title\":").append(q(kind.title))
         sb.append(",\"list\":").append(jsonStrArray(list))
         sb.append(",\"enabled\":").append(jsonStrArray(enabledPkgs.sorted()))

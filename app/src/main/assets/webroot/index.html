@@ -559,6 +559,21 @@
         保存后立即生效（无需重启）。非法行（非包名格式）会被自动过滤。
       </div>
     </div>
+
+    <div class="section">
+      <div class="stitle">已学习组件路径（自动维护）</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#af52de">🔗</div>
+          <div class="body"><div class="k">路径映射文件</div>
+            <div class="d mono" id="kaPathsHint">正在读取…</div></div>
+          <div class="val"><button class="btn sm" id="btnKaPathsRefresh">刷新</button></div></div>
+      </div>
+      <div id="kaPathsList" class="kaapplist"><div class="oempty">加载中…</div></div>
+      <div class="sfoot">
+        守护模块会自动记录每个保活应用实际生效的组件路径（<code>包名=组件</code>），
+        掉线恢复时直接复用，免去每次重新探测。此文件由模块自动维护，一般无需手动编辑。
+      </div>
+    </div>
   </section>
 
   <!-- ============ TAB 5: 清理 ============ -->
@@ -1869,9 +1884,37 @@ async function setKaSwitch(key, on){
   }
 }
 
+function kaRenderPaths(paths){
+  const host = $("#kaPathsList");
+  if (!host) return;
+  const entries = Object.keys(paths || {});
+  if (!entries.length){
+    host.innerHTML = '<div class="oempty">暂无已学习路径（保活应用生效后会自动记录）</div>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  entries.forEach(function(pkg){
+    const row = document.createElement("div");
+    row.className = "oapp";
+    const body = document.createElement("div");
+    body.className = "oname";
+    const lab = document.createElement("div");
+    lab.className = "olabel";
+    lab.textContent = pkg;
+    const pk = document.createElement("div");
+    pk.className = "opkg";
+    pk.textContent = paths[pkg];
+    body.appendChild(lab); body.appendChild(pk);
+    row.appendChild(body);
+    frag.appendChild(row);
+  });
+  host.innerHTML = "";
+  host.appendChild(frag);
+}
+
 async function loadKeepAlive(){
   kaRenderHeader();
-  // 名单 + 状态 + 总开关
+  // 名单 + 状态 + 总开关 + 路径
   try{
     const r = await api("/api/keepalive/get?kind=" + KA_KIND);
     KA_LIST = new Set((r && r.list) || []);
@@ -1882,6 +1925,9 @@ async function loadKeepAlive(){
     if (sw) sw.checked = !!(r && r.switchEnabled);
     const fh = $("#kaFileHint");
     if (fh && r && r.file){ fh.textContent = "文件：" + r.file; fh.dataset.path = "1"; }
+    const ph = $("#kaPathsHint");
+    if (ph && r && r.pathsFile) ph.textContent = "文件：" + r.pathsFile;
+    kaRenderPaths((r && r.paths) || {});
   }catch(e){
     toast("读取保活名单失败：" + (e && e.message ? e.message : e), "err");
   }
@@ -2618,6 +2664,7 @@ function bind(){
   const kaSaveBtn = $("#btnKaSave"); if (kaSaveBtn) kaSaveBtn.onclick = ()=> kaSave(false);
   const kaRefresh = $("#btnKaRefresh"); if (kaRefresh) kaRefresh.onclick = loadKeepAlive;
   const kaSearch = $("#kaSearch"); if (kaSearch) kaSearch.oninput = kaRenderApps;
+  const kaPathsR = $("#btnKaPathsRefresh"); if (kaPathsR) kaPathsR.onclick = loadKeepAlive;
   $$("#kaSeg .seg").forEach(function(s){
     s.onclick = function(){ KA_KIND = s.dataset.kind || "notif"; loadKeepAlive(); };
   });

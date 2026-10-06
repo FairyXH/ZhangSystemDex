@@ -30,18 +30,49 @@ enum class KeepAliveKind(val fileName: String, val title: String, val settingsKe
 
 object KeepAliveList {
 
+    /** 各类型的「学习到的路径」文件名（与 asguard.paths 同构）。 */
+    fun pathsFile(rootDir: File, kind: KeepAliveKind): File = File(
+        rootDir,
+        when (kind) {
+            KeepAliveKind.NOTIFICATION -> "notif_keepalive.paths"
+            KeepAliveKind.ACCESSIBILITY -> "a11y_keepalive.paths"
+        },
+    )
+
+    /** 内置默认保活包名（用户要求：默认保活通知滤盒）。 */
+    val DEFAULT_PACKAGES: Map<KeepAliveKind, List<String>> = mapOf(
+        KeepAliveKind.NOTIFICATION to listOf("com.catchingnow.np"),
+        KeepAliveKind.ACCESSIBILITY to emptyList(),
+    )
+
     fun file(rootDir: File, kind: KeepAliveKind): File = File(rootDir, kind.fileName)
 
-    /** 读取并归一化。文件不存在返回空列表。 */
+    /** 读取并归一化。文件不存在返回内置默认列表。 */
     fun read(rootDir: File, kind: KeepAliveKind): List<String> {
+        val f = file(rootDir, kind)
+        if (!f.exists()) return DEFAULT_PACKAGES[kind] ?: emptyList()
         val text = try {
-            val f = file(rootDir, kind)
-            if (f.exists()) f.readText(Charsets.UTF_8) else ""
+            f.readText(Charsets.UTF_8)
         } catch (t: Throwable) {
             Logger.w("KeepAliveList", "读取 ${kind.fileName} 失败: ${t.message}")
             ""
         }
         return normalize(text)
+    }
+
+    /**
+     * 读取保活名单；文件不存在时把「内置默认」落盘后再返回，
+     * 使配置自始就存在（用户要求：像 asguard.conf 一样有配置文件）。
+     */
+    fun ensureFile(rootDir: File, kind: KeepAliveKind): List<String> {
+        val f = file(rootDir, kind)
+        if (!f.exists()) {
+            val def = DEFAULT_PACKAGES[kind] ?: emptyList()
+            write(rootDir, kind, def)
+            Logger.i("KeepAliveList", "已创建默认配置 ${kind.fileName}（${def.size} 项）")
+            return def
+        }
+        return read(rootDir, kind)
     }
 
     /** 归一化文本为包名列表（去注释/空行/重复/非法）。 */
@@ -58,9 +89,14 @@ object KeepAliveList {
 
     /** 渲染成文件文本（含文件头注释）。 */
     fun render(packages: List<String>, kind: KeepAliveKind): String = buildString {
-        append("# ${kind.title}名单：一行一个包名，`#` 开头为注释。\n")
-        append("# 列表中的应用，其 «${kind.title.replace("保活", "")}» 掉线后会被自动重新授权。\n")
+        append("# ${kind.title}名单：一行一个包名，`#` 开头为注释（支持行内注释）。\n")
+        append("# 列表中的应用，其「${kind.title.replace("保活", "")}」掉线后会被自动重新授权。\n")
         append("# 由 WebUI「保活」页维护，也可手工编辑（保存后无需重启）。\n")
+        val def = DEFAULT_PACKAGES[kind] ?: emptyList()
+        if (def.isNotEmpty()) {
+            append("# 内置默认：").append(def.joinToString("、")).append('\n')
+        }
+        append('\n')
         for (p in packages) append(p).append('\n')
     }
 
@@ -79,6 +115,62 @@ object KeepAliveList {
             true
         } catch (t: Throwable) {
             Logger.w("KeepAliveList", "写入 ${kind.fileName} 失败: ${t.message}")
+            false
+        }
+    }
+
+    // ==================== 路径映射（与 asguard.paths 同构） ====================
+
+    /**
+     * 读取「包名=组件路径」映射。
+     *
+     * 用途：记录每个包实际生效的 listener/无障碍组件，掉线恢复时可直接复用，
+     * 免去每次重新探测（探测需 fork dumpsys，较慢）。
+     */
+    fun readPaths(rootDir: File, kind: KeepAliveKind): MutableMap<String, String> {
+        val out = LinkedHashMap<String, String>()
+        val f = pathsFile(rootDir, kind)
+        if (!f.exists()) return out
+        try {
+            f.readLines().forEach { raw ->
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("#")) return@forEach
+                val pkg = line.substringBefore('=').trim()
+                val path = line.substringAfter('=', "").trim()
+                if (pkg.isNotEmpty() && path.isNotEmpty()) out[pkg] = path
+            }
+        } catch (t: Throwable) {
+            Logger.w("KeepAliveList", "读取 ${f.name} 失败: ${t.message}")
+        }
+        return out
+    }
+
+    /** 保存单个包的路径映射（保留其它条目）。 */
+    fun savePath(rootDir: File, kind: KeepAliveKind, pkg: String, path: String): Boolean {
+        val map = readPaths(rootDir, kind)
+        if (map[pkg] == path) return true
+        map[pkg] = path
+        return writePaths(rootDir, kind, map)
+    }
+
+    /** 整体写入路径映射表。 */
+    fun writePaths(rootDir: File, kind: KeepAliveKind, map: Map<String, String>): Boolean {
+        val f = pathsFile(rootDir, kind)
+        return try {
+            f.parentFile?.mkdirs()
+            val text = buildString {
+                append("# ${kind.title} · 已学习组件路径（pkg=组件），由守护模块自动维护。\n")
+                map.forEach { (p, c) -> append(p).append('=').append(c).append('\n') }
+            }
+            val tmp = File(f.parentFile, f.name + ".tmp")
+            tmp.writeText(text, Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(text, Charsets.UTF_8)
+                tmp.delete()
+            }
+            true
+        } catch (t: Throwable) {
+            Logger.w("KeepAliveList", "写入 ${f.name} 失败: ${t.message}")
             false
         }
     }

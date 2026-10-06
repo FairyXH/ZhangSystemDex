@@ -33,33 +33,11 @@ class AppManagerModule(private val ctx: DexContext) {
             val onlyConf = File(ctx.config.rootDir, "app_manager/disable_app_list_onlydisable.conf")
             val onlyList = readConf(onlyConf, listOf("com.oplus.safecenter", "com.oplus.securitypermission"))
             for (pkg in onlyList) disableApp(pkg)
+
             copyMount()
-            // 复制完成后修正 native lib 压缩：被挂载为系统应用的 APK 若以
-            // APK!/lib 路径 dlopen，so 必须是 Stored（未压缩），否则
-            // UnsatisfiedLinkError（Shizuku 服务端起不来即此原因）。
-            // 见 SystemAppLibFixer。
-            if (ctx.config.switch("system_app_libs_fix_enable")) fixSystemAppLibs()
         } catch (t: Throwable) {
             Logger.e("AppManager", "停用应用失败", t)
         }
-}
-
-    /**
-     * 修正 system/app 与 system/priv-app 下挂载应用的 native lib 压缩方式。
-     *
-     * 把 APK 内 `lib/` 下的 .so 条目重打包为 Stored（未压缩），使其能被
-     * dlopen 从 `APK!/lib/<abi>` 直接映射。仅当存在压缩的 so 时才重写文件，
-     * 幂等。耗时可能较长（需重写整个 APK），失败不影响其它功能。
-     */
-    fun fixSystemAppLibs(): io.github.fairyxh.zhangsystemdex.core.SystemAppLibFixer.Result {
-        val root = File(ctx.modDir)
-        val r = io.github.fairyxh.zhangsystemdex.core.SystemAppLibFixer.fix(root) {
-            Logger.i("AppManager", it)
-        }
-        if (r.changed) {
-            Logger.i("AppManager", "已重打包 ${r.fixed} 个挂载应用（so 改为 Stored）：${r.fixedNames}")
-        }
-        return r
     }
 
     fun applyAppOps() {

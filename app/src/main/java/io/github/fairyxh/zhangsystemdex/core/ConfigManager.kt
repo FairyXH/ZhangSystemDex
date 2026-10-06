@@ -218,6 +218,13 @@ class ConfigManager(private val modDir: String) {
         if (switches["online_rules_enable"] == null) {
             missing.add("online_rules_enable=false\t# 在线规则订阅：定期拉取规则直链（多套），合并进清理规则")
         }
+        // ===== 保活名单（默认开启）：缺失时补齐，保证「文件即唯一真源」 =====
+        if (switches["notif_keepalive_enable"] == null) {
+            missing.add("notif_keepalive_enable=true\t# 通知使用权保活（WebUI「保活」页维护名单）")
+        }
+        if (switches["a11y_keepalive_enable"] == null) {
+            missing.add("a11y_keepalive_enable=true\t# 无障碍服务保活（WebUI「保活」页维护名单）")
+        }
         // ===== 电源与后台调度优化子系统（新增，仅追加缺失键，不覆盖已有值）=====
         if (switches["power_optimize_enable"] == null) {
             missing.add("power_optimize_enable=false\t# 电源与后台调度优化（事件驱动省电子系统，关闭时不影响其它功能与系统 Doze）")

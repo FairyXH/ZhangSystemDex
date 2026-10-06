@@ -108,7 +108,7 @@ object AccessibilityGrant {
             if (line.startsWith("Enabled services:")) { inSection = true; continue }
             if (inSection) {
                 if (line.startsWith("Binding services:")) break
-                Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+/[A-Za-z0-9_.$]+")
+                Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+/[A-Za-z0-9_.${'$'}]+")
                     .findAll(line).forEach { out.add(normalizeComponent(it.value)) }
             }
         }
@@ -154,7 +154,7 @@ object AccessibilityGrant {
                     inSection = false
                     continue
                 }
-                val m = Regex("([A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+)/([A-Za-z0-9_.$]+)").find(line)
+                val m = Regex("([A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+)/([A-Za-z0-9_.${'$'}]+)").find(line)
                 if (m != null) {
                     val p = m.groupValues[1]
                     val c = m.groupValues[3]

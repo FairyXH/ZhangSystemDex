@@ -107,6 +107,87 @@ object NotificationGrant {
     fun listenersOf(pkg: String): List<String> =
         listListeners().filter { it.startsWith("$pkg/") }
 
+    // ======================= 存活检测（binder 是否真的连着） =======================
+
+    /**
+     * 当前真正处于 live（binder 已连接）状态的 listener 组件集合。
+     *
+     * 关键：`enabled_notification_listeners` 只表示「已被授权」，
+     * 并不代表 binder 真的连着。当 NMS 认为某 listener「状态已知」时，
+     * 它不会主动重绑，于是会出现「settings 里有、但 binder 是死的」的僵尸态
+     * —— 应用侧表现就是「Service has been disconnected」。
+     *
+     * 判定依据：`dumpsys notification` 的 `Live notification listeners` 段。
+     * 行形如 `ComponentInfo{pkg/cls} (user N): ...`，只取 user 0。
+     * 解析失败时返回 null，调用方应保守处理（不误判为掉线）。
+     */
+    fun liveListeners(): Set<String>? {
+        val dump = ShellExecutor.run("dumpsys notification", 20_000L)
+        if (dump == null) {
+            Logger.w(TAG, "liveListeners: dumpsys notification 执行失败/超时")
+            return null
+        }
+        val parsed = parseLiveListeners(dump)
+        if (parsed == null) {
+            Logger.w(TAG, "liveListeners: 输出中未找到 Live 段（长度=${dump.length}，" +
+                "含 NotificationService=${dump.contains("NotificationService")}，" +
+                "含 Live=${dump.contains("Live")}）")
+        }
+        return parsed
+    }
+
+    /** 从 dumpsys notification 输出中解析 live listener 组件集合。 */
+    fun parseLiveListeners(dump: String): Set<String>? {
+        return try {
+            val start = dump.indexOf("Live notification listeners")
+            if (start < 0) return null
+            val end = dump.indexOf("Snoozed notification listeners", start)
+            // 防御：段尾必须严格晚于段头；否则用固定长度窗口，避免 substring 越界。
+            val safeEnd = if (end > start) end else minOf(dump.length, start + 200_000)
+            if (safeEnd <= start) return null
+            val section = dump.substring(start, safeEnd)
+            val out = LinkedHashSet<String>()
+            // 注意：正则的字符类里若写 "$]" 会被 Kotlin 的字符串模板误解析，
+            // 所以这里统一把 `$` 拆成 [$] 的等价写法（chr(36)），彻底绕开模板。
+            val dollar = 36.toChar()
+            val pattern = "ComponentInfo\\{([A-Za-z0-9_.]+/[A-Za-z0-9_.$dollar]+)[^\\n]*\\(user\\s+(\\d+)\\)"
+            Logger.i(TAG, "parseLiveListeners pattern=${pattern.replace("\\", "\\\\")}")
+            val re = try {
+                Regex(pattern)
+            } catch (t: Throwable) {
+                Logger.w(TAG, "Regex 构建失败: ${t}")
+                return null
+            }
+            for (m in re.findAll(section)) {
+                // 只关心主用户；user -1 是系统内建监听器
+                if (m.groupValues[2] == "0") out.add(m.groupValues[1])
+            }
+            out
+        } catch (t: Throwable) {
+            Logger.w(TAG, "parseLiveListeners 异常: ${t}")
+            null
+        }
+    }
+
+    /**
+     * 某组件是否 live（binder 已连接）。
+     * @return true=live，false=已授权但 binder 未连接（僵尸态），null=无法判定
+     */
+    fun isLive(comp: String): Boolean? {
+        val live = liveListeners() ?: return null
+        val norm = normalizeComponent(comp)
+        return live.any { normalizeComponent(it) == norm }
+    }
+
+    /**
+     * 某包是否有任一 listener 处于 live 状态。
+     * @return true=live，false=已授权但全部为僵尸态，null=无法判定或未授权
+     */
+    fun isPackageLive(pkg: String): Boolean? {
+        val live = liveListeners() ?: return null
+        return live.any { it.startsWith("$pkg/") }
+    }
+
     // ======================= 组件探测 =======================
 
     /**
@@ -133,7 +214,7 @@ object NotificationGrant {
                     inSection = false
                     continue
                 }
-                val m = Regex("([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)").find(line)
+                val m = Regex("([A-Za-z0-9_.]+)/([A-Za-z0-9_.${'$'}]+)").find(line)
                 if (m != null) {
                     val p = m.groupValues[1]
                     val c = m.groupValues[2]
@@ -382,6 +463,50 @@ object NotificationGrant {
         if (removed > 0) writeListeners(kept)
         Logger.i(TAG, "clean: 移除 $removed 条，保留 ${kept.size} 条")
         return removed
+    }
+    /**
+     * 轻量强制重绑：不重启应用进程，只做 NMS 层的「解绑 -> 重绑」。
+     *
+     * 这是修复「僵尸 listener」的核心手段。实测（Android 15 / ColorOS）：
+     * 直接 `settings put secure enabled_notification_listeners` 无效 ——
+     * NMS 不保证重建 binder；必须走 `cmd notification disallow_listener`
+     * + `allow_listener` 这条正式流程，NMS 才会真正重新 bind。
+     *
+     * @param comp 已授权的 listener 组件（`pkg/pkg.E$V` 形式）
+     * @return true=重绑后已 live
+     */
+    fun forceRebind(comp: String): Boolean {
+        val norm = normalizeComponent(comp)
+        Logger.i(TAG, "forceRebind: $norm")
+        ShellExecutor.run("cmd notification disallow_listener '$norm'", 20_000L)
+        // 给 NMS 一点时间完成解绑（解绑会触发 onListenerDisconnected）
+        Thread.sleep(500)
+        val rc = ShellExecutor.runExit("cmd notification allow_listener '$norm'", 20_000L)
+        if (rc != 0) {
+            Logger.w(TAG, "forceRebind: allow_listener 返回 $rc")
+            return false
+        }
+        // 轮询等待 binder 真正连上（NMS 是异步 bind 的）
+        repeat(20) {
+            if (isLive(norm) == true) {
+                Logger.i(TAG, "forceRebind: 已 live $norm")
+                return true
+            }
+            try { Thread.sleep(300) } catch (_: InterruptedException) {}
+        }
+        Logger.w(TAG, "forceRebind: 重绑后仍未 live $norm")
+        return false
+    }
+
+    /**
+     * 轻量强制重绑（按包名，自动取已学习/已授权组件）。
+     * @return true=重绑成功
+     */
+    fun forceRebindPackage(pkg: String): Boolean {
+        val comp = listenersOf(pkg).firstOrNull()
+            ?: probeComponents(pkg).firstOrNull()?.let { normalizeComponent(it) }
+            ?: return false
+        return forceRebind(comp)
     }
 
     /**

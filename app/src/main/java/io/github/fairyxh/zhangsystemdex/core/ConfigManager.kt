@@ -225,6 +225,22 @@ class ConfigManager(private val modDir: String) {
         if (switches["a11y_keepalive_enable"] == null) {
             missing.add("a11y_keepalive_enable=true\t# 无障碍服务保活（WebUI「保活」页维护名单）")
         }
+        // ===== Shizuku 守护（保活 + 防检测）=====
+        if (switches["shizuku_keepalive_enable"] == null) {
+            missing.add("shizuku_keepalive_enable=true\t# Shizuku 保活：主进程/服务端任一掉线即自动重启 starter")
+        }
+        if (switches["system_app_libs_fix_enable"] == null) {
+            missing.add("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动补齐：修复被挂到 system/app 后 .so 找不到导致崩溃（Shizuku 服务端起不来即此因）")
+        }
+        if (switches["shizuku_keepalive_interval"] == null) {
+            missing.add("shizuku_keepalive_interval=30\t# Shizuku 保活检查周期（秒，10-600，默认 30）")
+        }
+        if (switches["shizuku_detect_enable"] == null) {
+            missing.add("shizuku_detect_enable=false\t# Shizuku 防检测：周期清理 /data/local* 下的 shizuku 痕迹文件")
+        }
+        if (switches["shizuku_detect_clean_starter"] == null) {
+            missing.add("shizuku_detect_clean_starter=false\t# Shizuku 防检测：同时清理 starter/服务端二进制（会短暂影响 Shizuku 自启，默认关）")
+        }
         // ===== 电源与后台调度优化子系统（新增，仅追加缺失键，不覆盖已有值）=====
         if (switches["power_optimize_enable"] == null) {
             missing.add("power_optimize_enable=false\t# 电源与后台调度优化（事件驱动省电子系统，关闭时不影响其它功能与系统 Doze）")
@@ -350,6 +366,12 @@ class ConfigManager(private val modDir: String) {
             sb.append("heavy_interval_cycles=\t# 高占用任务间隔周期数，留空=6（服务器模式 24）\n")
             sb.append("heavy_screen_off_only=false\t# 高占用任务是否仅在息屏时执行（false=亮屏也允许执行）\n")
             sb.append("module_appops_auth_enable=false\t# 为模块挂载 App 授权 AppOps（仅处理模块目录 APK）\n")
+            sb.append("\n# ===== Shizuku 守护（保活 + 防检测）=====\n")
+            sb.append("shizuku_keepalive_enable=true\t# Shizuku 保活（默认开启）\n")
+            sb.append("shizuku_keepalive_interval=30\t# Shizuku 保活检查周期（秒，10-600）\n")
+            sb.append("shizuku_detect_enable=false\t# Shizuku 防检测：清理 /data/local* 痕迹\n")
+            sb.append("shizuku_detect_clean_starter=false\t# 同时清理 starter/服务端二进制（影响自启）\n")
+            sb.append("system_app_libs_fix_enable=true\t# 挂载应用 native lib 自动补齐（修复 system/app 挂载后 .so 找不到）\n")
             sb.append("\n# 电源与后台调度优化参数（可选项，总开关见上方 power_optimize_enable）\n")
             sb.append("power_low_battery_threshold=20\t# 低电量阈值（百分比，0-100，默认 20）\n")
             sb.append("power_low_battery_cpu_cap=55\t# 低电量时 CPU 最高频率上限百分比（1-100，默认 55）\n")
@@ -531,6 +553,8 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable",
             "notif_keepalive_enable",
             "a11y_keepalive_enable",
+            "shizuku_keepalive_enable",
+            "system_app_libs_fix_enable",
             "locked_apps_enable",
             "prop_tuning_enable",
             "heavy_task_enable",
@@ -574,6 +598,12 @@ class ConfigManager(private val modDir: String) {
             "accessibility_guard_enable" to "无障碍服务守护",
             "notif_keepalive_enable" to "通知使用权保活（WebUI「保活」页维护名单）",
             "a11y_keepalive_enable" to "无障碍服务保活（WebUI「保活」页维护名单）",
+            // ===== Shizuku 守护（保活 + 防检测）=====
+            "shizuku_keepalive_enable" to "Shizuku 保活：主进程/服务端任一掉线即自动重启 starter（默认开启）",
+            "shizuku_keepalive_interval" to "Shizuku 保活检查周期（秒，10-600，默认 30）",
+            "shizuku_detect_enable" to "Shizuku 防检测：周期清理 /data/local* 下的 shizuku 痕迹文件（默认关闭）",
+            "shizuku_detect_clean_starter" to "Shizuku 防检测：同时清理 starter 与服务端二进制（会短暂影响 Shizuku 自启，默认关闭）",
+            "system_app_libs_fix_enable" to "挂载应用 native lib 自动补齐（默认开启，修复 system/app 挂载后 .so 找不到导致的崩溃）",
             "locked_apps_enable" to "多任务锁定应用处理（MIUI/ColorOS）",
             "prop_tuning_enable" to "系统属性优化与防检测属性（boot/保修/调试等属性维护）",
             "heavy_task_enable" to "周期高占用任务（防错误弹窗/Doze 白名单刷新/HMA 全量生成/target 列表/应用遮蔽/温控/MIUI/Soter/垃圾清理等，默认亮屏也执行，是否仅息屏由 heavy_screen_off_only 控制，间隔周期数可配置）",

@@ -385,6 +385,35 @@
     <div class="section"><div class="stitle">调优循环参数</div>
       <div class="list" id="tuningList"></div>
       <div class="sfoot">留空使用默认值；修改后建议重启 daemon 生效。</div></div>
+    <div class="section"><div class="stitle">Shizuku 守护</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#5856d6">💎</div>
+          <div class="body"><div class="k">Shizuku 运行状态</div>
+            <div class="d" id="shizukuStatus">正在读取…</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnShizukuRefresh">刷新</button></div></div>
+        <div class="cell"><div class="ic" style="background:#30b0c7">🔄</div>
+          <div class="body"><div class="k">Shizuku 保活</div>
+            <div class="d" id="shizukuKeepAliveDesc">主进程 / 服务端进程任一掉线即自动重启 starter（含服务端）</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swShizukuKeepAlive"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#ff9f0a">🕵</div>
+          <div class="body"><div class="k">Shizuku 防检测</div>
+            <div class="d">周期清理 <span class="mono">/data/local*</span> 下的 shizuku 痕迹文件（starter / 服务端二进制 / rikka 残留）</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swShizukuDetect"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#ff3b30">⚠</div>
+          <div class="body"><div class="k">同时清理 starter / 服务端</div>
+            <div class="d">开启后连 <span class="mono">/data/local/shizuku_starter</span> 与服务端二进制一并删除；会短暂影响 Shizuku 自启（保活可自动重建）</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swShizukuCleanStarter"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#34c759">📄</div>
+          <div class="body"><div class="k">当前痕迹文件</div>
+            <div class="d" id="shizukuResidue">—</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnShizukuScan">扫描</button></div></div>
+      </div>
+      <div class="sfoot">
+        <b>说明：</b>Shizuku 运行时有两个进程（主应用 + 提权服务端），保活会同时监控两者。
+        防检测采用<b>精确白名单</b>，只删确切的 shizuku 痕迹路径，绝不子串匹配，避免误伤。
+        Shizuku 重启后会重建这些文件，因此防检测是周期任务。
+      </div>
+    </div>
     <div class="section"><div class="stitle">OOM 保护名单</div>
       <div class="list">
         <div class="cell"><div class="ic" style="background:#af52de">🛡</div>
@@ -1594,6 +1623,56 @@ async function setOomSwitch(key, on){
     toast("切换失败：" + (e && e.message ? e.message : e), "err");
   }
 }
+/* ------------------------------------------------------------------ *
+ * Shizuku 守护（保活 + 防检测）
+ * ------------------------------------------------------------------ */
+async function loadShizuku(){
+  try{
+    const st = await api("/api/shizuku/status");
+    const ka = $("#swShizukuKeepAlive"); if (ka) ka.checked = !!(st && st.keepaliveEnabled);
+    const de = $("#swShizukuDetect");    if (de) de.checked = !!(st && st.detectEnabled);
+    const cs = $("#swShizukuCleanStarter"); if (cs) cs.checked = !!(st && st.cleanStarter);
+    const el = $("#shizukuStatus");
+    if (el){
+      if (!st || !st.installed){ el.textContent = "未安装 Shizuku"; }
+      else {
+        const main = (st.mainPids || []).length, srv = (st.serverPids || []).length;
+        el.textContent = (st.healthy ? "✅ 正常运行" : "⚠️ 服务端未运行（保活会尝试重启）")
+          + " · 主进程 " + main + " 个 / 服务端 " + srv + " 个"
+          + " · 重启 " + (st.restartCount||0) + " 次 · 清理 " + (st.cleanCount||0) + " 次";
+      }
+    }
+  }catch(e){ /* 静默 */ }
+  scanShizukuResidue();
+}
+async function scanShizukuResidue(){
+  try{
+    const r = await api("/api/shizuku/residue");
+    const el = $("#shizukuResidue");
+    if (!el) return;
+    const found = (r && r.found) || [];
+    if (!found.length){ el.textContent = "未发现痕迹文件（已清理干净）"; return; }
+    el.textContent = "发现 " + found.length + " 个：" + found.map(f =>
+      f.path + " (" + f.size + "B" + (f.guarded ? "，受保护" : "") + ")").join("；");
+  }catch(e){
+    const el = $("#shizukuResidue");
+    if (el) el.textContent = "扫描失败：" + (e && e.message ? e.message : e);
+  }
+}
+async function setShizukuSwitch(key, on){
+  try{
+    await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
+    const names = {
+      shizuku_keepalive_enable: "Shizuku 保活",
+      shizuku_detect_enable: "Shizuku 防检测",
+      shizuku_detect_clean_starter: "starter 清理"
+    };
+    toast((names[key]||key) + (on ? " 已开启" : " 已关闭"), "ok");
+    scanShizukuResidue();
+  }catch(e){
+    toast("切换失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
 
 /* ------------------------------------------------------------------ *
  * 底栏 Tab 切换
@@ -1609,7 +1688,7 @@ function switchTab(name){
   if (name === "home") refreshOverview();
   if (name === "power") refreshPowerStatus();
   if (name === "clean") loadCleanState();
-  if (name === "settings") loadOom();
+  if (name === "settings") { loadOom(); loadShizuku(); }
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
 }
@@ -2308,6 +2387,12 @@ function bind(){
   const oomR = $("#btnOomRefresh"); if (oomR) oomR.onclick = loadOom;
   const oomS = $("#btnOomSave"); if (oomS) oomS.onclick = saveOom;
   const oomQ = $("#oomSearch"); if (oomQ) oomQ.oninput = renderOomApps;
+  // Shizuku 守护
+  const szk = $("#swShizukuKeepAlive"); if (szk) szk.onchange = ()=> setShizukuSwitch("shizuku_keepalive_enable", szk.checked);
+  const szd = $("#swShizukuDetect"); if (szd) szd.onchange = ()=> setShizukuSwitch("shizuku_detect_enable", szd.checked);
+  const szc = $("#swShizukuCleanStarter"); if (szc) szc.onchange = ()=> setShizukuSwitch("shizuku_detect_clean_starter", szc.checked);
+  const szr = $("#btnShizukuRefresh"); if (szr) szr.onclick = loadShizuku;
+  const szs = $("#btnShizukuScan"); if (szs) szs.onclick = scanShizukuResidue;
   $$(".tab").forEach(t=> t.onclick = ()=> switchTab(t.dataset.tab));
 }
 

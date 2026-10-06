@@ -16,6 +16,7 @@ import io.github.fairyxh.zhangsystemdex.core.ConfigManager
 import io.github.fairyxh.zhangsystemdex.core.OomProtectList
 import io.github.fairyxh.zhangsystemdex.core.KeepAliveKind
 import io.github.fairyxh.zhangsystemdex.core.KeepAliveList
+import io.github.fairyxh.zhangsystemdex.core.ShizukuResidue
 import io.github.fairyxh.zhangsystemdex.modules.AccessibilityGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.AntiDetectionModule
 import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
@@ -26,6 +27,7 @@ import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.ShizukuModule
 import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.ThermalModule
@@ -969,7 +971,83 @@ object SelfTest {
         } catch (t: Throwable) {
             s.add("OOM.并入保活名单", Status.FAIL, t.message ?: "")
         }
-
+        // 14c) Shizuku 加入 OOM 默认名单（用户要求）。
+        try {
+            val has = OomProtectList.normalize(OomProtectList.DEFAULT_CONTENT)
+                .contains(ShizukuResidue.PACKAGE)
+            s.add(
+                "Shizuku.计入 OOM 默认",
+                if (has) Status.PASS else Status.FAIL,
+                "默认含 ${ShizukuResidue.PACKAGE}=$has"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.计入 OOM 默认", Status.FAIL, t.message ?: "")
+        }
+        // 14d) Shizuku 进程分类（主进程 vs 服务端）。
+        try {
+            // uid 10335 = u0_a335（主应用）；99910335 = u999_a335（服务端，root 模式）
+            val snap = ShizukuModule.classify(listOf(19928 to 10335, 3185 to 99910335))
+            val ok = snap.mainPids == listOf(19928) && snap.serverPids == listOf(3185) && snap.healthy
+            s.add(
+                "Shizuku.进程分类",
+                if (ok) Status.PASS else Status.FAIL,
+                "主=${snap.mainPids} 服务端=${snap.serverPids} healthy=${snap.healthy}"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.进程分类", Status.FAIL, t.message ?: "")
+        }
+        // 14e) Shizuku 不健康判定：仅主/仅服务端 → 不健康；root 服务端 → 健康。
+        try {
+            val onlyMain = ShizukuModule.classify(listOf(19928 to 10335))
+            val onlyServer = ShizukuModule.classify(listOf(3185 to 99910335))
+            // root 模式服务端 uid=0；adb 模式服务端 uid=2000
+            val rootServer = ShizukuModule.classify(listOf(19928 to 10335, 100 to 0))
+            val shellServer = ShizukuModule.classify(listOf(19928 to 10335, 300 to 2000))
+            val ok = !onlyMain.healthy && !onlyServer.healthy &&
+                rootServer.healthy && shellServer.healthy
+            s.add(
+                "Shizuku.不健康判定",
+                if (ok) Status.PASS else Status.FAIL,
+                "onlyMain=${onlyMain.healthy} onlyServer=${onlyServer.healthy} " +
+                    "rootServer=${rootServer.healthy} shellServer=${shellServer.healthy}"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.不健康判定", Status.FAIL, t.message ?: "")
+        }
+        // 14f) Shizuku 防检测白名单：精确匹配（不做子串误伤）。
+        try {
+            val ok = ShizukuResidue.isWhitelisted("/data/local/shizuku_starter") &&
+                ShizukuResidue.isWhitelisted("/data/local/tmp/shizuku_starter") &&
+                ShizukuResidue.isWhitelisted("/data/local/tmp/shizuku") &&
+                !ShizukuResidue.isWhitelisted("/data/local/tmp/my_shizuku_notes.txt") &&
+                !ShizukuResidue.isWhitelisted("/data/local/tmp/other") &&
+                ShizukuResidue.isGuarded("/data/local/shizuku_starter") &&
+                !ShizukuResidue.isGuarded("/data/local/tmp/rikka.shizuku")
+            s.add(
+                "Shizuku.防检测白名单",
+                if (ok) Status.PASS else Status.FAIL,
+                "精确匹配正常"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.防检测白名单", Status.FAIL, t.message ?: "")
+        }
+        // 14g) Shizuku 防检测目标计算：allowGuarded 控制是否含受保护路径。
+        try {
+            val exists: (String) -> Boolean = { it in setOf(
+                "/data/local/shizuku_starter", "/data/local/tmp/shizuku_starter"
+            ) }
+            val safe = ShizukuResidue.targets(false, exists)
+            val full = ShizukuResidue.targets(true, exists)
+            val ok = safe == listOf("/data/local/tmp/shizuku_starter") &&
+                full.contains("/data/local/shizuku_starter") && full.size == 2
+            s.add(
+                "Shizuku.防检测目标",
+                if (ok) Status.PASS else Status.FAIL,
+                "safe=$safe full=$full"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.防检测目标", Status.FAIL, t.message ?: "")
+        }
         // 15) 配置键齐备（oom_protect_enable）。
         try {
             val keys = listOf("oom_protect_enable")

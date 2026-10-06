@@ -33,11 +33,31 @@ class AppManagerModule(private val ctx: DexContext) {
             val onlyConf = File(ctx.config.rootDir, "app_manager/disable_app_list_onlydisable.conf")
             val onlyList = readConf(onlyConf, listOf("com.oplus.safecenter", "com.oplus.securitypermission"))
             for (pkg in onlyList) disableApp(pkg)
-
             copyMount()
+            // 复制完成后补齐 native lib 目录：被挂载为系统应用的 APK 若缺
+            // lib/，其进程加载 .so 会 UnsatisfiedLinkError（Shizuku 服务端
+            // 起不来即此原因）。见 SystemAppLibFixer。
+            if (ctx.config.switch("system_app_libs_fix_enable")) fixSystemAppLibs()
         } catch (t: Throwable) {
             Logger.e("AppManager", "停用应用失败", t)
         }
+}
+
+    /**
+     * 为 system/app 与 system/priv-app 下的挂载应用补齐 native lib。
+     *
+     * 耗时可能较长（几十个 APK 解压），但只在有变更时写入。失败不影响其它
+     * 功能；下一轮 heavy 任务会重试。
+     */
+    fun fixSystemAppLibs(): io.github.fairyxh.zhangsystemdex.core.SystemAppLibFixer.Result {
+        val root = File(ctx.modDir)
+        val r = io.github.fairyxh.zhangsystemdex.core.SystemAppLibFixer.fix(root) {
+            Logger.i("AppManager", it)
+        }
+        if (r.changed) {
+            Logger.i("AppManager", "已为 ${r.fixed} 个挂载应用补齐 native lib：${r.fixedNames}")
+        }
+        return r
     }
 
     fun applyAppOps() {

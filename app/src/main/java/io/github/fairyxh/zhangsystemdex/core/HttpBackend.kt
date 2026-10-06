@@ -231,6 +231,9 @@ class HttpBackend(
             "/api/keepalive/get" -> apiKeepAliveGet(query)
             "/api/keepalive/set" -> apiKeepAliveSet(method, body)
             "/api/keepalive/apps" -> apiKeepAliveApps(query)
+            // ===== Shizuku 守护（保活 + 防检测）=====
+            "/api/shizuku/status" -> apiShizukuStatus()
+            "/api/shizuku/residue" -> apiShizukuResidue()
             else -> jsonError("未知接口: $path")
         }
     }
@@ -1846,6 +1849,84 @@ class HttpBackend(
                 })
             }
         }).append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    // ==================================================================
+    // Shizuku 守护
+    // ==================================================================
+
+    /**
+     * Shizuku 运行状态：
+     *   - 主进程 / 服务端 pid 列表（区分 uid）
+     *   - 是否健康（两者都在）
+     *   - 保活/防检测开关
+     *   - 已清理的痕迹计数
+     */
+    private fun apiShizukuStatus(): String {
+        val procList = try {
+            ProcessUtils.pidsOf(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE)
+        } catch (_: Throwable) { emptyList() }
+        val withUid = procList.map {
+            it to io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.uidOf(it)
+        }
+        val snap = io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.classify(withUid)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"package\":").append(q(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE))
+        sb.append(",\"installed\":").append(
+            try { AppListProvider.sourceDir(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE) != null }
+            catch (_: Throwable) { false }
+        )
+        sb.append(",\"healthy\":").append(snap.healthy)
+        sb.append(",\"mainPids\":").append(JsonBuilder.arr {
+            var first = true
+            for (p in snap.mainPids) { if (!first) comma(); first = false; raw(p.toString()) }
+        })
+        sb.append(",\"serverPids\":").append(JsonBuilder.arr {
+            var first = true
+            for (p in snap.serverPids) { if (!first) comma(); first = false; raw(p.toString()) }
+        })
+        sb.append(",\"keepaliveEnabled\":").append(ctx.config.switch("shizuku_keepalive_enable"))
+        sb.append(",\"detectEnabled\":").append(ctx.config.switch("shizuku_detect_enable"))
+        sb.append(",\"cleanStarter\":").append(ctx.config.switch("shizuku_detect_clean_starter"))
+        val st = RuntimeRegistry.get("shizuku_guard")
+        sb.append(",\"restartCount\":").append((st?.counters?.get("keepAliveRestarts") ?: 0L))
+        sb.append(",\"cleanCount\":").append((st?.counters?.get("detectCleaned") ?: 0L))
+        sb.append(",\"running\":").append(st?.running ?: false)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    /** 当前 Shizuku 痕迹文件清单（防检测预览）。 */
+    private fun apiShizukuResidue(): String {
+        val allowGuarded = ctx.config.switch("shizuku_detect_enable") &&
+            ctx.config.switch("shizuku_detect_clean_starter")
+        val targets = io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.targets(allowGuarded)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true")
+        sb.append(",\"guardedAllowed\":").append(allowGuarded)
+        sb.append(",\"found\":").append(JsonBuilder.arr {
+            var first = true
+            for (p in targets) {
+                if (!first) comma()
+                first = false
+                raw(JsonBuilder.obj {
+                    key("path"); value(p); comma()
+                    key("guarded"); value(
+                        io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.isGuarded(p)
+                    ); comma()
+                    key("size"); value(java.io.File(p).length())
+                })
+            }
+        })
+        sb.append(",\"alwaysClean\":").append(jsonStrArray(
+            io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.ALWAYS_CLEAN
+        ))
+        sb.append(",\"guardedClean\":").append(jsonStrArray(
+            io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.GUARDED_CLEAN
+        ))
+        sb.append('}')
         return jsonRaw(sb.toString())
     }
 

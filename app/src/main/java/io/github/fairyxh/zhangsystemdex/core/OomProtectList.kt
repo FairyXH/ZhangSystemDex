@@ -29,16 +29,18 @@ object OomProtectList {
 
     /**
      * 内置默认包名（用户指定）：
-     *   - `com.ai.assistance.operit`  Operit AI
-     *   - `com.catchingnow.np`        通知滤盒
-     *   - `com.omarea.vtools`         Scene
-     *   - `li.songe.gkd`              GKD
+     *   - `com.ai.assistance.operit`    Operit AI
+     *   - `com.catchingnow.np`          通知滤盒
+     *   - `com.omarea.vtools`           Scene
+     *   - `li.songe.gkd`                GKD
+     *   - `moe.shizuku.privileged.api`  Shizuku（含其 999/root 服务进程）
      */
     val DEFAULT_PACKAGES: List<String> = listOf(
         "com.ai.assistance.operit",
         "com.catchingnow.np",
         "com.omarea.vtools",
         "li.songe.gkd",
+        "moe.shizuku.privileged.api",
     )
 
     /** 兼容旧调用点：第一个默认包名。 */

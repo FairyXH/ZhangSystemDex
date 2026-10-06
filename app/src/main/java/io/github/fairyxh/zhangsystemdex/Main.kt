@@ -32,6 +32,7 @@ import io.github.fairyxh.zhangsystemdex.modules.PerformanceModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
 import io.github.fairyxh.zhangsystemdex.modules.ServerModeModule
 import io.github.fairyxh.zhangsystemdex.modules.ServiceGuardModule
+import io.github.fairyxh.zhangsystemdex.modules.ShizukuModule
 import io.github.fairyxh.zhangsystemdex.modules.SkipMountGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.StorageIsolationModule
 import io.github.fairyxh.zhangsystemdex.modules.SystemTuningModule
@@ -343,6 +344,14 @@ object Main {
                 label = "服务守护", desc = "守护关键系统服务存活",
             ) {
                 ServiceGuardModule(ctx)
+            },
+            ModuleEntry(
+                "shizuku_guard",
+                { sw.switch("shizuku_keepalive_enable") || sw.switch("shizuku_detect_enable") },
+                label = "Shizuku 守护",
+                desc = "Shizuku 保活（含服务端进程）与 /data/local 痕迹防检测清理",
+            ) {
+                ShizukuModule(ctx)
             },
             ModuleEntry("server_mode", { enabled("server_mode_enable") }, label = "服务器模式", desc = "服务器场景下的调度参数") {
                 ServerModeModule(ctx)

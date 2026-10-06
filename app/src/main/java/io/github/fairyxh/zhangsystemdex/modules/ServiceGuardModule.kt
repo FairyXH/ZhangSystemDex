@@ -121,8 +121,13 @@ class ServiceGuardModule(ctx: DexContext) : DaemonLoop(ctx, 300_000L, pauseAware
     }
 
     private fun cleanupShizukuTmp() {
-        FileUtils.rmQuoted("/data/local/tmp/shizuku")
-        FileUtils.rmQuoted("/data/local/tmp/shizuku_starter")
+        // 统一走 ShizukuResidue 的精确白名单，避免与 ShizukuModule 的
+        // 保活/防检测逻辑重复维护两套路径表。这里只清理「纯残留」组
+        // （tmp 的 starter 副本与 rikka 痕迹），不触碰受保护的 root starter。
+        for (path in io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.ALWAYS_CLEAN) {
+            if (!io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.isWhitelisted(path)) continue
+            FileUtils.rmQuoted(path)
+        }
     }
 
     private fun keepBluetooth() {

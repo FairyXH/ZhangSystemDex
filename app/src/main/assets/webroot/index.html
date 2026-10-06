@@ -414,6 +414,56 @@
         Shizuku 重启后会重建这些文件，因此防检测是周期任务。
       </div>
     </div>
+    <div class="section"><div class="stitle">通知使用权保活名单</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#30b0c7">🔔</div>
+          <div class="body"><div class="k">总开关</div>
+            <div class="d">开启后，名单内应用的通知使用权掉线会被自动恢复</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swNotifKeepAlive"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#34c759">📋</div>
+          <div class="body"><div class="k">当前状态</div>
+            <div class="d" id="notifKaStatus">—</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnNotifKaRefresh">刷新</button></div></div>
+        <div class="cell"><div class="ic" style="background:#0a84ff">🔎</div>
+          <div class="body"><div class="k">搜索应用</div>
+            <div class="d">按包名或应用名过滤，勾选即加入名单</div></div>
+          <div class="val"><input class="txt" id="notifKaSearch" placeholder="搜索…" style="width:150px"></div></div>
+      </div>
+      <div id="notifKaAppList" class="oomapps"></div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#8e8e93">✎</div>
+          <div class="body"><div class="k">名单（一行一个包名）</div>
+            <div class="d" id="notifKaFileHint">正在读取…</div></div>
+          <div class="val"><button class="btn sm primary" id="btnNotifKaSave">保存</button></div></div>
+      </div>
+      <textarea id="notifKaText" class="oomedit" spellcheck="false" placeholder="com.catchingnow.np"></textarea>
+      <div class="sfoot">仅列出<b>已声明通知使用权</b>的应用。勾选即写入名单，保存后立即生效；非法行会被自动过滤。系统应用默认隐藏，搜索 <code>@sys</code> 显示。</div>
+    </div>
+    <div class="section"><div class="stitle">无障碍服务保活名单</div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#af52de">♿</div>
+          <div class="body"><div class="k">总开关</div>
+            <div class="d">开启后，名单内应用的无障碍服务掉线会被自动恢复</div></div>
+          <div class="val"><label class="sw"><input type="checkbox" id="swA11yKeepAlive"><i></i></label></div></div>
+        <div class="cell"><div class="ic" style="background:#34c759">📋</div>
+          <div class="body"><div class="k">当前状态</div>
+            <div class="d" id="a11yKaStatus">—</div></div>
+          <div class="val"><button class="btn sm ghost" id="btnA11yKaRefresh">刷新</button></div></div>
+        <div class="cell"><div class="ic" style="background:#0a84ff">🔎</div>
+          <div class="body"><div class="k">搜索应用</div>
+            <div class="d">按包名或应用名过滤，勾选即加入名单</div></div>
+          <div class="val"><input class="txt" id="a11yKaSearch" placeholder="搜索…" style="width:150px"></div></div>
+      </div>
+      <div id="a11yKaAppList" class="oomapps"></div>
+      <div class="list">
+        <div class="cell"><div class="ic" style="background:#8e8e93">✎</div>
+          <div class="body"><div class="k">名单（一行一个包名）</div>
+            <div class="d" id="a11yKaFileHint">正在读取…</div></div>
+          <div class="val"><button class="btn sm primary" id="btnA11yKaSave">保存</button></div></div>
+      </div>
+      <textarea id="a11yKaText" class="oomedit" spellcheck="false" placeholder="com.example.app"></textarea>
+      <div class="sfoot">仅列出<b>已声明无障碍服务</b>的应用。勾选即写入名单，保存后立即生效；非法行会被自动过滤。</div>
+    </div>
     <div class="section"><div class="stitle">OOM 保护名单</div>
       <div class="list">
         <div class="cell"><div class="ic" style="background:#af52de">🛡</div>
@@ -1615,6 +1665,120 @@ async function saveOom(){
     toast("保存失败：" + (e && e.message ? e.message : e), "err");
   }
 }
+/* ------------------------------------------------------------------ *
+ * 保活名单（通知使用权 / 无障碍服务）—— 与 OOM 同一套应用选择器模式
+ * ------------------------------------------------------------------ */
+const KA_KINDS = [
+  { id:"notif", label:"通知使用权", appsHost:"notifKaAppList", search:"notifKaSearch",
+    text:"notifKaText", status:"notifKaStatus", hint:"notifKaFileHint",
+    sw:"swNotifKeepAlive", switchKey:"notif_keepalive_enable" },
+  { id:"a11y", label:"无障碍服务", appsHost:"a11yKaAppList", search:"a11yKaSearch",
+    text:"a11yKaText", status:"a11yKaStatus", hint:"a11yKaFileHint",
+    sw:"swA11yKeepAlive", switchKey:"a11y_keepalive_enable" }
+];
+const KA_APPS = {};      // kind -> apps 列表
+const KA_SELECTED = {};  // kind -> Set(包名)
+const KA_SHOW_SYS = {};  // kind -> bool
+
+// 名单文本解析（与 OOM 同规则：跳空行/注释，校验包名格式，去重）
+function kaParseList(text){
+  const out = []; const seen = new Set();
+  String(text || "").replace(/\r\n/g, "\n").split("\n").forEach(function(line){
+    let s = line.trim();
+    if (!s || s.charAt(0) === "#") return;
+    s = s.split("#")[0].trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(s)) return;
+    if (seen.has(s)) return;
+    seen.add(s); out.push(s);
+  });
+  return out;
+}
+function kaRenderText(k){ $("#"+k.text).value = KA_SELECTED[k.id].size ? (Array.from(KA_SELECTED[k.id]).join("\n") + "\n") : ""; }
+function kaRenderApps(k){
+  const host = $("#"+k.appsHost); if (!host) return;
+  const q = ($("#"+k.search) && $("#"+k.search).value || "").trim().toLowerCase();
+  KA_SHOW_SYS[k.id] = q.indexOf("@sys") >= 0;
+  const kw = q.replace("@sys", "").trim();
+  const shown = (KA_APPS[k.id] || []).filter(function(a){
+    if (!KA_SHOW_SYS[k.id] && a.system) return false;
+    if (!kw) return true;
+    const label = (a.label || "").toLowerCase();
+    return a.pkg.toLowerCase().indexOf(kw) >= 0 || label.indexOf(kw) >= 0;
+  });
+  if (!shown.length){ host.innerHTML = '<div class="oempty">没有匹配的应用</div>'; return; }
+  const frag = document.createDocumentFragment();
+  shown.forEach(function(a){
+    const row = document.createElement("div"); row.className = "oapp";
+    const cb = document.createElement("input"); cb.type = "checkbox";
+    cb.checked = KA_SELECTED[k.id].has(a.pkg);
+    cb.onchange = function(){
+      if (cb.checked) KA_SELECTED[k.id].add(a.pkg); else KA_SELECTED[k.id].delete(a.pkg);
+      kaRenderText(k);
+    };
+    const body = document.createElement("div"); body.className = "oname";
+    const pk = document.createElement("div"); pk.className = "opkg"; pk.textContent = a.pkg;
+    if (a.label && a.label !== a.pkg){
+      const lb = document.createElement("div"); lb.style.fontSize = "12.5px"; lb.textContent = a.label;
+      body.appendChild(lb);
+    }
+    if (a.system){ const tag = document.createElement("span"); tag.className = "osys"; tag.textContent = "系统"; pk.appendChild(tag); }
+    if (a.enabled){ const tag = document.createElement("span"); tag.className = "osys"; tag.style.color = "#34c759"; tag.textContent = "已启用"; pk.appendChild(tag); }
+    body.appendChild(pk);
+    row.appendChild(cb); row.appendChild(body); frag.appendChild(row);
+  });
+  host.innerHTML = ""; host.appendChild(frag);
+}
+async function loadKeepAlive(k){
+  // 名单 + 开关 + 状态
+  try{
+    const r = await api("/api/keepalive/get?kind=" + k.id);
+    KA_SELECTED[k.id] = new Set((r && r.list) || []);
+    kaRenderText(k);
+    const sw = $("#"+k.sw); if (sw) sw.checked = !!(r && r.switchEnabled);
+    const h = $("#"+k.hint); if (h) h.textContent = (r && r.file) ? ("文件：" + r.file) : "文件：—";
+    const st = $("#"+k.status);
+    if (st){
+      const items = (r && r.items) || [];
+      const on = items.filter(function(it){ return it.enabled; }).length;
+      st.textContent = items.length
+        ? ("名单 " + items.length + " 项，其中系统已启用 " + on + " 项")
+        : "名单为空";
+    }
+  }catch(e){ toast("读取" + k.label + "保活名单失败：" + (e && e.message ? e.message : e), "err"); }
+  // 应用选择器
+  try{
+    if (!KA_APPS[k.id]){
+      const r = await api("/api/keepalive/apps?kind=" + k.id);
+      KA_APPS[k.id] = (r && r.apps) || [];
+    }
+    kaRenderApps(k);
+  }catch(e){
+    const host = $("#"+k.appsHost);
+    if (host) host.innerHTML = '<div class="oempty">无法读取应用清单：' + esc(String(e.message||e)) + '</div>';
+  }
+}
+async function saveKeepAlive(k){
+  const text = ($("#"+k.text) && $("#"+k.text).value) || "";
+  const normalized = kaParseList(text);
+  try{
+    const r = await api("/api/keepalive/set", { kind: k.id, content: normalized.join("\n") + "\n" });
+    KA_SELECTED[k.id] = new Set((r && r.list) || normalized);
+    kaRenderText(k); kaRenderApps(k);
+    toast(k.label + "保活名单已保存（" + KA_SELECTED[k.id].size + " 项）", "ok");
+  }catch(e){ toast("保存失败：" + (e && e.message ? e.message : e), "err"); }
+}
+async function loadKeepAliveAll(){
+  for (const k of KA_KINDS) { await loadKeepAlive(k); }
+}
+async function setKeepAliveSwitch(k, on){
+  try{
+    await api("/api/switch/set", { key: k.switchKey, value: on ? "true" : "false" });
+    toast(k.label + "保活" + (on ? " 已开启" : " 已关闭"), "ok");
+    loadKeepAlive(k);
+  }catch(e){
+    toast("切换失败：" + (e && e.message ? e.message : e), "err");
+  }
+}
 async function setOomSwitch(key, on){
   try{
     await api("/api/switch/set", { key: key, value: on ? "true" : "false" });
@@ -1688,7 +1852,7 @@ function switchTab(name){
   if (name === "home") refreshOverview();
   if (name === "power") refreshPowerStatus();
   if (name === "clean") loadCleanState();
-  if (name === "settings") { loadOom(); loadShizuku(); }
+  if (name === "settings") { loadOom(); loadShizuku(); loadKeepAliveAll(); }
   try{ location.hash = name; }catch(_){}
   window.scrollTo(0, 0);
 }
@@ -2387,6 +2551,15 @@ function bind(){
   const oomR = $("#btnOomRefresh"); if (oomR) oomR.onclick = loadOom;
   const oomS = $("#btnOomSave"); if (oomS) oomS.onclick = saveOom;
   const oomQ = $("#oomSearch"); if (oomQ) oomQ.oninput = renderOomApps;
+  // 保活名单（通知使用权 / 无障碍服务）
+  KA_KINDS.forEach(function(k){
+    const sw = $("#"+k.sw); if (sw) sw.onchange = ()=> setKeepAliveSwitch(k, sw.checked);
+    const sr = $("#"+k.search); if (sr) sr.oninput = ()=> kaRenderApps(k);
+  });
+  const kanR = $("#btnNotifKaRefresh"); if (kanR) kanR.onclick = ()=> loadKeepAlive(KA_KINDS[0]);
+  const kanS = $("#btnNotifKaSave");    if (kanS) kanS.onclick = ()=> saveKeepAlive(KA_KINDS[0]);
+  const kaaR = $("#btnA11yKaRefresh"); if (kaaR) kaaR.onclick = ()=> loadKeepAlive(KA_KINDS[1]);
+  const kaaS = $("#btnA11yKaSave");    if (kaaS) kaaS.onclick = ()=> saveKeepAlive(KA_KINDS[1]);
   // Shizuku 守护
   const szk = $("#swShizukuKeepAlive"); if (szk) szk.onchange = ()=> setShizukuSwitch("shizuku_keepalive_enable", szk.checked);
   const szd = $("#swShizukuDetect"); if (szd) szd.onchange = ()=> setShizukuSwitch("shizuku_detect_enable", szd.checked);

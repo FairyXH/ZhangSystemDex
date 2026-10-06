@@ -508,7 +508,7 @@
       <div class="list">
         <div class="cell"><div class="ic" style="background:#af52de">🛡</div>
           <div class="body"><div class="k">OOM 保护总开关</div>
-            <div class="d">保活名单内应用：提升 oom_score_adj 与进程优先级；安全上限 -900，不超过系统核心；关闭时自动还原</div></div>
+            <div class="d">保活名单内应用：提升 oom_score_adj 与进程优先级；安全上限 -500（不过度保活，避免系统 OOM）；关闭时自动还原</div></div>
           <div class="val"><label class="sw"><input type="checkbox" id="swOomMaster"><i></i></label></div></div>
         <div class="cell"><div class="ic" style="background:#34c759">📋</div>
           <div class="body"><div class="k">受保护进程</div>
@@ -516,8 +516,9 @@
           <div class="val"><button class="btn sm ghost" id="btnOomRefresh">刷新</button></div></div>
       </div>
       <div class="sfoot">
-        <b>安全约束：</b>列表应用的 oom_score_adj 被钳制到 -900（system_server 同级），
-        永不越过系统核心；仅温和提升，不做 RT 抢占。名单以「一行一个包名」保存，<code>#</code> 开头为注释。
+        <b>安全约束：</b>列表应用的 oom_score_adj 被钳制到 -500（不过度保活，避免系统 OOM），
+        <b>绝不触碰 system_server / init / zygote 等系统核心进程</b>。
+        仅温和提升，不做 RT 抢占。名单以「一行一个包名」保存，<code>#</code> 开头为注释。
       </div>
       <div class="builtin-note">
         <div class="bn-title">内置应用 OOM 保护（强制 / 可选）</div>

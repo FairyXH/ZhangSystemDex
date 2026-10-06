@@ -212,7 +212,7 @@ class ConfigManager(private val modDir: String) {
             missing.add("module_appops_auth_enable=false\t# 为模块挂载 App 授权 AppOps（仅处理模块目录 APK）")
         }
         if (switches["oom_protect_enable"] == null) {
-            missing.add("oom_protect_enable=true\t# OOM 保护名单总开关（默认开启，内置保活 com.ai.assistance.operit；oom_score_adj 钳制到 -900）")
+            missing.add("oom_protect_enable=true\t# OOM 保护名单总开关（默认开启，内置保活 com.ai.assistance.operit；oom_score_adj 钳制到 -500）")
         }
         // 在线规则订阅：旧版本 switches.conf 中不存在该键时补齐（默认关闭）。
         if (switches["online_rules_enable"] == null) {
@@ -628,8 +628,8 @@ class ConfigManager(private val modDir: String) {
             "only_base_enable" to "Doze 白名单使用内置规则（false=读取 doze.conf）",
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
-            "game_oom_protect_enable" to "保护游戏进程Oom=-1000,不被系统杀死",
-            "oom_protect_enable" to "OOM 保护名单：模块内置应用始终受保护（不受此开关控制）；保活名单（通知使用权/无障碍）中的应用自动纳入，另可手工追加；oom_score_adj 钳制到 -900",
+            "game_oom_protect_enable" to "保护游戏进程 Oom=-500（钳制上限 -500），不被系统频繁杀死；绝不动系统核心进程",
+            "oom_protect_enable" to "OOM 保护名单：模块内置应用按「守护/OOM」逐项开关（含无障碍/通知组件者强制）；保活名单应用自动纳入；oom_score_adj 钳制到 -500（绝不触碰 system_server 等系统进程）",
             "accelerometer_rotation_enable" to "加速计自动旋转：每周期强制禁用自动旋转",
             "bt_offload_guard_enable" to "蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性，修复卡顿/无声/断连）",
 

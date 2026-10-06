@@ -128,18 +128,21 @@ class GamePauseModule(
             ProcessUtils.pidsOf(pkg)
         pids.forEachIndexed { index, pid ->
             /*
-             * 主进程最高保护
-             * 子进程降低保护等级
+             * 主进程保护，子进程降低保护等级。
+             * 用户要求（2026-10-06）：不要 -1000 那么激进（-1000 与 init 同级，
+             * 会把游戏钉死在内存里导致系统 OOM/Watchdog 软重启），改为主 -500 / 子 -450。
+             * 并**绝不动系统核心进程**。
              */
+            if (OomProtectModule.isProtectedSystemProcess(pid)) return@forEachIndexed
             if (index == 0) {
                 setOomScoreAdj(
                     pid,
-                    -1000
+                    OomProtectModule.clampOom(-500)
                 )
             } else {
                 setOomScoreAdj(
                     pid,
-                    -500
+                    OomProtectModule.clampOom(-450)
                 )
             }
         }

@@ -1,5 +1,6 @@
 package io.github.fairyxh.zhangsystemdex.modules
 
+import io.github.fairyxh.zhangsystemdex.core.BuiltinConfig
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FrameworkOps

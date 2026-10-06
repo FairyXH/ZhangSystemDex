@@ -112,17 +112,16 @@ class GameOomProtectModule(
     ) {
         for ((index, pid) in pids.withIndex()) {
             /*
-             * 主进程:
-             * -1000 最高保护
-             *
-             * 子进程:
-             * -500
+             * 主进程 / 子进程。
+             * 用户要求（2026-10-06）：不要 -1000（与 init 同级，会把游戏钉死导致
+             * 系统 OOM/Watchdog 软重启），改为主 -500 / 子 -450，并绝不动系统核心进程。
              */
+            if (OomProtectModule.isProtectedSystemProcess(pid)) continue
             val adj =
                 if (index == 0) {
-                    -1000
+                    OomProtectModule.clampOom(-500)
                 } else {
-                    -500
+                    OomProtectModule.clampOom(-450)
                 }
             setOomScoreAdj(
                 pid,

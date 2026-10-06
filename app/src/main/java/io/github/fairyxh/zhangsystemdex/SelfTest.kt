@@ -988,9 +988,9 @@ object SelfTest {
         }
 
         // ===== OOM 保护名单 =====
-        // 11) 安全钳制：请求 -1000 必须被钳到 SAFE_FLOOR(-900)，不得越过系统核心。
+        // 11) 安全钳制：请求 -1000 必须被钳到 SAFE_FLOOR(-500)，不得过高。
         try {
-            val clamped = OomProtectModule.clampOom(-1000)   // 越界下钳 -> -900
+            val clamped = OomProtectModule.clampOom(-1000)   // 越界下钳 -> -500
             val clamped2 = OomProtectModule.clampOom(-500)   // 合法区间内 -> 原样 -500
             val clamped3 = OomProtectModule.clampOom(5000)   // 越界上钳 -> 1000
             val ok = clamped == OomProtectModule.SAFE_FLOOR &&
@@ -1004,6 +1004,23 @@ object SelfTest {
             )
         } catch (t: Throwable) {
             s.add("OOM.安全钳制", Status.FAIL, t.message ?: "")
+        }
+
+        // 11b) 系统核心进程保护：system_server / init / zygote 必须被识别为「不可动」。
+        try {
+            var allProtected = true
+            val samples = listOf("init", "system_server", "zygote64")
+            for (nm in samples) {
+                val hit = ProcessUtils.pidsOf(nm).any { OomProtectModule.isProtectedSystemProcess(it) }
+                if (!hit) allProtected = false
+            }
+            s.add(
+                "OOM.系统进程保护",
+                if (allProtected) Status.PASS else Status.FAIL,
+                "已识别 init/system_server/zygote64 为系统核心进程（绝不改动 oom_score_adj）"
+            )
+        } catch (t: Throwable) {
+            s.add("OOM.系统进程保护", Status.FAIL, t.message ?: "")
         }
 
         // 12) 名单归一化：去注释/空行/重复/非法包名，保留合法项。

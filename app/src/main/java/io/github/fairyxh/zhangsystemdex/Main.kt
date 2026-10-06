@@ -120,6 +120,58 @@ object Main {
             return
         }
 
+        // Notification permission CLI: run a single action then exit.
+        // Usage: app_process ... Main <moddir> notification <action> <pkg...>
+        //   actions: grant | revoke | check | probe | clean
+        // Designed for scripting (e.g. from a root shell / Magisk script),
+        // no interactive input required.
+        if (args.contains("notification")) {
+            val idx = args.indexOf("notification")
+            val action = args.getOrNull(idx + 1) ?: "check"
+            val pkgs = args.drop(idx + 2).filter { it.isNotBlank() }
+            Logger.i("Main", "通知权限 CLI: action=$action pkgs=$pkgs")
+            try {
+                when (action) {
+                    "grant" -> {
+                        if (pkgs.isEmpty()) {
+                            println("用法: notification grant <pkg> [pkg...]")
+                        } else {
+                            for (p in pkgs) {
+                                val r = io.github.fairyxh.zhangsystemdex.core.NotificationGrant.grant(p)
+                                println("grant $p: ok=${r.ok} listeners=${r.listeners} " +
+                                    "postNotif=${r.postNotifGranted} warnings=${r.warnings}")
+                            }
+                        }
+                    }
+                    "revoke" -> {
+                        for (p in pkgs) {
+                            println("revoke $p: ${io.github.fairyxh.zhangsystemdex.core.NotificationGrant.revoke(p)}")
+                        }
+                    }
+                    "check", "probe" -> {
+                        if (pkgs.isEmpty()) {
+                            io.github.fairyxh.zhangsystemdex.core.NotificationGrant.listListeners()
+                                .forEach { println("  $it") }
+                        } else {
+                            for (p in pkgs) {
+                                println(io.github.fairyxh.zhangsystemdex.core.NotificationGrant.inspect(p))
+                            }
+                        }
+                    }
+                    "clean" -> {
+                        val n = io.github.fairyxh.zhangsystemdex.core.NotificationGrant.cleanInvalid { println(it) }
+                        println("clean: 移除 $n 条")
+                    }
+                    else -> println("未知 action: $action（grant|revoke|check|probe|clean）")
+                }
+            } catch (t: Throwable) {
+                Logger.e("Main", "通知权限 CLI 失败", t)
+                println("错误: ${t}")
+            }
+            Logger.i("Main", "通知权限 CLI 完成，退出")
+            return
+        }
+
         // Debug menu mode: run a single feature once by number, then exit.
         if (args.contains("menu")) {
             Logger.i("Main", "调试菜单模式")

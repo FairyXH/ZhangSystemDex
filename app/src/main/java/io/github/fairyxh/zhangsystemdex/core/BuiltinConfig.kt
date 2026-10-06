@@ -198,6 +198,9 @@ object BuiltinConfig {
     fun guardPackages(rootDir: File): List<String> =
         BuiltinApps.packagesFromRoot(rootDir).filter { isGuardEnabled(rootDir, it) }
 
+    /** 全部模块内置应用（不看任何开关），用于集合排除。 */
+    fun allPackages(rootDir: File): List<String> = BuiltinApps.packagesFromRoot(rootDir)
+
     /** 参与 OOM 保护的内置应用集合（强制 ∪ 勾选）。 */
     fun oomPackages(rootDir: File): List<String> =
         BuiltinApps.packagesFromRoot(rootDir).filter { isOomEnabled(rootDir, it) }

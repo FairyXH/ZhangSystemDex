@@ -95,14 +95,26 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         fun isProtectedSystemProcess(pid: Int): Boolean {
             val comm = ProcessUtils.readFile("/proc/$pid/comm")?.trim().orEmpty()
             if (comm in PROTECTED_SYSTEM_COMMS) return true
-            // comm 截断到 15 字符，做前缀兜底（如 system_server 正常不截断）。
+            // comm 截断到 15 字符，做前缀兜底（如 android.hardware.audio.service）。
             if (PROTECTED_SYSTEM_COMMS.any { comm.isNotEmpty() && it.startsWith(comm) }) return true
-            val cmd = ProcessUtils.readFile("/proc/$pid/cmdline")
+            val rawCmd = ProcessUtils.readFile("/proc/$pid/cmdline")
                 ?.replace('\u0000', ' ')?.trim().orEmpty()
-            val exe = cmd.substringBefore(' ')
-            if (exe.isNotEmpty() && (exe.startsWith("/system/bin/") || exe.startsWith("/system_ext/bin/"))) {
+            val exe = rawCmd.substringBefore(' ')
+            // /system、/vendor 等系统二进制路径 → 系统进程。
+            if (exe.isNotEmpty() && (
+                    exe.startsWith("/system/bin/") || exe.startsWith("/system_ext/bin/") ||
+                        exe.startsWith("/vendor/bin/") || exe.startsWith("/odm/bin/") ||
+                        exe.startsWith("/apex/")
+                    )
+            ) {
                 return true
             }
+            // 无路径的裸名（如 zygote64/zygote，comm=main）→ 按 arg0/arg1 精确匹配。
+            if (exe in PROTECTED_SYSTEM_COMMS) return true
+            val arg1 = rawCmd.split(' ').getOrNull(1).orEmpty()
+            if (arg1 in PROTECTED_SYSTEM_COMMS) return true
+            // comm=main 且 cmdline 含 zygote 关键字（zygote/zygote64 的 comm 均为 main）。
+            if (comm == "main" && rawCmd.contains("zygote")) return true
             return false
         }
 

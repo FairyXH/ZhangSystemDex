@@ -566,12 +566,15 @@ object SelfTest {
         // OOM 生效集合：必须包含「强制集合」（含通知/无障碍组件者），
         // 不含未勾选且非强制的内置应用。
         try {
+            // 载入持久化探测缓存，使「强制」判定与运行时一致（探测为后台异步）。
+            BuiltinConfig.loadForcedCache(rootDir)
             val eff = OomProtectList.effectivePackages(rootDir).toHashSet()
             val forced = pkgs.filter { BuiltinConfig.isForcedOom(it) }
             val forcedMissing = forced.filter { it !in eff }
-            // 非强制且未勾选者不应在名单中。
+            // 非强制且未勾选者不应在名单中——但**用户显式写入 oom_protect.conf 的**除外。
+            val userOom = OomProtectList.read(rootDir).toHashSet()
             val oomChecked = pkgs.filter { BuiltinConfig.isOomChecked(rootDir, it) }.toHashSet()
-            val shouldNot = pkgs.filter { it !in forced && it !in oomChecked }
+            val shouldNot = pkgs.filter { it !in forced && it !in oomChecked && it !in userOom }
             val leaked = shouldNot.filter { it in eff }
             s.add(
                 "内置应用.OOM保护",
@@ -1080,17 +1083,21 @@ object SelfTest {
             OomProtectList.file(tmpDir).writeText("com.tencent.mm\n", Charsets.UTF_8)
             KeepAliveList.write(tmpDir, KeepAliveKind.NOTIFICATION, listOf("com.catchingnow.np"))
             KeepAliveList.write(tmpDir, KeepAliveKind.ACCESSIBILITY, listOf("li.songe.gkd"))
-            val eff = OomProtectList.effectivePackages(tmpDir)
-            // 生效名单 = 用户名单 ∪ 保活名单 ∪ 模块内置应用（内置应用强制并入）。
-            val builtin = OomProtectList.builtinPackages(tmpDir)
-            val expected = LinkedHashSet(
-                listOf("com.tencent.mm", "com.catchingnow.np", "li.songe.gkd")
-            ).also { it.addAll(builtin) }
-            val ok = eff.containsAll(expected) && eff.size == expected.size
+            val eff = OomProtectList.effectivePackages(tmpDir).toHashSet()
+            // 用户名单 ∪ 用户保活名单 必须并入。
+            val mustHave = listOf("com.tencent.mm", "com.catchingnow.np", "li.songe.gkd")
+            val missing = mustHave.filter { it !in eff }
+            // 关键：**未勾选且非强制**的内置应用不得因为「守护开关」被拖入 OOM 保护。
+            val builtinAll = BuiltinConfig.allPackages(tmpDir)
+            BuiltinConfig.loadForcedCache(tmpDir)
+            val leakBuiltin = builtinAll.filter {
+                it in eff && !BuiltinConfig.isForcedOom(it) && !BuiltinConfig.isOomChecked(tmpDir, it)
+            }
+            val ok = missing.isEmpty() && leakBuiltin.isEmpty()
             s.add(
                 "OOM.并入保活名单",
                 if (ok) Status.PASS else Status.FAIL,
-                "生效名单=${eff.size}（含内置 ${builtin.size}），期望=${expected.size}"
+                "生效名单=${eff.size}，缺失=$missing，内置未勾选却泄漏=${leakBuiltin.size}"
             )
             tmpDir.deleteRecursively()
         } catch (t: Throwable) {

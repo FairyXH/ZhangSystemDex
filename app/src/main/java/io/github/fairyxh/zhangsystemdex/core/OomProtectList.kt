@@ -78,9 +78,20 @@ object OomProtectList {
     fun effectivePackages(rootDir: File): List<String> {
         val out = LinkedHashSet<String>()
         out.addAll(read(rootDir))
+        // 保活名单（通知/无障碍）里的**用户自选**应用自动纳入 OOM 保护。
+        //
+        // 注意：`KeepAliveList.read()` 会把「启用内置守护」的模块内置应用（默认全开
+        // 45 个）union 进来。但内置应用的 OOM 保护必须由 `builtin_guard.conf`
+        // 独立决定（**可选**，仅强制/勾选者）。因此这里**剔除内置应用**，避免
+        // 「守护开关」误把全部内置应用拖入 OOM 保护（用户需求 2026-10-06）。
+        val builtinAll = try {
+            BuiltinConfig.allPackages(rootDir).toHashSet()
+        } catch (_: Throwable) {
+            emptySet()
+        }
         for (kind in KeepAliveKind.entries) {
             try {
-                out.addAll(KeepAliveList.read(rootDir, kind))
+                out.addAll(KeepAliveList.read(rootDir, kind).filter { it !in builtinAll })
             } catch (t: Throwable) {
                 Logger.w("OomProtectList", "合并 ${kind.fileName} 失败: ${t.message}")
             }

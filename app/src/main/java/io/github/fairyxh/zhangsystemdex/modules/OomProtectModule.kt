@@ -40,19 +40,78 @@ import java.io.File
 class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = false) {
 
     companion object {
-        /** 用户应用允许的最高优先级上限（不得小于此值，否则会超过 system_server）。 */
-        const val SAFE_FLOOR = -900
+        /**
+         * 用户应用允许的最高优先级上限（不得小于此值）。
+         *
+         * 用户要求（2026-10-06）：**不要 -900/-1000 那么激进**，-500 左右即可，
+         * 只要不被频繁杀死就行。过高（-900）会把应用钉死在内存里，
+         * 导致大内存应用（如 Scene）只增不减 → 系统 OOM → Watchdog 软重启。
+         */
+        const val SAFE_FLOOR = -500
 
-        /** 主进程默认请求值（会被 [clampOom] 钳制到 SAFE_FLOOR）。 */
-        const val DEFAULT_MAIN_ADJ = -1000
-        /** 子进程默认请求值（更保守，避免抢占系统资源）。 */
-        const val DEFAULT_CHILD_ADJ = -700
+        /** 主进程默认值。用户要求 ≈ -500。 */
+        const val DEFAULT_MAIN_ADJ = -500
+        /** 子进程默认值，更保守（仅在主进程基础上略低）。 */
+        const val DEFAULT_CHILD_ADJ = -450
+
+        /**
+         * **绝不允许触碰的系统核心进程名单**（comm 精确匹配）。
+         *
+         * 用户明确要求：「坚决不动 system_server 等系统级进程」。
+         * 这些进程的 oom_score_adj 由 init/系统管理，模块任何情况下都不得修改。
+         */
+        val PROTECTED_SYSTEM_COMMS = setOf(
+            "init",
+            "system_server",
+            "zygote",
+            "zygote64",
+            "zygote32",
+            "surfaceflinger",
+            "servicemanager",
+            "hwservicemanager",
+            "vndservicemanager",
+            "logd",
+            "ueventd",
+            "vold",
+            "keystore2",
+            "apexd",
+            "netd",
+            "adbd",
+            "lmkd",
+            "media.codec",
+            "media.swcodec",
+            "android.hardware.audio.service",
+            "vendor.qti.hardware.display.allocator-service",
+        )
+
+        /**
+         * 该 pid 是否属于「绝不可动」的系统核心进程。
+         *
+         * 判定依据：`/proc/<pid>/comm`（可执行名）或 cmdline 首段落在
+         * [PROTECTED_SYSTEM_COMMS] 中；另外任何 `/system/bin/` 或
+         * `/system_ext/bin/` 下的原生服务也不动。
+         */
+        fun isProtectedSystemProcess(pid: Int): Boolean {
+            val comm = ProcessUtils.readFile("/proc/$pid/comm")?.trim().orEmpty()
+            if (comm in PROTECTED_SYSTEM_COMMS) return true
+            // comm 截断到 15 字符，做前缀兜底（如 system_server 正常不截断）。
+            if (PROTECTED_SYSTEM_COMMS.any { comm.isNotEmpty() && it.startsWith(comm) }) return true
+            val cmd = ProcessUtils.readFile("/proc/$pid/cmdline")
+                ?.replace('\u0000', ' ')?.trim().orEmpty()
+            val exe = cmd.substringBefore(' ')
+            if (exe.isNotEmpty() && (exe.startsWith("/system/bin/") || exe.startsWith("/system_ext/bin/"))) {
+                return true
+            }
+            return false
+        }
 
         /**
          * 内存看门狗触发阈值：物理内存「已用」百分比达到该值即介入。
-         * 用户需求（2026-10-06）：95%。
+         *
+         * 用户需求（2026-10-06）：95%。但实测 95% 时系统已进入疯狂回收/卡死，
+         * 来不及挽救，因此**提前到 90%**（仍保留 95% 的语义为「已触发过」）。
          */
-        const val WATCHDOG_MEM_USED_TRIGGER = 95
+        const val WATCHDOG_MEM_USED_TRIGGER = 90
 
         /**
          * 判定「模块 OOM 保护是元凶」的最小证据：
@@ -69,7 +128,7 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
          * 把「期望的 oom_score_adj」钳制到安全范围。
          *
          * 规则：不允许 < [SAFE_FLOOR]（即不允许数值更小/优先级更高），
-         * 也不允许 > 1000。示例：请求 -1000 → 返回 -900。
+         * 也不允许 > 1000。示例：请求 -1000 → 返回 -500。
          */
         fun clampOom(requested: Int): Int = requested.coerceIn(SAFE_FLOOR, 1000)
     }
@@ -91,6 +150,11 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
     private var watchdogHits = 0L
 
     override fun onStart() {
+        // 组件探测（是否含无障碍/通知）改为**后台异步**，避免在启动路径同步跑
+        // N 次 `cmd package dump` 阻塞 system_server（2026-10-06 软重启事故根因）。
+        val root = File(ctx.config.rootDir)
+        BuiltinConfig.loadForcedCache(root)
+        BuiltinConfig.startProbeWorker(root)
         refreshList(force = true)
         Logger.i(name, "OOM 保护名单已加载：${packages.size} 个（安全上限=$SAFE_FLOOR）")
     }
@@ -99,6 +163,8 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         // 关闭时把所有改动过的存活进程还原为系统默认，避免残留高优先级。
         val n = touchedPids.size
         for (pid in touchedPids.toList()) {
+            // 系统核心进程绝不触碰（其 adj 由系统管理）。
+            if (isProtectedSystemProcess(pid)) continue
             if (ProcessUtils.readFile("/proc/$pid/oom_score_adj") != null) {
                 ProcessUtils.writeFile("/proc/$pid/oom_score_adj", "0")
             }
@@ -156,7 +222,9 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         // → 还原并移除，防止"名单删了却仍高优先级"的泄露。
         val stale = touchedPids.filter { it !in aliveNow }
         for (pid in stale) {
-            if (ProcessUtils.readFile("/proc/$pid/oom_score_adj") != null) {
+            if (!isProtectedSystemProcess(pid) &&
+                ProcessUtils.readFile("/proc/$pid/oom_score_adj") != null
+            ) {
                 ProcessUtils.writeFile("/proc/$pid/oom_score_adj", "0")
             }
             lastAdj.remove(pid)
@@ -226,8 +294,10 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         // 1) 取消保护（还原所有被本模块改动过的存活进程）。
         val n = touchedPids.size
         restoreAll()
-        // 2) 终止高占用对象。
-        if (topPkg != null) {
+        // 2) 终止高占用对象（系统核心进程绝不终止）。
+        if (topPid > 0 && isProtectedSystemProcess(topPid)) {
+            Logger.w(name, "内存看门狗：高占用对象是系统核心进程（pid=$topPid），不处理")
+        } else if (topPkg != null) {
             try {
                 FrameworkOps.forceStop(topPkg)
                 Logger.w(name, "内存看门狗：已强制停止 $topPkg")
@@ -252,8 +322,13 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         return first.takeIf { OomProtectList.isValidPackage(it) }
     }
 
-    /** 写入 oom_score_adj（仅在变化时写）。 */
+    /** 写入 oom_score_adj（仅在变化时写）。系统核心进程**绝不触碰**。 */
     private fun applyAdj(pid: Int, adj: Int) {
+        // 用户要求：坚决不动 system_server 等系统级进程。
+        if (isProtectedSystemProcess(pid)) {
+            if (lastAdj.remove(pid) != null) touchedPids.remove(pid)
+            return
+        }
         if (lastAdj[pid] == adj) return
         if (ProcessUtils.writeFile("/proc/$pid/oom_score_adj", adj.toString())) {
             lastAdj[pid] = adj
@@ -263,6 +338,8 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
 
     private fun restoreAll() {
         for (pid in touchedPids.toList()) {
+            // 系统核心进程绝不触碰（避免把 system_server 等改回 0）。
+            if (isProtectedSystemProcess(pid)) continue
             if (ProcessUtils.readFile("/proc/$pid/oom_score_adj") != null) {
                 ProcessUtils.writeFile("/proc/$pid/oom_score_adj", "0")
             }

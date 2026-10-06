@@ -74,12 +74,111 @@ object BuiltinConfig {
     /**
      * 含「无障碍 / 通知」组件的内置应用 → OOM **强制**保护（不可关）。
      *
-     * 判定：该包声明了 `AccessibilityService` 或 `NotificationListenerService` 组件。
-     * 结果带缓存（探测需 fork dumpsys，较慢）。
+     * ## 重要（2026-10-06 软重启事故后重写）
+     *
+     * 旧实现对本方法直接 `probeHasNotifOrA11y(pkg)`，会 fork `cmd package dump <pkg>`。
+     * 由于本方法在 daemon 启动/每轮 tick 中会对**全部内置应用**（`builtin_apps.conf`，
+     * 实测 45 个）逐个调用，等于**串行 45 次 `cmd package dump`**，最终在 system_server
+     * 内执行，**严重阻塞 system_server → Watchdog 超时杀死 system_server → 软重启**。
+     *
+     * 现改为：
+     *   1. **只读缓存**（内存 + 落盘 `builtin_forced.conf`），本方法**永不阻塞**；
+     *   2. 缓存未命中时返回 `false`（保守：不强制），并**排入后台探测队列**；
+     *   3. 后台单线程**串行、限速**（每次探测间隔 [PROBE_INTERVAL_MS]）地跑
+     *      `cmd package dump`，结果落盘，下一轮 tick 即可读到（最终一致）。
      */
-    fun isForcedOom(pkg: String): Boolean = forcedCache.getOrPut(pkg) { probeHasNotifOrA11y(pkg) }
+    fun isForcedOom(pkg: String): Boolean {
+        forcedCache[pkg]?.let { return it }
+        pendingProbe.add(pkg)
+        return false
+    }
 
     private val forcedCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** 待后台探测的包名（去重、有序）。 */
+    private val pendingProbe = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /** 后台探测线程是否已启动。 */
+    @Volatile private var probeThreadStarted = false
+
+    /** 落盘缓存文件名（`<pkg>=1/0`）。 */
+    const val FORCED_FILE_NAME = "builtin_forced.conf"
+
+    /** 两次后台探测之间的最小间隔（毫秒），避免连续冲击 system_server。 */
+    private const val PROBE_INTERVAL_MS = 250L
+
+    private fun forcedCacheFile(rootDir: File): File = File(rootDir, FORCED_FILE_NAME)
+
+    /** 从落盘缓存加载（进程启动时调用一次即可）。 */
+    fun loadForcedCache(rootDir: File) {
+        val f = forcedCacheFile(rootDir)
+        if (!f.exists()) return
+        try {
+            for (raw in f.readText(Charsets.UTF_8).lineSequence()) {
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("#")) continue
+                val body = line.substringBefore('#').trim()
+                val i = body.indexOf('=')
+                if (i <= 0) continue
+                val pkg = body.substring(0, i).trim()
+                val v = body.substring(i + 1).trim()
+                if (pkg.isNotEmpty()) forcedCache[pkg] = v == "1" || v.equals("true", true)
+            }
+            Logger.i("BuiltinConfig", "已加载强制 OOM 缓存（${forcedCache.size} 项）")
+        } catch (t: Throwable) {
+            Logger.w("BuiltinConfig", "读取 $FORCED_FILE_NAME 失败: ${t.message}")
+        }
+    }
+
+    private fun saveForcedCache(rootDir: File) {
+        try {
+            val f = forcedCacheFile(rootDir)
+            val text = buildString {
+                append("# 内置应用「强制 OOM」探测结果缓存（由后台探测线程维护，勿手改）\n")
+                append("# 一行：<pkg>=1/0。1=含无障碍/通知组件，OOM 保护强制生效。\n")
+                for ((p, v) in forcedCache) append(p).append('=').append(if (v) "1" else "0").append('\n')
+            }
+            val tmp = File(f.parentFile, f.name + ".tmp")
+            tmp.writeText(text, Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(text, Charsets.UTF_8)
+                tmp.delete()
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * 启动后台探测线程（幂等）。**串行、限速**地消费 [pendingProbe]，
+     * 每完成一个包即增量落盘，避免丢失。
+     */
+    fun startProbeWorker(rootDir: File) {
+        if (probeThreadStarted) return
+        synchronized(this) {
+            if (probeThreadStarted) return
+            probeThreadStarted = true
+        }
+        val t = Thread({
+            var dirty = false
+            while (true) {
+                val pkg = pendingProbe.poll()
+                if (pkg == null) {
+                    if (dirty) { saveForcedCache(rootDir); dirty = false }
+                    try { Thread.sleep(1500L) } catch (_: InterruptedException) { return@Thread }
+                    continue
+                }
+                if (forcedCache.containsKey(pkg)) continue
+                val v = probeHasNotifOrA11y(pkg)
+                forcedCache[pkg] = v
+                dirty = true
+                try { Thread.sleep(PROBE_INTERVAL_MS) } catch (_: InterruptedException) { saveForcedCache(rootDir); return@Thread }
+            }
+        }, "builtin-forced-probe")
+        t.isDaemon = true
+        t.priority = Thread.MIN_PRIORITY
+        t.start()
+        Logger.i("BuiltinConfig", "组件探测后台线程已启动（串行限速 ${PROBE_INTERVAL_MS}ms/个）")
+    }
 
     private fun probeHasNotifOrA11y(pkg: String): Boolean {
         return try {
@@ -147,6 +246,7 @@ object BuiltinConfig {
         cachedMtime = -1L
         cachedRoot = ""
         cachedEntries = emptyMap()
-        forcedCache.clear()
+        // 注意：forcedCache 是「探测结果」落盘缓存，**不随配置变更清空**（探测成本高，
+        // 且组件声明不随用户开关变化）。如需重探，删除 `builtin_forced.conf` 即可。
     }
 }

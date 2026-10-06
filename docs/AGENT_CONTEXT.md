@@ -1487,3 +1487,49 @@ cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh
 - 清理 API 的 `rules` 参收**规则 id 列表**（逗号分隔），非 name。
 - WebUI 后端 `/` 与 `/index.html` 仅返回标识串（51B），**页面由 KSU WebUI X 宿主直接读 webroot/index.html 渲染**，非 HTTP 提供。
 - 验证任何写操作前**必须先备份**目标文件。
+
+---
+
+## 2026-10-06 追加：系统应用 native lib（Stored 重打包）+ Shizuku 服务端修复
+
+### 结论（最重要）
+**被挂载为系统应用的 APK，若其进程以 `APK!/lib/<abi>` 方式 dlopen，
+APK 内 `.so` 必须是 Stored（未压缩），否则 UnsatisfiedLinkError。**
+
+Shizuku 即是此例：starter 用 `pm path` 拿到 `/data/app/.../base.apk` 并传
+`-Dshizuku.library.path=<apk>!/lib/arm64-v8a`，而原 APK 内 12 个 so 全为
+`Defl:N` → 服务端 `rikka.shizuku.server.ShizukuService` 永远起不来。
+
+### 已废弃的旧结论（勿再沿用）
+早期认为根因是「模块只放 APK、没放 `/system/app/<pkg>/lib` 目录」。
+**错。** Shizuku 走 APK 内路径，与 `/system/app/<pkg>/lib` 无关。
+据此补的 134 个 `.so`（25 应用，约 30–50MB）已全部清理。
+
+### 产出
+- `SystemAppLibFixer.kt`：重写为「检测 so 压缩方式 → 非 Stored 则重打包 APK」
+  （纯 JDK；临时文件→校验→原子替换；保留 `.pre-stored.bak`；幂等）。
+- `scripts/fix_system_app_apk_so.py`（批量，`--dry-run`）、
+  `scripts/repack_apk_stored_so.py`（单 APK）。
+- 已删除 `scripts/fix_system_app_libs.sh`（旧方案）。
+- 母版 4 个应用已重打包：`com.bintianqi.owndroid`、`com.huawei.hwid`、
+  `com.ktls.fileinfo`、`io.github.fairyxh.VirtualEnv`；Shizuku APK
+  `so=12→stored=12`（2571964→2858166 字节）。
+
+### 切换开关
+`system_app_libs_fix_enable=true` —— 调用点在 `AppManagerModule.copyMount()` 之后。
+
+### 构建注意（本机 proot）
+`./gradlew :app:assembleRelease` 会因 **AAPT2 SIGILL** 失败（x86_64 二进制
+在 aarch64 宿主上经 qemu 模拟）。解法见 `docs/BUILD_NOTES.md`：
+做 `/opt/aapt2wrap/aapt2` 包装脚本 + `android.aapt2FromMavenOverride`
+（本机配置，不入库）。
+
+### 本次构建/部署
+- Main.dex：`d5d82e9e` → `b536e0fa`（含新版 SystemAppLibFixer）
+- 母版 + 模块 Main.dex / webroot 已同步；母版 webroot 之前陈旧（无 Shizuku 面板），已更新
+- `pack.sh` 打包成功：527MB，SHA256 逐文件校验通过
+- Git：`ac5ac8c`（SystemAppLibFixer 重写）、`062aff8`（重建 Main.dex + 构建笔记）
+
+### 当前状态
+**已就绪，等待用户重启设备验证**（APK 挂载需完整重启，软重启无效）。
+重启后检查：`curl -s 127.0.0.1:26437/api/shizuku/status` → `healthy=true`。

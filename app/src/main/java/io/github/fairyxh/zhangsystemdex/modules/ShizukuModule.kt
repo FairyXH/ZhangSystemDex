@@ -101,6 +101,16 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
     ) {
         /** 是否「健康」：主进程与服务端都在。 */
         val healthy: Boolean get() = mainPids.isNotEmpty() && serverPids.isNotEmpty()
+
+        /**
+         * 服务是否**可用**：只要服务端在，Shizuku 能力即可用（主应用只是 UI/授权前端）。
+         *
+         * 2026-10-06：本设备以 root starter 起服务端，主应用常年不在内存。
+         * 若仅以 [healthy] 判定，会每 30s 无意义重启一次（实测 restartCount 已达 40），
+         * 既刷日志又加重负担。改为：**服务端在即视为可用，不触发重启**。
+         */
+        val serverUsable: Boolean get() = serverPids.isNotEmpty()
+
         val total: Int get() = mainPids.size + serverPids.size
     }
 
@@ -165,6 +175,12 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
             RuntimeRegistry.put(regKey, "serverPids", snap.serverPids.size)
             if (snap.healthy) {
                 RuntimeRegistry.bump(regKey, "keepAliveOk")
+                return
+            }
+            // 服务端在即视为可用：主应用不在内存是常态（root starter 模式），
+            // 不必每 30s 重启一次（2026-10-06 修复 restartCount 飙升）。
+            if (snap.serverUsable) {
+                RuntimeRegistry.bump(regKey, "keepAliveServerOnly")
                 return
             }
             Logger.w(

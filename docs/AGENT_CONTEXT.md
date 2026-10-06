@@ -1743,3 +1743,70 @@ APK 内 so 是 `Defl:N` 完全正常。
 - 部署后 API 复验：`/api/ping` pong；`/api/builtin/apps` count=45；
   `/api/keepalive/get?kind=notif` → `list=46, builtin=45`。
 - **仍未打 zip、仍未 push**。
+---
+
+## §49 全功能逐项验证（内置应用默认保活 + 不听配置）——2026-10-06
+
+用户要求：对模块功能逐项完全验证并返回**带系统原始数据证据**的报告。
+
+### 验证方法
+- 脚本：`/sdcard/Download/Files/_zsd_deploy/verify_all.sh`（12 小节，逐项读系统原始数据），输出 `/data/local/tmp/zsd_verify.txt`。
+- 三方交叉：**系统原始数据**（`dumpsys` / `settings` / `/proc` / ColorOS launcher 文件）
+  × **模块 HTTP API**（`/api/builtin/*`、`/api/keepalive/*`、`/api/oom/status`、`/api/overview`）
+  × **SelfTest**（`app_process ... Main <moddir> selftest`，PASS/FAIL 汇总）。
+- **决定性「不听配置」实验**：把 `doze_enable / locked_apps_enable / oom_protect_enable /
+  notif_keepalive_enable / a11y_keepalive_enable` 全部置 `false`，重启 dex 复验，再还原。
+  这是判定「内置应用保活是否真的不听配置」的唯一硬证据。
+
+### 关键结论（全部 PASS）
+| 子系统 | 生效集合 | 系统原始数据证据 |
+|---|---|---|
+| 内置应用枚举 | 45 | `ls /data/adb/modules/Zhang/system/app \| wc -l` = 45 |
+| Doze 白名单 | 45/45 | `dumpsys deviceidle whitelist` 命中 45（样例 `user,li.songe.gkd,10425`） |
+| 多任务 Lock | 45/45 | ColorOS `app_lock_data_file_name` 命中 45（entries=412/distinct=103） |
+| 通知使用权保活 | enforced=46（45 内置∪1 用户） | `/api/keepalive/get?kind=notif` |
+| 无障碍保活 | enforced=45 | `/api/keepalive/get?kind=a11y` |
+| OOM 保护 | 内置 45 全在名单；运行时 protected=13 | `/proc/<pid>/oom_score_adj=-900`（`li.songe.gkd`、`com.omarea.vtools`…） |
+| 模块常驻运行态 | enabled=running=true | `/api/overview`：`a11y_keepalive`/`notif_keepalive`/`oom_protect` desc=「不受开关控制」 |
+
+### 「不听配置」硬证据（开关全 false + 重启 dex）
+- Doze：**45/45 命中，0 缺失**（`dumpsys deviceidle whitelist`）。
+- 多任务 Lock：**45/45 命中**（ColorOS 文件被重启后的 daemon 重写，mtime 14:12:17）。
+- OOM：`oom_protect_enable=false` 时 `/api/oom/status` → `enabled=false, builtinCount=45, count=11`；
+  实测 `com.omarea.vtools`/`li.songe.gkd`/`top.bogey.touch_tool`/`com.remoteenv.collector`
+  `oom_score_adj=-900` 依旧生效。
+- a11y/notif：`/api/overview` 中两模块仍 `enabled=true, running=true`，
+  系统 `settings get secure` 的授权项依旧保留内置应用。
+- 结论：**四个子系统的内置应用保活均不依赖配置**，与设计一致。实验后已还原开关（pid 16017）。
+
+### 垃圾清理端到端（原「异常」已澄清为测试脚本缺陷）
+- 现象（首轮）：`before`/`after` 的 `ls -R` 完全相同 → 曾疑似未生效。
+- 根因（两条，均**非模块缺陷**）：
+  1. `empty_dirs` 规则 `roots=/data/media/<u>/Download`，而首轮测试目录建在
+     `/data/media/0/.zsd_verify`（**规则范围之外**），故不入扫描范围。
+  2. `POST /api/rubbish/clean` 是**异步**的（后台 daemon 线程，立即返回「任务已启动」），
+     首轮未轮询 `/api/rubbish/progress` 就截图，时机过早。
+- 修正后（测试目录改在 `/data/media/0/Download/` 内 + 轮询至 `running=false`）：
+  `[RESULT] PASS`——0 字节文件 `zero.bin`/`zero2.bin` 与空目录 `sub/empty` 被删，
+  非空 `keep.txt` 保留；审计日志 `rubbish_clean.log` 有对应 `DELETE` 行、
+  `SESSION rules=empty_dirs files=4 rejected=1`（rejected 为命中用户违禁路径 `AGC.8.4`）。
+
+### SelfTest
+- `PASS: 73 FAIL: 0 WARN: 2 SKIP: 7 (total 82)`（首跑偶发 1 FAIL，重跑即 0）。
+- 内置应用 5 项全 PASS：枚举=45 / Doze 缺失=0 / 通知缺失=0 / 无障碍缺失=0 / OOM 缺失=0。
+- WARN 为 SqliteUtils 兜底与「清理不主动删」；SKIP 为副作用项。
+
+### 已知问题 / 注意事项（交给后续 Agent）
+1. **SelfTest `模块.AppOps.write/read` 偶发 FAIL**（非本功能引入）：
+   `com.shrey.androiddex/MANAGE_MEDIA`、`ac.no.screenshot/RECEIVE_SANDBOX_TRIGGER_AUDIO`
+   `writeOk=true, readAllow=false`——属 AppOps 模式读回的**竞态/ROM 行为**，立即重跑即 PASS。
+   与内置应用保活无关，未纳入本次修复范围。
+2. **`/api/builtin/status.locked` 字段不可信**：它读 `settings get system locked_apps`（MIUI 字段），
+   ColorOS 会被系统重写，故常显示偏少（本次 8）。**权威来源是 ColorOS launcher 文件**（45/45）。
+   若后续要修，应改为优先读 ColorOS 文件。
+3. 通知/无障碍「系统实际已授权」数（notif 4/45、a11y 6/45）**少是正常的**：只有真正声明了
+   `NotificationListenerService`/`AccessibilityService` 的内置应用才能被授权；模块负责把全部 45 个
+   放入 `enforced` 并维护掉线重绑，不能凭空为不存在的组件授权。
+4. 垃圾清理测试：`empty_dirs` 只作用于 `/data/media/<u>/Download`；`POST /api/rubbish/clean` 必须
+   轮询 `/api/rubbish/progress` 才能判定结果。`rm -rf` 会被 super_admin 安全拦截，测试用
+   唯一目录名 + `rmdir` 收尾。

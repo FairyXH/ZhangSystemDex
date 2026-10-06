@@ -131,38 +131,60 @@ object Main {
             val pkgs = args.drop(idx + 2).filter { it.isNotBlank() }
             Logger.i("Main", "通知权限 CLI: action=$action pkgs=$pkgs")
             try {
+                val ng = io.github.fairyxh.zhangsystemdex.core.NotificationGrant
                 when (action) {
                     "grant" -> {
                         if (pkgs.isEmpty()) {
                             println("用法: notification grant <pkg> [pkg...]")
                         } else {
                             for (p in pkgs) {
-                                val r = io.github.fairyxh.zhangsystemdex.core.NotificationGrant.grant(p)
+                                val r = ng.grant(p)
                                 println("grant $p: ok=${r.ok} listeners=${r.listeners} " +
-                                    "postNotif=${r.postNotifGranted} warnings=${r.warnings}")
+                                    "postNotif=${r.postNotifGranted} doze=${r.dozeWhitelisted} " +
+                                    "warnings=${r.warnings}")
                             }
                         }
                     }
                     "revoke" -> {
                         for (p in pkgs) {
-                            println("revoke $p: ${io.github.fairyxh.zhangsystemdex.core.NotificationGrant.revoke(p)}")
+                            println("revoke $p: ${ng.revoke(p)}")
+                        }
+                    }
+                    "revoke-post" -> {
+                        for (p in pkgs) {
+                            println("revoke-post $p: ${ng.revokePostNotif(p)}")
                         }
                     }
                     "check", "probe" -> {
                         if (pkgs.isEmpty()) {
-                            io.github.fairyxh.zhangsystemdex.core.NotificationGrant.listListeners()
-                                .forEach { println("  $it") }
+                            ng.listListeners().forEach { println("  $it") }
                         } else {
-                            for (p in pkgs) {
-                                println(io.github.fairyxh.zhangsystemdex.core.NotificationGrant.inspect(p))
-                            }
+                            for (p in pkgs) println(ng.inspect(p))
                         }
                     }
+                    // list: 只输出已授权的包名，一行一个（便于脚本消费）
+                    "list" -> {
+                        ng.listPackages().forEach { println(it) }
+                    }
+                    "summary" -> println(ng.summary())
                     "clean" -> {
-                        val n = io.github.fairyxh.zhangsystemdex.core.NotificationGrant.cleanInvalid { println(it) }
+                        val n = ng.cleanInvalid { println(it) }
                         println("clean: 移除 $n 条")
                     }
-                    else -> println("未知 action: $action（grant|revoke|check|probe|clean）")
+                    "doze-on" -> {
+                        for (p in pkgs) println("doze-on $p: ${ng.addDozeWhitelist(p)}")
+                    }
+                    "doze-off" -> {
+                        for (p in pkgs) println("doze-off $p: ${ng.removeDozeWhitelist(p)}")
+                    }
+                    "rebind" -> {
+                        for (p in pkgs) println("rebind $p: ${ng.rebind(p)}")
+                    }
+                    else -> println(
+                        "未知 action: $action\n" +
+                            "可选: grant | revoke | revoke-post | check | probe | list | summary | " +
+                            "clean | doze-on | doze-off | rebind"
+                    )
                 }
             } catch (t: Throwable) {
                 Logger.e("Main", "通知权限 CLI 失败", t)

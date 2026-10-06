@@ -39,9 +39,9 @@ object KeepAliveList {
         },
     )
 
-    /** 内置默认保活包名（用户要求：默认保活通知滤盒）。 */
+    /** 内置默认保活包名（用户指定：通知滤盒 + Operit AI）。 */
     val DEFAULT_PACKAGES: Map<KeepAliveKind, List<String>> = mapOf(
-        KeepAliveKind.NOTIFICATION to listOf("com.catchingnow.np"),
+        KeepAliveKind.NOTIFICATION to listOf("com.catchingnow.np", "com.ai.assistance.operit"),
         KeepAliveKind.ACCESSIBILITY to emptyList(),
     )
 

@@ -28,18 +28,36 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     override fun onStart() {
         Logger.i(name, "模块启动")
+        // 重操作（Doze 白名单 / 多任务 Lock 写 settings）**延后到开机稳定后**在后台执行，
+        // 避免与系统开机高峰争抢 system_server 的 Binder 线程池
+        //（2026-10-06：曾观察到开机后短时间内大量 Binder 往返与 Watchdog 相关）。
         // 内置应用（system/app/）的 Doze 白名单与多任务 Lock **始终**生效，
         // 不听从 doze_enable / locked_apps_enable（用户要求）。
-        if (ctx.config.switch("doze_enable")) {
-            applyDozeList()
-        } else {
-            applyRequiredDozePackages()
-        }
-        if (ctx.config.switch("locked_apps_enable")) {
-            applyLockedApps()
-        } else {
-            applyBuiltinLockedApps()
-        }
+        val t = Thread({
+            try { Thread.sleep(STARTUP_DELAY_MS) } catch (_: InterruptedException) { return@Thread }
+            try {
+                if (ctx.config.switch("doze_enable")) {
+                    applyDozeList()
+                } else {
+                    applyRequiredDozePackages()
+                }
+                if (ctx.config.switch("locked_apps_enable")) {
+                    applyLockedApps()
+                } else {
+                    applyBuiltinLockedApps()
+                }
+            } catch (t2: Throwable) {
+                Logger.w(name, "启动期 Doze/Lock 应用失败: ${t2.message}")
+            }
+        }, "power-startup-apply")
+        t.isDaemon = true
+        t.priority = Thread.MIN_PRIORITY
+        t.start()
+    }
+
+    companion object {
+        /** 开机后延迟多久再执行 Doze/Lock 重操作（毫秒）。 */
+        private const val STARTUP_DELAY_MS = 20_000L
     }
 
     /** 内置应用（system/app/）中**启用内置守护**的部分，来源见 [BuiltinConfig]。 */
@@ -87,25 +105,31 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
             val white = LinkedHashSet(buildWhiteList(xposedModules))
             white.addAll(builtinPackages())
             val out = ShellExecutor.run("dumpsys deviceidle whitelist") ?: return
-            val current = out.lineSequence()
-                .mapNotNull { line ->
-                    val idx = line.lastIndexOf(',')
-                    if (idx >= 0) line.substring(idx + 1).trim().takeIf { it.isNotEmpty() } else null
-                }
-                .filter { it.startsWith("user,") || true }
-                .toList()
-            for (entry in current) {
-                if (entry.startsWith("user,")) {
-                    val pkg = entry.substringAfter(',')
-                    if (pkg.isNotEmpty() && !white.contains(pkg)) {
-                        FrameworkOps.removePowerSaveWhitelist(pkg)
-                    }
-                }
+            // 当前已是 user 级白名单的包集合（一次 Binder 读取代替代 N 次写）。
+            val currentUser = LinkedHashSet<String>()
+            for (line in out.lineSequence()) {
+                val idx = line.lastIndexOf(',')
+                if (idx < 0) continue
+                val entry = line.substring(0, idx).trim()
+                val pkg = line.substring(idx + 1).trim()
+                if (entry == "user" && pkg.isNotEmpty()) currentUser.add(pkg)
             }
+            // 只移除「多余且非目标」的 user 白名单项。
+            for (pkg in currentUser) {
+                if (!white.contains(pkg)) FrameworkOps.removePowerSaveWhitelist(pkg)
+            }
+            // **只对差异项**写白名单（避免每次启动 N 次无用 Binder 往返）。
+            // 2026-10-06：原实现无条件对全部包调用，在系统 Binder 紧张时会加剧
+            // system_server 的 Binder 线程池压力（曾参与触发 Watchdog 软重启）。
+            var added = 0
             for (pkg in white) {
+                if (pkg in currentUser) continue
                 FrameworkOps.addPowerSaveWhitelist(pkg)
+                added++
+                // 限速：每项之间让出 60ms，避免瞬间打满 system_server Binder 线程池。
+                if (added % 8 == 0) try { Thread.sleep(60) } catch (_: InterruptedException) { return }
             }
-            Logger.i(name, "Doze 白名单已更新: ${white.size} 个包")
+            Logger.i(name, "Doze 白名单已更新: 目标 ${white.size} 个包，本次新增 $added 个")
         } catch (t: Throwable) {
             Logger.w(name, "Doze 白名单失败: ${t.message}")
         }

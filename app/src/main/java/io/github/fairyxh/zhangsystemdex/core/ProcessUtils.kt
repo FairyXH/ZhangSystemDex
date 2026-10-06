@@ -42,18 +42,42 @@ object ProcessUtils {
         }
     }
 
+    /**
+     * 按「进程即目标」语义查找 pid。
+     *
+     * ## 匹配规则（2026-10-06 收紧，修复误伤）
+     *
+     * 旧实现用 `cmdline.contains(pattern)`，会把**任何命令行中出现该串**的无关进程
+     * 也算进来——实测把模块自己的 `cmd package dump com.box.app`、`grep versionCode`
+     * 等 shell 子进程误判为「受保护对象」并改了 `oom_score_adj`。
+     *
+     * 现改为只看 **arg0（可执行名/包名）**：
+     *   - `arg0 == pattern`；
+     *   - `arg0` 以 `pattern/`（Android 包名进程，如 `com.foo.bar:svc`）开头；
+     *   - `arg0` 以 `"/" + pattern` 结尾（系统二进制，如 `/system/bin/init`）。
+     *
+     * 这覆盖了包名（`com.omarea.vtools`）、进程名（`frpc`）、系统服务（`surfaceflinger`
+     * → `/system/bin/surfaceflinger`），同时**排除**「命令行里恰好含该串」的进程。
+     */
     fun pidsOf(pattern: String): List<Int> {
+        if (pattern.isEmpty()) return emptyList()
         val result = ArrayList<Int>()
         val proc = File("/proc")
         val dirs = proc.listFiles { f -> f.isDirectory && f.name.all { it.isDigit() } } ?: return result
+        val suffix = "/$pattern"
         for (dir in dirs) {
             try {
                 val pid = dir.name.toInt()
                 val cmdline = File(dir, "cmdline").readBytes()
                     .toString(Charsets.UTF_8)
-                    .replace('\u0000', ' ')
-                    .trim()
-                if (cmdline.contains(pattern)) result.add(pid)
+                // arg0 = cmdline 的首个 NUL 分隔段（不 trim，保留原形）。
+                val arg0 = cmdline.substringBefore('\u0000').trim()
+                if (arg0 == pattern ||
+                    arg0.startsWith("$pattern:") ||
+                    arg0.endsWith(suffix)
+                ) {
+                    result.add(pid)
+                }
             } catch (_: Throwable) {
             }
         }

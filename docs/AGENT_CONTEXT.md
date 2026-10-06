@@ -1533,3 +1533,50 @@ APK 内 so 是 `Defl:N` 完全正常。
 母版与模块在以下文件上本就会不同，属运行时/用户数据，**不属同步范围**：
 `ZhangSetting/config.json`、`ZhangSetting/隐藏应用列表全隐藏.json`、
 `system/webroot/index.html`（该文件由模块 app 端自行生成，不含 shizuku 面板）。
+
+---
+
+## §44 完成并部署：设置页「保活名单」完整 UI（2026-10-06 13:2x）
+
+### 背景
+工作区存在一处**未提交**的 UI 改动：`app/src/main/assets/webroot/index.html`
+（+174/-1），在既有「Shizuku 保活」区块之后新增两个完整区块——
+**通知使用权保活名单**、**无障碍服务保活名单**，每块含：总开关 / 当前状态（点击刷新）/
+搜索应用 / 应用选择器（勾选入名单）/ 手动编辑 textarea / 保存按钮。后端
+`/api/keepalive/{get,set,apps}` 与 switch `notif_keepalive_enable` / `a11y_keepalive_enable`
+此前已存在（`b6ffa2c`/`4f61df0`），本次是补全其 WebUI 前端。
+
+### 静态校验（Ubuntu/node，全部通过）
+- `node --check`（提取 `<script>`）→ **JS_SYNTAX_OK**（node v24.20.0，1 个 script）。
+- 16 个保活 DOM id（`swNotifKeepAlive`/`notifKaStatus`/…/`a11yKaText`）**零缺失**（全文件 174 个 id）。
+- UI 引用 **43 个 `/api/*` 端点 == 后端 HttpBackend 路由表 43 条，零缺失**。
+
+### 后端契约核对（源码级）
+- `apiKeepAliveGet` 返回 `list/enabled/switchEnabled/file/pathsFile/paths/items[]{pkg,enabled,label,installed}`；
+- `apiKeepAliveSet` 返回 `list/count`；`apiKeepAliveApps` 返回 `apps[]{pkg,label,system,inList,enabled}`。
+与前端 `loadKeepAlive/kaRenderApps/saveKeepAlive` 消费字段**逐字一致**。
+
+### 真机端到端验证（daemon pid 30845，dex 未变 `df66afc9`，端口 26437）
+- `GET /api/ping` → pong；`/api/keepalive/get?kind=notif` → `list=[com.catchingnow.np,
+  com.ai.assistance.operit]`、`paths` 已学习滤盒组件、`switchEnabled=true`；
+  `?kind=a11y` → 空名单、`switchEnabled=true`；`/api/keepalive/apps?kind=notif` → **13 个应用**。
+- 写入往返：`POST /api/keepalive/set {kind:notif,content:...}` 增包→文件即时更新
+  （注释保留、归一化）；再次 set 还原→文件回到原值，**无数据丢失**。
+
+### 部署（跨环境桥 `/sdcard/Download/Files/_zsd_deploy/`）
+- 新 UI md5 = **`6d93e53bd1a88ac982f71cfc602f773a`**（2579 行）。
+- 同步到：`/data/adb/modules/Zhang/webroot/index.html` + 母版
+  `/sdcard/Download/Files/ZhangProtect-Android/webroot/index.html`，两处均 = `6d93e53b`。
+- 备份：`/data/adb/Zhang/_backup_ka_20261006-132817/`（旧 module/mother index.html）。
+- 仓库交付副本 `webroot/index.html`（gitignore）已同步为新版。
+- **dex 未变**（本次纯前端），故**无需重新构建 Main.dex / 未打 zip**。
+
+### Git
+- commit **`7c226b3`** `feat(webui): 设置页保活名单完整 UI（通知使用权/无障碍服务）`
+  （1 file changed, +174/-1）。当前 `main` 领先 origin/main **17 个 commit，未 push**。
+
+### 复用/注意
+- 新增保活类「开关」控件仍必须走 `/api/switch/set` 落盘（见 §18/§23 教训）；本次
+  `setKeepAliveSwitch` 已正确调用。
+- WebUI 双文件：真源 `app/src/main/assets/webroot/index.html`；改后须手动 `cp` 到
+  `webroot/`（交付副本）+ 部署到模块目录 + 母版（构建 dex **不会**同步 UI，见 §39）。

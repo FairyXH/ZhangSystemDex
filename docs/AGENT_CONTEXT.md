@@ -1707,3 +1707,39 @@ APK 内 so 是 `Defl:N` 完全正常。
 ### 后续可选
 - 打包发布 zip（`cd /sdcard/Download/Files/ZhangProtect-Android && sh pack.sh`）。
 - `git push origin main`。
+---
+
+## §48 长期约束：母版为唯一真源（打包/更新必须走母版）——2026-10-06 用户重申
+
+### 用户明确要求（Long-term，后续 Agent 必须遵守）
+- **母版目录：`/data/media/0/Download/Files/ZhangProtect-Android/`**
+  （= `/sdcard/Download/Files/ZhangProtect-Android/`）。
+- 母版即**模块安装包**：**所有更新、修改都必须在母版中进行**。
+- **打包必须使用母版**（`cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh`），
+  产物输出到 `/data/media/0/Download/Files/ZhangProtect-Android.zip`。
+- **禁止直接从已安装模块 `/data/adb/modules/Zhang` 打包**（与 §42 一致）。
+- 更新/修改完毕后，**要免重启更新到已安装模块**：
+  `cd /data/media/0/Download/Files/ZhangProtect-Android && sh ./部署母版到已安装.sh`
+  （母版整体 tar 覆盖 → 备份 → 同步 dex 到运行目录 → 重启 dex，无需重启设备）。
+
+### 正确工作顺序（务必按此执行，勿再倒置）
+1. 改**仓库源码工程** `/home/projects/ZhangSystemDex/app/src/main/...`（代码/UI 真源）。
+2. Ubuntu 构建：`bash /opt/build.sh` → 取 `app-release-unsigned.apk` 里的 `classes.dex`。
+3. 把新 `Main.dex` + `webroot/index.html` 写入**母版**（Android shell，FUSE 权限原因
+   Ubuntu 侧 `cp` 会 `Operation not permitted`）：
+   `cp -f <new-dex> /data/media/0/Download/Files/ZhangProtect-Android/Main.dex`
+   `cp -f <new-ui>  /data/media/0/Download/Files/ZhangProtect-Android/webroot/index.html`
+4. 从**母版**执行 `sh ./部署母版到已安装.sh` → 免重启更新到 `/data/adb/modules/Zhang`。
+5. 真机验证（SelfTest / API / WebUI）。
+6. 需要发布时，从**母版**执行 `sh pack.sh` 打 zip。
+（仓库交付副本 `webroot/index.html` 与仓库根 `Main.dex` 仍需同步，供 git 记录与 OTA。）
+
+### 本次执行（2026-10-06 14:05）
+- 母版 → 已安装 免重启部署已执行：
+  `部署完成，dex 已重启 (pid 32535)`，`Main.dex md5=ac868fb9e514b8a8cab83f768cb0f3bf`。
+- 部署后五处一致（母版 / 模块目录 / 运行目录 / 仓库 / 仓库交付副本）：
+  `Main.dex=ac868fb9e514b8a8cab83f768cb0f3bf`，`index.html=23a8c5bd379f7778245463aa3b8837ca`。
+- 备份：`/data/adb/Zhang/_backup_predeploy_20261006-140554/`。
+- 部署后 API 复验：`/api/ping` pong；`/api/builtin/apps` count=45；
+  `/api/keepalive/get?kind=notif` → `list=46, builtin=45`。
+- **仍未打 zip、仍未 push**。

@@ -1913,3 +1913,26 @@ APK 内 so 是 `Defl:N` 完全正常。
 ### Git
 - 本轮 commit：`11f2fe7`(feat) → `d0aa237`(build) → `a53ecff` → `294a325` → **`c1e9628`**（HEAD）。
 - `origin/main` 仍为 `23abaf1`，**本地领先 4+ commits，未 push**。
+---
+
+## §52 二次软重启/界面崩溃根因：system_server Binder 线程池耗尽（2026-10-06 17:xx）
+
+- 现象：状态栏无法下拉、界面冻结、随后软重启；用户称「毫无征兆」。
+- 统一症状：`Blocked in Watchdog$BinderThreadMonitor for 15s`；
+  `watchdog.monitor` 栈 = `writev → liblog LogdWrite → blockUntilThreadAvailable`。
+- 关键栈（`/data/anr/traces_SystemServer_WDT*`）：多条 `binder:NNN_x` 卡同一把锁
+  → `PackageManagerShellCommand.runDump → AppBatteryTracker.updateBatteryUsageStatsIfNecessary`。
+- 触发三叠加：① **AI Agent 高频重命令**（/proc 遍历、dumpsys、cmd package dump，
+  logcat 可见 DeepseekProvider 的 tool_calls）；② **Operit 全量回显 logcat**（占 51%，logd writev 阻塞）；
+  ③ **内存吃紧**（swap 用 6.3GB，微信 VmSwap 164MB，kswapd0）。
+- 与本模块关系：早期 `isForcedOom` 同步 45×`cmd package dump` 正是该栈特征（已改异步）；
+  模块 tick 全量扫 /proc 是负载源之一。
+- 本轮修复：
+  1. `ShellExecutor` **全局节流**：并发 ≤2、启动间隔 120ms（MemAvailable<900MB 时 600ms）。
+  2. `PowerManagerModule` 重操作**延后 20s 后台**执行；Doze 白名单**只写差异项** + 每 8 项让出 60ms。
+  3. `pidsOf` **严格化**（仅匹配 arg0，不误伤 shell 子进程）。
+- 新 dex：**`a2db1ae17a0fe9143ef30de424c80e5a`**（2,761,944B），已部署三副本 + 重启 daemon。
+- Git：`4c2cbe3`（pidsOf/Doze/延后）→ **`4f46cfc`**（ShellExecutor 节流）。
+- 事故文档：`docs/incidents/2026-10-06_system_server_watchdog.md`
+- 给后续 Agent 的重要告诫：**在本设备上避免高频重命令**（大范围 /proc 遍历、循环 dumpsys/cmd），
+  并避免在系统已卡顿时继续跑验证命令——会直接把 system_server 推向 Watchdog。

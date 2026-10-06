@@ -1590,4 +1590,34 @@ APK 内 so 是 `Defl:N` 完全正常。
   `user_preferences`/`terminal_prefs`/`env_preferences`/`ui_preferences` 等均无该键）；
   该超时是**每次工具调用的参数**，故以"Agent 运行约定"形式固化，而非改配置文件。
 
+---
+
+## §46 推送 GitHub + 母版打包（2026-10-06 13:33）
+
+**执行**：用户要求 `git push` 后 `pack`。
+
+### git push
+- `git push origin main`：`8515258..d9842e3  main -> main`，EXIT=0（共推送 19 个本地 commit）。
+- 校验：`git status -sb` = `## main...origin/main`（同步）；`git ls-remote origin main`
+  = `d9842e345750d96e6dfb2cc905046660d12a05a  refs/heads/main` == 本地 HEAD `d9842e3`。
+- **本地与远端完全一致，工作区干净。**
+
+### 母版打包（pack.sh v4，从母版运行，§42 约束）
+- 打包前核对：母版 `Main.dex=df66afc9`、`webroot/index.html=6d93e53b`、`config.json=d01d5fc7`，
+  与运行模块**逐一致**（dex 未变，UI 为本次保活新版）。
+- 命令：`cd /sdcard/Download/Files/ZhangProtect-Android && sh pack.sh`（setsid 分离后台跑，
+  日志 `/data/local/tmp/pack.log`）。
+- **产物**：`/sdcard/Download/Files/ZhangProtect-Android.zip`
+  - 大小 **510,932,037 字节**（≈487 MB），**109 文件**（+目录共 166 条目）
+  - pack 内置 SHA256 逐文件自检 **109/109 一致**，耗时 49s，退出成功
+  - **zip SHA256 = `d9afcee2174d4a46d9d1919118f527d8825193b34b59f30e390d17c08d2438b5`**
+- 独立复核：`unzip -t` exit 0，`No errors detected`；从 zip 解出的关键条目 md5
+  == 母版：`Main.dex=df66afc9`、`webroot/index.html=6d93e53b`（含保活 UI）、`config.json=d01d5fc7`。
+
+### 本版与上一版差异
+- 上一版正式包见 §43（`91556594` dex / `a748f93b` UI，母版 438,992,471 B）。
+- 本版差异：`Main.dex`（含 keepalive/oom/shizuku 等后续改动 `df66afc9`）+
+  `webroot/index.html`（`6d93e53b` 含**保活名单完整 UI**）；体积升至 510.9 MB（母版文件数增至 109）。
+- **取代** 此前的 zip，作为当前发布包。
+
 

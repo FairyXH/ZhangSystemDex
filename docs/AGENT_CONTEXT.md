@@ -1978,4 +1978,60 @@ APK 内 so 是 `Defl:N` 完全正常。
 
 ### 新 dex
 - 最终：**`63459cf3dc74bdc5e449cd3518b5943d`**（2,770,276 B），已免重启更新（母版+俩运行副本）。
-- Git：`ea02e63`（AppOps 用例 + Shizuku 服务端判定）。
+- Git：`ea02e63`（AppOps 用例 + Shizuku 服务端判定）。---
+
+## §54 Shizuku 频繁「is not running」根因与修复（2026-10-06 18:xx）
+
+### 现象
+用户报告 Shizuku 经常自己停止（"shizuku is not running"）。
+
+### 取证结论（现场原始数据）
+- Shizuku 两个进程均由 **zygote64（pid 31739，PPid=1）** fork：
+  - 主进程 `28234` = uid `u0_a335`（10335），cgroup `/apps/uid_10335`，`cpuset:/background`
+  - 服务端 `9833` = uid `u999_a335`（99910335），cgroup `/apps/uid_99910335`
+- **AMS 把两者都登记为普通 `*APP* ProcessRecord`**（`dumpsys activity processes` 可见），
+  因此受 `OomAdjuster` / ColorOS `OomAdjusterSocExtImpl` 管理。
+- events 日志：`18:48:59 am_proc_start 28234 next-top-activity` → `18:50:02 am_uid_idle`
+  → `18:51:10 OomAdjusterSocExtImpl: App adj change ... to cached state : 28234`
+- 大量 `am_kill ... empty #17/#18`（ColorOS 激进回收 cached 进程）。
+
+### 真正的模块 BUG（本次修复核心）
+实测：
+```
+主进程 28234 = 900   ← 被 AMS 改回 cached，且**再也不变**
+服务端 9833  = -500  ← 保持正确
+```
+根因在 `OomProtectModule.applyAdj`：
+```kotlin
+if (lastAdj[pid] == adj) return   // 旧逻辑：只信本地缓存
+```
+- 第一次写入 -450 后，`lastAdj[28234] = -450`；
+- 之后 **AMS/OomAdjuster 把实际值覆盖为 900**，但我们**以为仍是 -450 → 永远跳过写回**
+  → **保护永久失效** → 内存紧张时被回收 → "shizuku is not running"。
+
+### 修复
+`applyAdj` 改为**实地读回**：
+```kotlin
+val current = ProcessUtils.readFile("/proc/$pid/oom_score_adj")?.trim()?.toIntOrNull()
+if (current == adj) { lastAdj[pid] = adj; touchedPids.add(pid); return }
+if (ProcessUtils.writeFile("/proc/$pid/oom_score_adj", adj.toString())) { ... }
+```
+（tick 间隔 5s，故被覆盖后 ≤5s 自动改回。）
+
+### 验证（原始数据）
+- 连续 36s 采样：`9833=-500`、`28234=-450` 稳定不变（修复前 28234 恒为 900）。
+- **抗覆盖测试**：手动 `echo 900 > /proc/28234/oom_score_adj` → 7s 后自动回 -450；
+  手动置 1000 → 7s 后回 -450。✅
+- 自检：**74 PASS / 0 FAIL**（无回归）。
+
+### 附：Shizuku 部署形态说明
+- 官方 `start.sh` 把 starter 复制到 `/data/local/tmp/shizuku_starter`（uid 2000）后执行，
+  starter 以 **uid 999（system 模式）** 起服务端；服务端是 **zygote 子进程**，**归 AMS 管**。
+- 因此除了本模块的 adj 守护，Doze 白名单已含 `user,moe.shizuku.privileged.api,10335`。
+- 注意：`ShizukuResidue.ALWAYS_CLEAN` 含 `/data/local/tmp/shizuku_starter`
+  （注释称"旧版位置"，但 `restartShizuku` 仍在用它）——两者语义冲突，
+  但删除该文件不影响已运行的服务端，暂不改动（留待确认）。
+
+### 新 dex
+- **`17a13d0da1fbe6a39ff35357483d9398`**（2,770,396 B），已免重启更新三副本 + 重启 daemon。
+- Git：`75ae8a6`（applyAdj 实地读回）。

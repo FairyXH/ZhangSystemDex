@@ -1810,3 +1810,34 @@ APK 内 so 是 `Defl:N` 完全正常。
 4. 垃圾清理测试：`empty_dirs` 只作用于 `/data/media/<u>/Download`；`POST /api/rubbish/clean` 必须
    轮询 `/api/rubbish/progress` 才能判定结果。`rm -rf` 会被 super_admin 安全拦截，测试用
    唯一目录名 + `rmdir` 收尾。
+---
+
+## §50 发布：push origin main + 母版打包 zip —— 2026-10-06 14:22
+
+用户指令：「git push，并从母版 pack」。已按 §48「母版为唯一真源」规范执行。
+
+### 1) Git push
+- `cd /home/projects/ZhangSystemDex && git push origin main`
+- 结果：`afaea87..93f1afd  main -> main`（EXIT=0）
+- 核验：本地 `HEAD` 与 `origin/main` 均为 `93f1afd`；`git status -sb` → `## main...origin/main`（无 ahead）。
+- 本次推送包含 7 个 commit：`9d6699f / 9b1331f / 76ddbf4 / c7ebcf5 / 086cb35 / 110acc7 / 93f1afd`。
+
+### 2) 打包前一致性核对
+- `Main.dex` md5 三处一致：母版 `/data/media/0/Download/Files/ZhangProtect-Android/Main.dex`
+  = 已安装模块 `/data/adb/modules/Zhang/Main.dex` = 运行目录 `/data/adb/Zhang/Main.dex`
+  = `ac868fb9e514b8a8cab83f768cb0f3bf`（2,739,124B）。
+- 母版 `webroot/index.html` md5 = `23a8c5bd379f7778245463aa3b8837ca`（134,828B），与已验证版本一致。
+- 注：母版目录**不是 git 仓库**（无 `.git`），仅为源码/资源副本；打包只依赖母版自身。
+
+### 3) 母版打包
+- `cd /data/media/0/Download/Files/ZhangProtect-Android && sh pack.sh`
+- 产物：`/data/media/0/Download/Files/ZhangProtect-Android.zip`
+  - 大小 **510,938,614 字节**（原始 718,696,068 → 压缩率 71.1%）
+  - **SHA256 = `767b78066dab0be322997baa0d9fc6ffe9b537fe94ab51c7d8f80bd00c6bb40e`**
+  - 内容：109 个文件 + 57 个目录条目（共 166 条目）
+- `pack.sh` 内置 SHA256 逐文件自检 **通过**（109/109 全部一致），耗时 43s。
+- 包内关键条目复核：`Main.dex` md5=`ac868fb9…`、`webroot/index.html` md5=`23a8c5bd…`、`module.prop` 93B。
+
+### 结论
+发布完成：远端 `origin/main` = `93f1afd`；发布包 `ZhangProtect-Android.zip`（SHA256 `767b78…`）由母版构建，
+内含本次「内置应用默认保活（不听配置）」的已验证 Main.dex。

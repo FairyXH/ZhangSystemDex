@@ -2174,5 +2174,55 @@ ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
 ```
 
 ### 注意
-- `ShizukuResidue.ALWAYS_CLEAN` 含 `/data/local/tmp/shizuku_starter`（Shizuku 官方 `start.sh` 的标准部署位置）—— **删除与官方流程冲突**，已在 switches 里 `shizuku_detect_clean_starter=false`（默认关）。若用户反馈 Shizuku 起不来，优先查此项与 `system/app` 下 Shizuku APK 的 so 压缩方式（Deflate 会导致 dlopen 失败）。
-- Shizuku APK（`f9bc1ae7…`）内 `lib/arm64-v8a/*.so` 为 Deflate 压缩，`app_process -Dshizuku.library.path=<apk>!/lib/arm64-v8a` 会**静默起不来**；治本需重打包为 STORED。**本会话已生成一个 STORED 版 APK 于 /data/local/tmp/shizuku_stored/base.apk，但尚未替换到模块/母版**。
+- `ShizukuResidue` 将 `/data/local/tmp/shizuku_starter` 归入 `GUARDED_CLEAN`（**默认不删**）—— 它是官方 `start.sh` 每次启动都会重建的文件，删除会与官方流程冲突。开关 `shizuku_detect_clean_starter` 默认 false。
+- ~~Shizuku APK 的 so Deflate 压缩导致 dlopen 失败，需重打包为 STORED~~ —— **该结论已被推翻，方案已废弃**。真正的失败原因是用了 ADB 模式遗留 starter（`app_process -Dshizuku.library.path=<apk>!/lib`），而官方 root 启动用 `nativeLibraryDir`（系统已解压目录），Deflate 无影响。**用户长期约束：禁止改 Shizuku 包**（未来需跟随官方升级）。
+- `/data/local/tmp/shizuku_stored/base.apk`（历史遗留的 STORED 重打包产物）**已无用途**，可清理。
+
+## §58. Shizuku 保活根治（2026-10-07，提交 9432021 + 44595bd）
+### 两个独立缺陷，均涉及“进程探测”
+
+**缺陷 A：用了错误的 starter（已在 9432021 修复）**
+- 旧实现重启时执行 `/data/local/tmp/shizuku_starter` 或 `/data/local/shizuku_starter`（**ADB/无线模式**流程），它把库路径拼成 `<apk>!/lib/arm64-v8a` → `librish.so` dlopen 失败 → 服务端起不来。
+- 正确做法（官方源码 `Shizuku/manager/.../starter/Starter.kt#internalCommand`）：
+  ```sh
+  <ApplicationInfo.nativeLibraryDir>/libshizuku.so --apk=<ApplicationInfo.sourceDir>
+  ```
+  模块在 DexContext 中取不到 ApplicationInfo，改用 `pm path` 解析 src，再按 ABI 目录（arm64-v8a→`lib/arm64`）推导 nativeLibraryDir。
+- 服务端进程名是 **`shizuku_server`（不含包名）**，旧 `snapshot()` 只查包名 → `serverPids` 恒空。
+
+**缺陷 B：procfs 读取方式错误（已在 44595bd 修复）—— 这才是最隐蔽的真凶**
+- procfs 中 `cmdline`/`status`/`stat`/`oom_score_adj` 等文件的 **`st_size` 恒为 0**；
+- 而 `File.readBytes()` 按 `length()` 预分配缓冲区 → **只读到 0 字节**；
+- 于是 `pidsOf()` **匹配不到任何进程**（不止 Shizuku）→ 保活每 30s 误判“服务端不在”并重启，`restartCount` 涨至 137。
+- 修复：`ProcessUtils.readProcText(File, maxBytes=8192)` 用 `FileInputStream` 流式读取；`pidsOf` 改用它。
+  > 同理：任何读取 `/proc/**` 的代码都不能用 `readBytes()`/`Files.readAllBytes()`，必须用 `readText()` 或 `readProcText()`。
+
+### 变更清单
+| 文件 | 内容 |
+|---|---|
+| `core/ProcessUtils.kt` | 新增 `readProcText()`；`pidsOf` 改用它；匹配规则 `arg0==pattern` / `arg0` 以 `pattern:` 开头 / `arg0` 以 `/pattern` 结尾 |
+| `modules/ShizukuModule.kt` | 新增 `officialStartCommand()`、`snapshotStatic()`；`SERVER_PROC`/`PROC_PATTERNS`/`ABI_DIRS` 常量 |
+| `core/ShizukuResidue.kt` | `/data/local/tmp/shizuku_starter` 从 `ALWAYS_CLEAN` 移入 `GUARDED_CLEAN` |
+| `core/HttpBackend.kt` | `/api/shizuku/status` 改用 `snapshotStatic()`（与保活同口径） |
+| `SelfTest.kt` | 14f/14g 更新、新增 14h（官方启动识别）、14i（procfs 流式读取回归） |
+| `docs/SHIZUKU_START_DESIGN.md` | 完整设计与 §7 端到端实测验收 |
+
+### 实测验收（dex `3b28c82a76bacf0dc2f04eaba3847157`）
+- `/api/shizuku/status` 连续 5 次（5 分钟）恒为 `healthy:true` / `serverPids:[...]`，`restartCount` 不涨；
+- `kill -9 <server>` → 立即 `healthy:false` → 保活周期（30s）后自动拉起（`serverPids:[749]`，`restartCount +1`），闭环通过；
+- 系统 uptime 13.1 小时无新增 watchdog（软重启根治持续有效）。
+
+### 重要：验证 Shizuku 状态的方法
+- **必须**读 `http://127.0.0.1:26437/api/shizuku/status`。
+- **不要**用 shell 遍历 `/proc` 验证 —— 本机 `/proc` 为 `hidepid=invisible`，普通 `su` shell 只能看到约 1000 个进程、看不到 uid=0 的他进程，会得到**假阴性**。daemon 是 uid 0 原生进程，不受该限制。
+- `healthy:false` 但 `serverPids` 非空 = **主应用退出、服务端仍在** = 设计上视为可用，**不会重启**（`serverUsable`）。
+
+### 排查教训
+1. 改完代码后若行为未变，先确认 **daemon 是否真的加载了新 dex**（`/api/overview` 的 `dexMd5` + `重启Dex.sh`）。
+2. `super_admin:shell` 通道与 Operit AI 进程绑定，重启 Operit 可恢复；`git diff` 等分页输出会**卡住 terminal 会话**，务必用 `git --no-pager diff`。
+3. 修复后必须做 **kill + 等保活周期**的闭环验证，而非只看单次状态。
+
+### 发布状态
+- git：`44595bd` = `origin/main`（已 push）；
+- 母版/模块/运行根 Main.dex 三处一致 = `3b28c82a…`；
+- pack 产物：`/data/media/0/Download/Files/ZhangProtect-Android.zip`，**510,990,916 B / 124 文件**，SHA256 逐文件校验全部一致。

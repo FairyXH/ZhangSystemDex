@@ -378,6 +378,20 @@ daemon 内置 `HttpBackend`，监听 `http://127.0.0.1:26437`，为 WebUI 与脚
 
 > 完整变更见 `CHANGELOG.md`；面向 Agent 的工作手册见 `ADAPT.md`。
 
+- 2026-10-07：**Shizuku 保活二次根治（进程分类口径重写）**。
+  - 旧 `ShizukuModule.classify()` 以 **uid 形态**判角色（`uid/100000 >= 900 → 服务端`）。
+    本机 Shizuku 已转**系统应用**（`packages.list` 中 `partition=system`），主应用同时以
+    `10335` 与 `99910335` 两个 uid 出现，后者被误判为服务端 → `/api/shizuku/status`
+    恒报 `healthy:true` → 保活「看到服务端在」直接返回 → **真 `shizuku_server` 从未拉起**
+    → Shizuku 报 “is not running”。
+  - 现改为**按进程名分类**（`classifyNamed`）：`arg0 == shizuku_server` 为服务端，
+    包名（含 `:proc` 后缀）为主应用；新增 `ProcessUtils.procName(pid)`。
+  - 同时修复 `ProcessUtils.pidsOf` 用 `readBytes()` 读 procfs（`st_size=0`）恒得空串的问题，
+    改为流式 `readProcText()`；Shizuku 启动改用官方 root 命令
+    `<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`。
+  - 实测：`mainPids:[uid10335, uid99910335]`、`serverPids:[uid0 shizuku_server]` 分类正确；
+    `kill -9` 真服务端 → `healthy:false` → **5s 内保活自动拉起**，`restartCount` 不再空转。
+  - 当前产物：`Main.dex` = `b9b5e895712f237d670bf23f40f34fd2`（2781384 B）。
 - 2026-10-06：**稳定性大修 + 事故哨兵 + 内置应用守护增强**。
   - 定位并修复**软重启根因**：内置应用组件探测曾对 45 个应用**同步**执行 `cmd package dump`，
     并发进入 `system_server` 后卡在同一把锁 → Binder 线程池耗尽 → `watchdog.monitor` 超时 →

@@ -3,6 +3,33 @@
 本项目为 KernelSU/Magisk 模块 **ZhangProtect（ZhangSystemDex）**。
 版本号沿用 `module.prop` 的 `versionCode`；下列按**日期倒序**记录。
 
+## [2026-10-07]
+
+### 修复
+- **Shizuku 保活失效（二次根治）**：`ShizukuModule` 旧 `classify()` 以 **uid 形态**区分
+  主进程/服务端（`uid/100000 >= 900 → 服务端`）。本机 Shizuku 已转为**系统应用**
+  （`packages.list` 中 `partition=system`），其主应用会同时以 `10335` 与 `99910335`
+  两个 uid 出现，`99910335` 被误判为服务端 → `/api/shizuku/status` 恒报
+  `serverPids` 非空、`healthy:true` → 保活逻辑「看到服务端在」直接返回 →
+  **真正的 `shizuku_server` 从未被拉起** → Shizuku 客户端报 “is not running”。
+  现改为**按进程名分类**（`classifyNamed`）：`arg0 == shizuku_server` 才算服务端；
+  包名（可带 `:proc` 后缀）算主应用。新增 `ProcessUtils.procName(pid)`。
+- **Shizuku 保活失效（一次根治）**：`ProcessUtils.pidsOf` 曾用 `File.readBytes()` 读
+  `/proc/<pid>/cmdline`，而 procfs 文件 `st_size` 恒为 0 → 只读到 0 字节 →
+  任何进程都匹配不到。改为流式读取 `readProcText()`（`FileInputStream` 循环 read）。
+  此前表现为保活每 30s 误判「服务端不在」并重启（`restartCount` 涨到 137）。
+- **Shizuku 官方启动命令**：改用官方 root 启动方式
+  `<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`（换机通用、稳定），
+  失败才回退旧 `/data/local/tmp/shizuku_starter`。
+
+### 变更
+- `SelfTest`：14d/14e/14h 改为**按进程名**断言；新增 **14i**（procfs 流式读取回归）、
+  **14j**（系统应用 uid 防误判回归：`99910335` 主应用不得判为服务端）。
+
+### 备注
+- 发版再次强调：改源码后**必须同步仓库根 `Main.dex`**，否则 OTA 拉取旧 dex 造成降级。
+- 当前产物：`Main.dex` = `b9b5e895712f237d670bf23f40f34fd2`（2781384 B）。
+
 ## [2026-10-06]
 
 ### 修复

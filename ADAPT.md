@@ -177,11 +177,41 @@ docs/                                     # Agent 文档（AGENT_CONTEXT / BUILD
   `/api/builtin/status|apps|guard/get|guard/set`、`/api/keepalive/*`、`/api/shizuku/status|residue`、
   `/api/guard/alerts`（**事故哨兵**，零 shell 读取 watchdog/crash/重启/内存低点记录）。
 - **诊断优先走 API，不要反复跑 su/重命令**（见 §8 事故）。
-
 ### 5.7 事故哨兵（`IncidentWatchModule` + `/api/guard/alerts`）
 - 每 15s **纯文件读取**（`/proc/uptime`、`/data/system/dropbox/`、`/data/anr/`、`/proc/meminfo`）
   记录 `reboot/watchdog/pre_watchdog/restart/native_crash/crash/anr/mem_low` 到 `incidents.log`。
 - 完全零 shell，避免“边救火边浇油”。事故后**首选**用它取证。
+
+### 5.8 Shizuku 保活（`ShizukuModule`）——**两大坑，务必理解**
+> “Shizuku is not running” 有**两个独立根因**，都已修复；改动此处前先读完。
+
+**坑一：procfs 读不到 cmdline（`st_size = 0`）**
+- `pidsOf` 早期用 `File.readBytes()` 读 `/proc/<pid>/cmdline`。procfs 中该文件 `st_size` 恒为 **0**，
+  `readBytes()` 按 `length()` 预分配 → **只读到 0 字节** → 任何进程都匹配不到。
+- 必须用流式读取 `ProcessUtils.readProcText()`（`FileInputStream` 循环 read，与 `File.readText` 同语义）。
+- 表现：保活每 30s 误判「服务端不在」并重启（`restartCount` 曾涨到 137）。
+
+**坑二：用 uid 判角色，在系统应用化后失效**
+- 旧 `classify()` 规则 `uid/100000 >= 900 → 服务端`。本机 Shizuku 已转**系统应用**
+  （`packages.list` 中 `partition=system`），其主应用会**同时以两个 uid** 出现：
+  `10335`（普通）与 `99910335`（系统分区变体）。
+- `99910335` 因此被误判为服务端 → `/api/shizuku/status` 恒报 `healthy:true` →
+  保活「看到服务端在」直接返回 → **真 `shizuku_server` 从未被拉起** → Shizuku 报 “is not running”。
+- **正确做法：按进程名，不看 uid。** `ShizukuModule.classifyNamed()`：
+  - `arg0 == "shizuku_server"` → 服务端；
+  - `arg0 == 包名` / `包名:xxx` / `*/包名` → 主应用。
+  `snapshotStatic()` 已是「收 pid → `ProcessUtils.procName(pid)` → `classifyNamed`」。
+  `classify(uid)` 仅作兜底保留，**不要在新代码里用它判角色**。
+
+**启动方式**：官方 root 命令 `<nativeLibraryDir>/libshizuku.so --apk=<sourceDir>`
+（`officialStartCommand()` 用 `pm path` 解析路径 + `ABI_DIRS` 推 lib 目录），失败才回退旧 starter。
+
+**验证方法（勿用 shell 遍历 /proc）**
+- 本机 `/proc` 为 `hidepid=invisible`，普通 `su` shell 的 `ps/pgrep/ls /proc/*` **看不到 uid=0 与他进程**，
+  会得到**假阴性**。daemon 是 uid 0 原生进程，不受限。
+- **正确**：`curl 127.0.0.1:26437/api/shizuku/status`，并做 **kill 闭环**
+  （`kill -9` 真 server → 应在 ≤30s 内自动拉起、`restartCount` +1）。
+
 
 ---
 

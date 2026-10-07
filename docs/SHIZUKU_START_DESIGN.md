@@ -1,6 +1,19 @@
 # Shizuku 启动方案（官方 root 命令）
 
-> 状态：已定稿（2026-10-06）。长期约束：**禁止改 Shizuku 包**，只用官方入口。
+> 状态：已定稿（2026-10-06）；2026-10-07 增补 §8「进程分类二次根治」。
+> 长期约束：**禁止改 Shizuku 包**，只用官方入口。
+
+## 0. 两个独立根因速查（务必先读）
+
+“Shizuku is not running” 在本机有**两个彼此独立**的根因，均与 Shizuku 本体无关：
+
+| # | 根因 | 症状 | 修复 | 章节 |
+|---|---|---|---|---|
+| 1 | 用了**错误的 starter 入口**（adb 遗留）+ **procfs `st_size=0`** 读不到 cmdline | `serverPids` 恒空、`restartCount` 飙升 | 官方 root 命令 + `readProcText()` 流式读取 | §2、§5 |
+| 2 | 用 **uid 形态**判进程角色；Shizuku 转**系统应用**后主应用 uid 为 `99910335`，被误判为服务端 | `serverPids` **恒非空**、`healthy:true`（**假健康**）、真 server 从不拉起 | 改为**按进程名** `classifyNamed()` | §8 |
+
+> 关键区别：根因 1 是「**读不到**」，根因 2 是「**读到了但分类错**」。
+> 两者叠加时会呈现「一直显示健康、实则从未有服务端」的假象。
 
 ## 1. 背景问题
 
@@ -80,7 +93,9 @@ SRC = $(pm path <pkg> | sed 's/package://')                            # ~= sour
    - 推导出的 `libshizuku.so` 不存在则回退旧 starter。
 2. 重启优先级：**官方命令 → 旧 starter 兜底**。
 3. 进程识别：服务端 = `pidsOf(PACKAGE)` ∪ `pidsOf("shizuku_server")`，
-   再由 `classify()` 按 uid 划分（uid 0 / 2000 / 用户段≥900 视为服务端）。
+   再由 `classifyNamed()` **按进程名**划分（`arg0 == shizuku_server` 为服务端）。
+   > ⚠️ 2026-10-07 修正：原「按 uid 划分（uid 0/2000/用户段≥900）」已废弃 ——
+   > Shizuku 转系统应用后主应用 uid 为 `99910335`，会被误判为服务端。详见 §8。
 4. `ShizukuResidue`：`/data/local/tmp/shizuku_starter` 是官方 start.sh 会重建的文件，
    默认改为「受保护（GUARDED）」，仅显式开关才清理。
 
@@ -127,3 +142,54 @@ proc /proc proc rw,relatime,gid=3009,hidepid=invisible 0 0
 - 出现 `serverPids:[]` 时，首先确认 **daemon 是否真正加载了新 dex**；
   进程存在于旧 dex 上会导致「代码已改但行为未变」的假象。
 - 修复后必须用 kill + 等待保活周期的方式做**闭环验证**，而非只看单次状态。
+
+## 8. 进程分类二次根治（2026-10-07）
+
+> §5.3 里那条「`classify()` 按 uid 划分」的写法是**错的**，本节说明为何并给出正解。
+
+### 8.1 现象
+用户安装含 §7 修复的母版 zip 并重启后，**仍提示 “Shizuku is not running”**，
+但 `/api/shizuku/status` 却显示 `healthy:true`、`serverPids` 非空 —— **假健康**。
+
+### 8.2 根因：系统应用化导致 uid 形态失效
+本机 Shizuku 已转为**系统应用**（`/data/system/packages.list` 中 `partition=system`），
+`cmd package list packages -U` 显示其 uid 为 **`10335,99910335`**（两个）。实测进程：
+
+| 进程 | uid | 真实身份 |
+|---|---|---|
+| `moe.shizuku.privileged.api` | `10335` | 主应用（普通形态） |
+| `moe.shizuku.privileged.api` | `99910335` | 主应用（**系统分区 uid 变体**，user 段 999） |
+| `shizuku_server` | `0` | 真服务端（官方 root 命令拉起） |
+
+旧 `classify()` 规则 `uid/100000 >= 900 → 服务端` 把 `99910335` 的**主应用**判成服务端：
+- `/api/shizuku/status` 恒报 `serverPids` 非空 → `healthy:true`；
+- 保活逻辑 `if (snap.healthy) return` / `if (snap.serverUsable) return` → **直接返回**；
+- 结果：**真 `shizuku_server` 从未被拉起**，Shizuku 客户端自然报 “is not running”。
+
+> 反证：手动执行官方命令 `libshizuku.so --apk=<base.apk>` **能立即起 `shizuku_server`**
+> → 证明官方命令无误，问题纯在**进程识别口径**。
+
+### 8.3 正解：按进程名，不看 uid
+```kotlin
+// ShizukuModule.classifyNamed(named: List<Pair<Int, String>>): Snapshot
+//   arg0 == "shizuku_server"                      -> 服务端
+//   arg0 == 包名 / "包名:xxx" / "*/包名"           -> 主应用
+```
+`snapshotStatic()` 现为：`PROC_PATTERNS`（包名 + `shizuku_server`）收 pid →
+`ProcessUtils.procName(pid)` 读 arg0 → `classifyNamed()` 划分。
+`classify(uid)` 仅作兜底保留（新代码勿用）。
+
+新增 `ProcessUtils.procName(pid)`：读 `/proc/<pid>/cmdline` 的 arg0（流式，同 §5 的 `readProcText`）。
+
+### 8.4 实测验收（dex `b9b5e895712f237d670bf23f40f34fd2`）
+| 验证项 | 观测 | 结果 |
+|---|---|---|
+| 分类正确 | `/api/shizuku/status` | `mainPids:[uid10335, uid99910335]`、`serverPids:[uid0 shizuku_server]` ✅ |
+| 失效检测 | `kill -9 <serverPid>` | 立刻 `healthy:false, serverPids:[]` ✅ |
+| 自动恢复 | 等保活周期 | **5s 内**拉起新 server，`restartCount +1` ✅ |
+| 无空转 | 连续采样 3×20s | `restartCount` 恒定不变 ✅ |
+| 客户端连通 | logcat | `Service: send binder to user app ... in user 0/999` + `ShizukuApplication: attachApplication` ✅ |
+
+### 8.5 通用教训
+**不要用 uid 形态判断进程角色。** 系统应用化、多用户（user 999/10 等）、
+uid 变体都会破坏「uid 段」假设。能用**进程名**（`cmdline` arg0）判断就别用 uid。

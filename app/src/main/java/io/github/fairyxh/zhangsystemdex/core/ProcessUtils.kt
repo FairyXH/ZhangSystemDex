@@ -1,7 +1,7 @@
 package io.github.fairyxh.zhangsystemdex.core
-
+import java.io.ByteArrayOutputStream
 import java.io.File
-
+import java.io.FileInputStream
 /**
  * Process, sysfs and cgroup helpers. Prefers /proc and sysfs File access;
  * renice/chrt/pgrep are shell-only operations (setpriority/sched syscalls have
@@ -10,7 +10,6 @@ import java.io.File
 object ProcessUtils {
     @Volatile
     private var setpriorityWarned = false
-
     fun writeFile(path: String, value: String): Boolean {
         try {
             File(path).writeText(value)
@@ -24,7 +23,6 @@ object ProcessUtils {
         Logger.w("ProcessUtils", "写入失败（文件+su 返回码=$rc）: $path")
         return false
     }
-
     fun appendCgroup(pid: Int, path: String): Boolean {
         try {
             File(path).appendText("$pid\n")
@@ -33,7 +31,6 @@ object ProcessUtils {
         }
         return ShellExecutor.runExit("su -c 'echo $pid > $path'") == 0
     }
-
     fun readFile(path: String): String? {
         return try {
             File(path).readText().trim()
@@ -41,7 +38,39 @@ object ProcessUtils {
             null
         }
     }
-
+    /**
+     * 流式读取 procfs 文件（**不要**用 [File.readBytes] / `Files.readAllBytes`）。
+     *
+     * procfs 中 `cmdline` / `status` / `stat` / `oom_score_adj` 等文件的
+     * `st_size` 恒为 **0**，而 `File.readBytes()` 内部按 `length()` 预分配
+     * 缓冲区，结果**只读到 0 字节**。此类文件必须走流式读取
+     * （[FileInputStream] + 循环 read），与 `File.readText()` 行为一致。
+     *
+     * 2026-10-07 修复：此前 [pidsOf] 用 `readBytes()` 读 `/proc/<pid>/cmdline`
+     * 恒得空串，导致**任何进程都匹配不到** —— Shizuku 保活因此永远误判
+     * 「服务端不在」并每 30s 重启一次（restartCount 涨到 137）。
+     *
+     * @param maxBytes 上限，避免 cgroup 等无边界文件读爆内存。
+     * @return 文件内容；读取失败返回 null。
+     */
+    fun readProcText(f: File, maxBytes: Int = 8192): String? {
+        return try {
+            FileInputStream(f).use { input ->
+                val bos = ByteArrayOutputStream(256)
+                val buf = ByteArray(512)
+                var total = 0
+                while (total < maxBytes) {
+                    val n = input.read(buf, 0, minOf(buf.size, maxBytes - total))
+                    if (n <= 0) break
+                    bos.write(buf, 0, n)
+                    total += n
+                }
+                String(bos.toByteArray(), Charsets.UTF_8)
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
     /**
      * 按「进程即目标」语义查找 pid。
      *
@@ -53,11 +82,13 @@ object ProcessUtils {
      *
      * 现改为只看 **arg0（可执行名/包名）**：
      *   - `arg0 == pattern`；
-     *   - `arg0` 以 `pattern/`（Android 包名进程，如 `com.foo.bar:svc`）开头；
+     *   - `arg0` 以 `pattern:` 开头（Android 包名进程，如 `com.foo.bar:svc`）；
      *   - `arg0` 以 `"/" + pattern` 结尾（系统二进制，如 `/system/bin/init`）。
      *
      * 这覆盖了包名（`com.omarea.vtools`）、进程名（`frpc`）、系统服务（`surfaceflinger`
      * → `/system/bin/surfaceflinger`），同时**排除**「命令行里恰好含该串」的进程。
+     *
+     * 注意：读取必须用 [readProcText]（procfs 的 `st_size` 恒为 0）。
      */
     fun pidsOf(pattern: String): List<Int> {
         if (pattern.isEmpty()) return emptyList()
@@ -68,8 +99,7 @@ object ProcessUtils {
         for (dir in dirs) {
             try {
                 val pid = dir.name.toInt()
-                val cmdline = File(dir, "cmdline").readBytes()
-                    .toString(Charsets.UTF_8)
+                val cmdline = readProcText(File(dir, "cmdline")) ?: continue
                 // arg0 = cmdline 的首个 NUL 分隔段（不 trim，保留原形）。
                 val arg0 = cmdline.substringBefore('\u0000').trim()
                 if (arg0 == pattern ||
@@ -83,7 +113,6 @@ object ProcessUtils {
         }
         return result
     }
-
     fun renice(pid: Int, niceness: Int) {
         try {
             // Os.setpriority is not exposed in the SDK stub; reflect it
@@ -105,11 +134,9 @@ object ProcessUtils {
         }
         ShellExecutor.run("renice -n $niceness -p $pid")
     }
-
     fun chrt(pid: Int, policy: String, priority: Int) {
         ShellExecutor.run("chrt -$policy -p $priority $pid")
     }
-
     /** Parse the focused application package from dumpsys window displays. */
     fun focusedPackage(): String? {
         val out = ShellExecutor.run("dumpsys window displays | grep mFocusedApp | grep -v 'mFocusedApp=null'") ?: return null
@@ -120,7 +147,6 @@ object ProcessUtils {
         val parts = rest.split('/')
         return parts.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() && it != "null" }
     }
-
     /** Mirror dumpsys deviceidle get screen: "true" when screen is on. */
     fun isScreenOn(): Boolean {
         val pm = SystemContext.get()?.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
@@ -133,7 +159,6 @@ object ProcessUtils {
         }
         return ShellExecutor.run("dumpsys deviceidle get screen")?.trim() == "true"
     }
-
     fun memFreePercent(): Int {
         val meminfo = readFile("/proc/meminfo") ?: return 100
         var total = 0L
@@ -151,7 +176,6 @@ object ProcessUtils {
         if (total <= 0) return 100
         return ((free * 100) / total).toInt()
     }
-
     /**
      * 物理内存「已用」百分比（0..100）。
      *
@@ -176,7 +200,6 @@ object ProcessUtils {
         val avail = if (available >= 0) available else free
         return (((total - avail) * 100) / total).toInt().coerceIn(0, 100)
     }
-
     /** 进程的物理内存占用（VmRSS，单位 kB）；读取失败返回 0。 */
     fun rssKbOf(pid: Int): Long {
         val status = readFile("/proc/$pid/status") ?: return 0L
@@ -187,7 +210,6 @@ object ProcessUtils {
         }
         return 0L
     }
-
     /** 物理内存总量（MemTotal，单位 kB）；读取失败返回 0。 */
     fun memTotalKb(): Long {
         val meminfo = readFile("/proc/meminfo") ?: return 0L
@@ -198,7 +220,6 @@ object ProcessUtils {
         }
         return 0L
     }
-
     /** This daemon's own pid (falls back to -1 if the runtime can't provide it). */
     fun selfPid(): Int = try {
         android.os.Process.myPid()
@@ -209,7 +230,6 @@ object ProcessUtils {
             -1
         }
     }
-
     /** Number of running processes (rows in /proc whose name is all digits). */
     fun processCount(): Int = try {
         File("/proc").listFiles()?.count { it.isDirectory && it.name.all { c -> c.isDigit() } } ?: -1

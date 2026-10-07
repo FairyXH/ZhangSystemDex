@@ -2102,13 +2102,14 @@ class HttpBackend(
     }
 
     private fun apiShizukuStatus(): String {
-        val procList = try {
-            ProcessUtils.pidsOf(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE)
-        } catch (_: Throwable) { emptyList() }
-        val withUid = procList.map {
-            it to io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.uidOf(it)
+        // 探测口径必须与 ShizukuModule.snapshot() 一致：包名进程 + 服务端进程
+        // （服务端进程名是 shizuku_server，**不含包名**）。
+        // 2026-10-07 修复：此前只查包名，导致 serverPids 恒为空、健康状态误报。
+        val snap = try {
+            io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.snapshotStatic()
+        } catch (_: Throwable) {
+            io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.Snapshot(emptyList(), emptyList())
         }
-        val snap = io.github.fairyxh.zhangsystemdex.modules.ShizukuModule.classify(withUid)
         val sb = StringBuilder()
         sb.append("{\"ok\":true")
         sb.append(",\"package\":").append(q(io.github.fairyxh.zhangsystemdex.core.ShizukuResidue.PACKAGE))

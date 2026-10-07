@@ -169,6 +169,21 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
             return Snapshot(main, server)
         }
 
+        /**
+         * 当前进程快照（真实读取）。
+         *
+         * 同时匹配**包名**与**服务端进程名**（`shizuku_server`）后的 pid 去重，
+         * 再统一交给 [classify] 按 uid 划分。旧实现只看包名 → 服务端永远匹配不到。
+         *
+         * 静态实现，供 [ShizukuModule] 保活与 HttpBackend 的 `/api/shizuku/status`
+         * 共用同一口径（避免两处探测逻辑漂移）。
+         */
+        fun snapshotStatic(): Snapshot {
+            val pids = LinkedHashSet<Int>()
+            for (p in PROC_PATTERNS) pids.addAll(ProcessUtils.pidsOf(p))
+            return classify(pids.map { it to uidOf(it) })
+        }
+
         /** 读取 /proc/<pid>/status 的 uid（第一个值）。 */
         fun uidOf(pid: Int): Int {
             val text = ProcessUtils.readFile("/proc/$pid/status") ?: return -1
@@ -188,11 +203,7 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
      * 同时匹配**包名**与**服务端进程名**（`shizuku_server`）后的 pid 去重，
      * 再统一交给 [classify] 按 uid 划分。旧实现只看包名 → 服务端永远匹配不到。
      */
-    fun snapshot(): Snapshot {
-        val pids = LinkedHashSet<Int>()
-        for (p in PROC_PATTERNS) pids.addAll(ProcessUtils.pidsOf(p))
-        return classify(pids.map { it to uidOf(it) })
-    }
+    fun snapshot(): Snapshot = snapshotStatic()
 
     private fun checkKeepAlive() {
         lastKeepAliveMs = System.currentTimeMillis()

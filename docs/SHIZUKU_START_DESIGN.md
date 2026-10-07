@@ -93,3 +93,37 @@ SRC = $(pm path <pkg> | sed 's/package://')                            # ~= sour
 | 不改包 | 完全不修改 Shizuku APK |
 | root 方案 | 不依赖具体 su 实现，仅需能执行 shell |
 | 兜底 | 保留旧 starter 路径作为 fallback |
+
+## 7. 端到端实测验收（2026-10-07）
+部署 dex 并重启 daemon 后，逐项验证通过：
+
+| 验证项 | 命令/观测 | 结果 |
+|---|---|---|
+| daemon 启动即拉起 | 重启 dex 后 dashboard | `restartCount=1`，官方命令一次成功 |
+| 探测准确性 | `/api/shizuku/status` ×5（12s 间隔） | 5/5 均为 `healthy:true`，PID 稳定 |
+| 失效检测 | `kill -9 <serverPid>` | 立刻 `healthy:false, serverPids:[]` |
+| 自动恢复 | 等待保活周期（30s） | `serverPids:[749]`，`restartCount 1→2` |
+| 无循环重启 | 连续观测 | `restartCount` 仅随真实重启递增，不再每 30s 误重启 |
+
+关键状态样例：
+```json
+{"installed":true,"healthy":true,"mainPids":[22534],"serverPids":[22120],"restartCount":1}
+```
+
+### 7.1 重要澄清：`hidepid=invisible` 造成的观察者偏差
+本机 `/proc` 挂载为：
+```
+proc /proc proc rw,relatime,gid=3009,hidepid=invisible 0 0
+```
+- **普通 `su` shell 上下文**（`u:r:su:s0`、`Groups` 为空）**看不到 uid=0 的其他进程**，
+  `ls /proc/[0-9]*` 仅约 1000 项、其中 uid=0 命中为 0。
+- 因此用 shell 手工 `grep`/`ps` 验证 `shizuku_server` 会**得到假阴性**，
+  曾被误判为「模块探测失效」。
+- **daemon 是 uid 0 的原生进程**，不受 `su` 上下文限制，其 `pidsOf("shizuku_server")`
+  在 daemon 内部**工作正常**（已由 `healthy:true` 与 kill/恢复实验证明）。
+- 结论：**验证 Shizuku 状态必须读 `/api/shizuku/status`，不要用 shell 遍历 `/proc`。**
+
+### 7.2 排查教训
+- 出现 `serverPids:[]` 时，首先确认 **daemon 是否真正加载了新 dex**；
+  进程存在于旧 dex 上会导致「代码已改但行为未变」的假象。
+- 修复后必须用 kill + 等待保活周期的方式做**闭环验证**，而非只看单次状态。

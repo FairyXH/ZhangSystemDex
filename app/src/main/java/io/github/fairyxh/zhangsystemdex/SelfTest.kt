@@ -1204,6 +1204,21 @@ object SelfTest {
         } catch (t: Throwable) {
             s.add("Shizuku.官方启动识别", Status.FAIL, t.message ?: "")
         }
+        // 14i) procfs 读取：cmdline 必须能读到 arg0（st_size=0 陷阱回归测试）。
+        try {
+            val selfCmd = ProcessUtils.readProcText(File("/proc/self/cmdline"))
+            val arg0 = selfCmd?.substringBefore('\u0000')?.trim().orEmpty()
+            // /proc/self/cmdline 的 arg0 应为本进程可执行名（app_process*）；
+            // 旧实现用 readBytes()（按 length() 预分配）恒得空串。
+            val ok = arg0.isNotEmpty()
+            s.add(
+                "ProcessUtils.procfs 流式读取",
+                if (ok) Status.PASS else Status.FAIL,
+                "self arg0=\"$arg0\""
+            )
+        } catch (t: Throwable) {
+            s.add("ProcessUtils.procfs 流式读取", Status.FAIL, t.message ?: "")
+        }
         // 15) 配置键齐备（oom_protect_enable）。
         try {
             val keys = listOf("oom_protect_enable")

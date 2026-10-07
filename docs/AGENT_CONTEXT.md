@@ -2226,3 +2226,39 @@ ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
 - git：`44595bd` = `origin/main`（已 push）；
 - 母版/模块/运行根 Main.dex 三处一致 = `3b28c82a…`；
 - pack 产物：`/data/media/0/Download/Files/ZhangProtect-Android.zip`，**510,990,916 B / 124 文件**，SHA256 逐文件校验全部一致。
+
+## §59. 收尾：临时文件清理 + 仓库根 Main.dex 补同步 + push + pack（2026-10-07 10:3x）
+
+### 一、/data/local/tmp 大清理（释放约 11.3 GB）
+- 背景：长期排查（Shizuku 起不来、软重启取证、母版快照）在 `/data/local/tmp` 堆积大量临时产物，一度达 **8332 MB**。
+- 已删除（清单存档 `/data/adb/Zhang/log/tmp_clean_list.txt`）：
+  - 子目录：`coolapk`(1264MB)、`system_product`(625MB)、`zstage_new`(449MB)、`zpkg`(449MB)、`kap2`(129MB)、`ksudump`/`sudex`/`ksu_unzip`、`zc_*`、`wd`、`ksu_assets`、`ziptest*`、`vz_*`、`zck_*`、`fin_*`、`hsmod`、`nr5g_*`、`notifgrant`、`dalvik-cache`、`zhang-regression`；
+  - 顶层：`rw1.bin`(**7.6 GB**)、`zyh.apk`、`rec-state.sqlite3{,-wal}`、`zve-test.db`、`cellular_*.apk`、`fkcoloros.apk`、`fw.jar`、`zve_*.apk`、`ksu.apk`/`sukisu.apk`、`zzh.apk` 等大型调试包与 db；
+  - 零散：`*.bak*`、`ui*.xml/png`、`*.log`、`*.dex`(测试)、`*.py`(补丁脚本)、`*_00/_01/_15`(trace) 等 102 项。
+- **保留**（勿删）：`shizuku_starter`（官方 start.sh 会用）、`sqlite3`、`lib*.so`、`androiddex.jar`/`AndroidDex-*.jar`、四个 Dex 脚本（`启动Dex.sh`/`停止Dex.sh`/`重启Dex.sh`/`调试运行Dex.sh`）。
+- 清理后 `/data/local/tmp` 剩 **17.6 MB / 38 files**。
+- `/sdcard/Download/` 根下 Agent 临时物（`_staged_Main.dex`、`_pu_new.kt`、`_patch_*.py`、`_*probe.dex`、`SnapProbe.java`）已全部删除。
+
+### 二、补同步仓库根 Main.dex（重要漏项修复）
+- 问题：`44595bd` **只提交了源码**（`ProcessUtils.readProcText`、`ShizukuModule.snapshotStatic`），仓库根 `Main.dex` 仍停留在上一版 `dc91737f`。
+- 后果：OTA 走仓库根 Main.dex → 会拉回旧 dex → procfs 修复失效（**功能降级**）。
+- 修复：从当前源码构建产物提取 `classes.dex` 覆盖仓库根 `Main.dex`，提交 **`b03d912`**：
+  - 构建校验链：`app-release-unsigned.apk`(00:13) → 提取 classes.dex → md5 `3b28c82a76bacf0dc2f04eaba3847157`（2780732 B），与母版逐字节一致。
+  - `gradle.properties`（含本机 `android.aapt2FromMavenOverride`）按 BUILD_NOTES 要求**不入库**，提交前 `git checkout` 还原、提交后本地恢复。
+- **教训**：凡改源码并发布 dex，**必须同时更新仓库根 `Main.dex`**，否则 OTA 降级（已在 §57/§58 反复强调，此次仍复发，务必写进发布检查单）。
+
+### 三、发布
+- `git push origin main`：`5d7d588..b03d912`，HEAD == origin/main == `b03d9127188bc9c3c6797b9401a0530eb94c62e0`。
+- pack 母版（母版 `pack.sh`）：`510,990,916 B / 199 entries（124 文件）`，SHA256 全一致；zip 内 `Main.dex` = `3b28c82a…`，与母版一致。
+- 三处 dex 一致：运行根 / 模块 / 母版 = `3b28c82a76bacf0dc2f04eaba3847157`。
+
+### 四、当前运行状态（本次收尾时）
+- uptime ≈ 14.5 小时，最后一次 system_server watchdog 仍为 2026-10-06 20:50（旧事故）→ 无新软重启。
+- daemon `pong` 正常；`/api/shizuku/status` = `healthy:false, serverPids:[15001], restartCount:3`（停涨，`serverUsable` 视为可用，符合设计）。
+- 注意：`healthy:false` 是因为**主应用进程未在内存**，非故障；判定存活应看 `serverPids`。
+
+### 五、排查工具经验（本机环境特有）
+- `/proc` 挂载 `hidepid=invisible`：普通 `su` shell 的 `ps`/`pgrep`/`ls /proc/*` **看不到 uid=0 与部分他 uid 进程**（本次实测 `ps -A` 也漏）。→ 验证 Shizuku 必须读 `/api/shizuku/status`，不要用 shell 遍历 `/proc`。
+- `du -sh`、`find -printf %f` 在 hidepid 下可能**静默返回空/仅目录项**；统计大小请用 `python3 os.walk`。
+- `super_admin:shell` 卡住时重启 Operit AI 可恢复；`git` 分页输出会卡 terminal，用 `git --no-pager`。
+- 母版脚本/配置**不写注释**（用户长期约束）。

@@ -1117,11 +1117,20 @@ object SelfTest {
         } catch (t: Throwable) {
             s.add("Shizuku.计入 OOM 默认", Status.FAIL, t.message ?: "")
         }
-        // 14d) Shizuku 进程分类（主进程 vs 服务端）。
+        // 14d) Shizuku 进程分类（按**进程名**，2026-10-07 重写）。
         try {
-            // uid 10335 = u0_a335（主应用）；99910335 = u999_a335（服务端，root 模式）
-            val snap = ShizukuModule.classify(listOf(19928 to 10335, 3185 to 99910335))
-            val ok = snap.mainPids == listOf(19928) && snap.serverPids == listOf(3185) && snap.healthy
+            // 真实进程名：主应用 arg0 = 包名（可能带 :proc 后缀）；服务端 arg0 = shizuku_server。
+            // 关键：Shizuku 转系统应用后主应用 uid 可能是 99910335，
+            // 不能再靠 uid 判服务端（否则把主应用误判为服务端）。
+            val snap = ShizukuModule.classifyNamed(
+                listOf(
+                    19928 to "moe.shizuku.privileged.api",
+                    20001 to "moe.shizuku.privileged.api:xxx",
+                    3185 to "shizuku_server"
+                )
+            )
+            val ok = snap.mainPids == listOf(19928, 20001) &&
+                snap.serverPids == listOf(3185) && snap.healthy
             s.add(
                 "Shizuku.进程分类",
                 if (ok) Status.PASS else Status.FAIL,
@@ -1130,23 +1139,42 @@ object SelfTest {
         } catch (t: Throwable) {
             s.add("Shizuku.进程分类", Status.FAIL, t.message ?: "")
         }
-        // 14e) Shizuku 不健康判定：仅主/仅服务端 → 不健康；root 服务端 → 健康。
+        // 14e) Shizuku 不健康判定（按进程名）+ **防误判回归**（2026-10-07）。
         try {
-            val onlyMain = ShizukuModule.classify(listOf(19928 to 10335))
-            val onlyServer = ShizukuModule.classify(listOf(3185 to 99910335))
-            // root 模式服务端 uid=0；adb 模式服务端 uid=2000
-            val rootServer = ShizukuModule.classify(listOf(19928 to 10335, 100 to 0))
-            val shellServer = ShizukuModule.classify(listOf(19928 to 10335, 300 to 2000))
-            val ok = !onlyMain.healthy && !onlyServer.healthy &&
-                rootServer.healthy && shellServer.healthy
+            val PKG = ShizukuResidue.PACKAGE
+            val onlyMain = ShizukuModule.classifyNamed(listOf(19928 to PKG))
+            val onlyServer = ShizukuModule.classifyNamed(listOf(3185 to ShizukuModule.SERVER_PROC))
+            val both = ShizukuModule.classifyNamed(
+                listOf(19928 to PKG, 3185 to ShizukuModule.SERVER_PROC)
+            )
+            // 关键回归：仅有主应用（即便 uid 形态像 root 服务端）绝不能判健康。
+            val noServerOnlyApp = !onlyMain.healthy && onlyMain.serverPids.isEmpty()
+            val ok = noServerOnlyApp && !onlyServer.healthy && both.healthy
             s.add(
                 "Shizuku.不健康判定",
                 if (ok) Status.PASS else Status.FAIL,
-                "onlyMain=${onlyMain.healthy} onlyServer=${onlyServer.healthy} " +
-                    "rootServer=${rootServer.healthy} shellServer=${shellServer.healthy}"
+                "onlyMain=${onlyMain.healthy}/${onlyMain.serverPids} " +
+                    "onlyServer=${onlyServer.healthy} both=${both.healthy}"
             )
         } catch (t: Throwable) {
             s.add("Shizuku.不健康判定", Status.FAIL, t.message ?: "")
+        }
+        // 14j) Shizuku 系统应用 uid 误判回归（2026-10-07 用户实测事故）。
+        try {
+            val PKG = ShizukuResidue.PACKAGE
+            // 旧 classify(uid) 会把 99910335 判为服务端（保留备用）；
+            // 新 classifyNamed 必须只认 shizuku_server。
+            val legacy = ShizukuModule.classify(listOf(13986 to 99910335))
+            val named = ShizukuModule.classifyNamed(listOf(13986 to PKG))
+            val ok = legacy.serverPids == listOf(13986) &&     // 旧口径的误判（说明为何弃用）
+                named.serverPids.isEmpty() && named.mainPids == listOf(13986)
+            s.add(
+                "Shizuku.系统应用 uid 防误判",
+                if (ok) Status.PASS else Status.FAIL,
+                "legacy=${legacy.serverPids} named.main=${named.mainPids} named.server=${named.serverPids}"
+            )
+        } catch (t: Throwable) {
+            s.add("Shizuku.系统应用 uid 防误判", Status.FAIL, t.message ?: "")
         }
         // 14f) Shizuku 防检测白名单：精确匹配（不做子串误伤）。
         try {
@@ -1194,8 +1222,8 @@ object SelfTest {
                 ShizukuModule.PROC_PATTERNS.contains("shizuku_server") &&
                 ShizukuModule.ABI_DIRS.first() == "arm64" &&
                 ShizukuModule.ABI_DIRS.contains("arm") &&
-                // classify 能把 shizuku_server（root，uid=0）归为服务端
-                ShizukuModule.classify(listOf(100 to 0)).serverPids == listOf(100)
+                // classifyNamed 能把 shizuku_server 归为服务端
+                ShizukuModule.classifyNamed(listOf(100 to "shizuku_server")).serverPids == listOf(100)
             s.add(
                 "Shizuku.官方启动识别",
                 if (ok) Status.PASS else Status.FAIL,

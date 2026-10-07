@@ -113,6 +113,20 @@ object ProcessUtils {
         }
         return result
     }
+    /**
+     * 读取指定 pid 的**进程名**（`/proc/<pid>/cmdline` 的 arg0）。
+     *
+     * 与 [pidsOf] 同口径：只取首个 NUL 段并 trim，读不到返回空串。
+     * 必须用 [readProcText]（procfs 的 `st_size` 恒为 0）。
+     *
+     * 2026-10-07 新增：Shizuku 保活改用「进程名」而非 uid 区分主/服务端
+     * （Shizuku 转系统应用后主应用 uid 会是 99910335，与 root 服务端 uid 形态撞车）。
+     */
+    fun procName(pid: Int): String {
+        val cmdline = readProcText(File("/proc/$pid/cmdline")) ?: return ""
+        return cmdline.substringBefore('\u0000').trim()
+    }
+
     fun renice(pid: Int, niceness: Int) {
         try {
             // Os.setpriority is not exposed in the SDK stub; reflect it

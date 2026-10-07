@@ -139,21 +139,17 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         /**
          * 从 (pid, uid) 列表划分主进程 / 服务端。
          *
-         * Android uid 编码为 `userId * 100000 + appId`。Shizuku 两种进程的
-         * 实际 uid（真机实测）：
+         * Android uid 编码为 `userId * 100000 + appId`。
          *
-         * | 进程 | 原始 uid | uid % 100000 | 用户段 |
-         * |---|---|---|---|
-         * | 主应用 | 10335 | 10335 | 0 |
-         * | 服务端（root 模式 Launcher） | 99910335 | 10335 | 999 |
-         * | 服务端（adb 模式） | 2000 (shell) / 0 (root) | — | — |
+         * 注意：本设备 Shizuku 已转为**系统应用**（`packages.list` 中
+         * `partition=system`），其主应用会同时以两个 uid 出现：
+         * `10335`（普通）与 `99910335`（系统分区 uid 变体）。旧规则
+         * `uid / 100000 >= 900 → 服务端` 会把 `99910335` 误判为服务端，
+         * 导致模块「假装健康」、从不真正拉起 server（2026-10-07 用户实测
+         * “Shizuku is not running”根因）。
          *
-         * 因此**不能**用「uid 大小」判断 —— 两者 appId 相同（10335）。
-         * 正确规则：
-         *   - uid == 0（root）或 uid == 2000（shell）→ **服务端**；
-         *   - 否则若 `uid / 100000 >= 900`（即 uid 用户段为 999 之类的特殊用户）
-         *     → **服务端**；
-         *   - 其余（用户段 0..899，含 userId=0 的普通应用）→ **主进程**。
+         * 正确做法：**不看 uid，看进程名**（见 [classifyNamed]）。
+         * 本函数保留为 uid 形态的兜底判定，只用于无法读取进程名的场景。
          *
          * 纯函数，供 SelfTest 断言。
          */
@@ -170,18 +166,57 @@ class ShizukuModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fal
         }
 
         /**
+         * 按**进程名**划分主进程 / 服务端（首选，最可靠）。
+         *
+         * - arg0（进程名）== [SERVER_PROC]（`shizuku_server`）→ 服务端；
+         * - arg0 以 [ShizukuResidue.PACKAGE]（包名）开头或结尾 → 主应用进程。
+         *
+         * 这是唯一能区分「Shizuku 主应用（uid 可能是 10335 或 99910335）」
+         * 与「真正服务端」的方法，避免转系统应用后的 uid 误判。
+         *
+         * @param named `(pid, arg0)` 列表，arg0 为已 trim 的进程名。
+         */
+        fun classifyNamed(named: List<Pair<Int, String>>): Snapshot {
+            val pkg = ShizukuResidue.PACKAGE
+            val main = ArrayList<Int>()
+            val server = ArrayList<Int>()
+            for ((pid, arg0) in named) {
+                if (arg0.isEmpty()) continue
+                when {
+                    arg0 == SERVER_PROC -> server.add(pid)
+                    arg0.startsWith("$pkg:") || arg0 == pkg || arg0.endsWith("/$pkg") -> main.add(pid)
+                }
+            }
+            return Snapshot(main, server)
+        }
+
+        /**
          * 当前进程快照（真实读取）。
          *
-         * 同时匹配**包名**与**服务端进程名**（`shizuku_server`）后的 pid 去重，
-         * 再统一交给 [classify] 按 uid 划分。旧实现只看包名 → 服务端永远匹配不到。
+         * 2026-10-07 重写：**以进程名为准**分类，不再靠 uid 推断。
+         *
+         * 旧实现先按 [PROC_PATTERNS]（包名 + `shizuku_server`）收 pid，
+         * 再交给 [classify] 按 uid 划分；当 Shizuku 是系统应用时，主应用
+         * 会有 `99910335` 这样的 uid，被 `userId >= 900` 规则误判为服务端，
+         * 于是“服务端恒在”，保活永久空转、真 server 永不被拉起。
+         *
+         * 现改为直接读取每个命中进程的 **arg0**（进程名）并按 [classifyNamed]
+         * 划分：只有 `shizuku_server` 才算服务端。
          *
          * 静态实现，供 [ShizukuModule] 保活与 HttpBackend 的 `/api/shizuku/status`
          * 共用同一口径（避免两处探测逻辑漂移）。
          */
         fun snapshotStatic(): Snapshot {
-            val pids = LinkedHashSet<Int>()
-            for (p in PROC_PATTERNS) pids.addAll(ProcessUtils.pidsOf(p))
-            return classify(pids.map { it to uidOf(it) })
+            val named = ArrayList<Pair<Int, String>>()
+            val seen = LinkedHashSet<Int>()
+            for (p in PROC_PATTERNS) {
+                for (pid in ProcessUtils.pidsOf(p)) {
+                    if (!seen.add(pid)) continue
+                    val arg0 = ProcessUtils.procName(pid)
+                    named.add(pid to arg0)
+                }
+            }
+            return classifyNamed(named)
         }
 
         /** 读取 /proc/<pid>/status 的 uid（第一个值）。 */

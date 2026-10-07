@@ -2262,3 +2262,45 @@ ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
 - `du -sh`、`find -printf %f` 在 hidepid 下可能**静默返回空/仅目录项**；统计大小请用 `python3 os.walk`。
 - `super_admin:shell` 卡住时重启 Operit AI 可恢复；`git` 分页输出会卡 terminal，用 `git --no-pager`。
 - 母版脚本/配置**不写注释**（用户长期约束）。
+
+## §60. Shizuku 保活二次根治：系统应用化导致 uid 误判（2026-10-07，提交 ae1e67d）
+
+### 现象
+用户安装 §59 的母版 zip 并重启后，**仍提示 "Shizuku is not running"**。
+
+### 根因（与 §58 的 procfs 问题**不同**，是第二个独立 bug）
+本设备 Shizuku 已转为**系统应用**（`/data/system/packages.list` 中 `partition=system`），
+因此其主应用进程会以**两个 uid** 出现：
+
+| 进程 | uid | 说明 |
+| --- | --- | --- |
+| 主应用 | `10335` | 普通安装形态 |
+| 主应用 | `99910335` | **系统分区 uid 变体**（user 段 999） |
+| 真服务端 | `0` | `shizuku_server`（root starter 启动） |
+
+旧 `ShizukuModule.classify()` 规则 `uid/100000 >= 900 → 服务端`，会把 uid `99910335`
+的**主应用**误判为服务端 → `/api/shizuku/status` 恒报 `serverPids` 非空、`healthy:true`
+→ 保活逻辑「看到服务端在」直接 return → **真 `shizuku_server` 从未被拉起**。
+
+验证：手动执行官方命令 `libshizuku.so --apk=<base.apk>` 能成功起 `shizuku_server`，
+说明**官方命令本身没问题**，问题纯在检测口径。
+
+### 修复（提交 ae1e67d）
+- `ProcessUtils.procName(pid)`：读 `/proc/<pid>/cmdline` 的 arg0（流式读取）。
+- `ShizukuModule.classifyNamed()`：**只认进程名** ——
+  - arg0 == `shizuku_server` → 服务端；
+  - arg0 == 包名 / `包名:xxx` / `*/包名` → 主应用。
+- `snapshotStatic()` 改为「收 pid → 读进程名 → classifyNamed」；`classify(uid)` 保留作兜底。
+- `SelfTest` 14d/14e/14h 改按进程名断言；新增 **14j** 专项回归（99910335 主应用不得判服务端）。
+
+### 实测验收（dex `b9b5e895712f237d670bf23f40f34fd2`）
+- `/api/shizuku/status` → `mainPids:[11061,13986], serverPids:[23083]`（正确：两个 app + 一个真 server）；
+- `kill -9 23083` → 立即 `healthy:false, serverPids:[]` → **5s 内保活自动拉起**（`serverPids:[23083]`, `restartCount 1→2`）；
+- 真实进程核对：`uid=10335`、`uid=99910335` 均为 `moe.shizuku.privileged.api`；`uid=0` 为 `shizuku_server`。
+
+### 教训
+- **不要把 uid 形态当作进程角色判据**：系统应用化 / 多用户 / uid 变体都会破坏「uid 段」假设。
+  能用**进程名**就别用 uid。
+- 这是「Shizuku is not running」的**第二个**独立根因：§58 是「读不到 cmdline」（procfs st_size=0），
+  §60 是「读到了但分类错」（uid 误判）。两者叠加才会长期「看起来健康、实际没服务端」。
+- 验证方法仍：`curl 127.0.0.1:26437/api/shizuku/status` + **kill 闭环**，勿用 shell 遍历 /proc（hidepid）。

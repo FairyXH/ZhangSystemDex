@@ -17,6 +17,7 @@ import java.io.File
 class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = false) {
     private var round = 0
     private var launchedMusicCommand: String? = null
+    private var lastIdleDisableAt = 0L
 
     override fun onStart() {
         if (!ctx.config.switch("server_mode_enable")) {
@@ -41,8 +42,12 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
         SettingsUtils.putGlobal("wifi_on", "1")
         SettingsUtils.putGlobal("bluetooth_on", "1")
         FrameworkOps.mediaPlay()
-        ShellExecutor.run("dumpsys deviceidle disable")
-        ProcessUtils.writeFile("/sys/power/state", "on")
+        val now = System.currentTimeMillis()
+        if (now - lastIdleDisableAt >= 600_000L) {
+            ShellExecutor.run("dumpsys deviceidle disable")
+            ProcessUtils.writeFile("/sys/power/state", "on")
+            lastIdleDisableAt = now
+        }
 
         val frpc = ctx.config.getString("frpc_command", "").trim()
         if (frpc.isNotEmpty()) {
@@ -75,7 +80,8 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
             f.isDirectory && Regex("^cpu\\d+$").matches(f.name)
         } ?: return
         for (core in cores) {
-            ProcessUtils.writeFile(File(core, "cpufreq/scaling_governor").path, governor)
+            val path = File(core, "cpufreq/scaling_governor").path
+            if (ProcessUtils.readFile(path) != governor) ProcessUtils.writeFile(path, governor)
         }
     }
 }

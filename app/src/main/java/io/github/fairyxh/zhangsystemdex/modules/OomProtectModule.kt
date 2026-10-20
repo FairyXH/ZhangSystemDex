@@ -218,8 +218,9 @@ class OomProtectModule(ctx: DexContext) : DaemonLoop(ctx, 5_000L, pauseAware = f
         val mainAdj = clampOom(readIntConfig("oom_protect_main_adj", DEFAULT_MAIN_ADJ))
         val childAdj = clampOom(readIntConfig("oom_protect_child_adj", DEFAULT_CHILD_ADJ))
 
+        val matchedPids = ProcessUtils.pidsOfAny(packages)
         for (pkg in packages) {
-            val pids = ProcessUtils.pidsOf(pkg)
+            val pids = matchedPids[pkg].orEmpty()
             if (pids.isEmpty()) continue
             protectedNow.add(pkg)
             for ((index, pid) in pids.withIndex()) {

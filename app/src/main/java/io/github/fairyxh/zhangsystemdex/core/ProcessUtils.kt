@@ -4,12 +4,9 @@ import java.io.File
 import java.io.FileInputStream
 /**
  * Process, sysfs and cgroup helpers. Prefers /proc and sysfs File access;
- * renice/chrt/pgrep are shell-only operations (setpriority/sched syscalls have
- * no Java API) but are wrapped semantically.
+ * Uses Android Process APIs for priority changes and /proc for process lookup.
  */
 object ProcessUtils {
-    @Volatile
-    private var setpriorityWarned = false
     fun writeFile(path: String, value: String): Boolean {
         try {
             File(path).writeText(value)
@@ -113,6 +110,23 @@ object ProcessUtils {
         }
         return result
     }
+    fun pidsOfAny(patterns: Collection<String>): Map<String, List<Int>> {
+        val names = patterns.filter { it.isNotEmpty() }.toSet()
+        if (names.isEmpty()) return emptyMap()
+        val result = names.associateWith { ArrayList<Int>() }
+        val dirs = File("/proc").listFiles { f -> f.isDirectory && f.name.all(Char::isDigit) } ?: return result
+        for (dir in dirs) {
+            val pid = dir.name.toIntOrNull() ?: continue
+            val cmdline = readProcText(File(dir, "cmdline")) ?: continue
+            val arg0 = cmdline.substringBefore('\u0000').trim()
+            for (pattern in names) {
+                if (arg0 == pattern || arg0.startsWith("$pattern:") || arg0.endsWith("/$pattern")) {
+                    result[pattern]?.add(pid)
+                }
+            }
+        }
+        return result
+    }
     /**
      * 读取指定 pid 的**进程名**（`/proc/<pid>/cmdline` 的 arg0）。
      *
@@ -129,24 +143,12 @@ object ProcessUtils {
 
     fun renice(pid: Int, niceness: Int) {
         try {
-            // Os.setpriority is not exposed in the SDK stub; reflect it
-            // (PRIO_PROCESS = 0).
-            val osClass = Class.forName("android.system.Os")
-            val m = osClass.getMethod(
-                "setpriority",
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType
-            )
-            m.invoke(null, 0, pid, niceness)
-            return
-        } catch (t: Throwable) {
-            if (!setpriorityWarned) {
-                setpriorityWarned = true
-                Logger.w("ProcessUtils", "setpriority 失败，降级 shell（仅记录一次）: ${t.message}")
+            if (android.os.Process.getThreadPriority(pid) > niceness) {
+                android.os.Process.setThreadPriority(pid, niceness)
             }
+        } catch (_: Throwable) {
+            // A process can exit between /proc lookup and priority update.
         }
-        ShellExecutor.run("renice -n $niceness -p $pid")
     }
     fun chrt(pid: Int, policy: String, priority: Int) {
         ShellExecutor.run("chrt -$policy -p $priority $pid")

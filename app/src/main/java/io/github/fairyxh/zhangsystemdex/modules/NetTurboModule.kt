@@ -28,6 +28,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
         applyProperties()
         applySettings()
         refreshCore()
+        lastRefresh = System.currentTimeMillis()
         Logger.i(name, "Dex 网络调优已启动；30s 检查接口，180s 校验核心参数")
     }
 
@@ -68,7 +69,11 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
             if (getProp(key) == ownedProps[key]) setProp(key, original)
         }
         for ((pid, state) in originalPriorities) {
-            if (ProcessUtils.procName(pid) == state.first) runCatching { Process.setThreadPriority(pid, state.second) }
+            if (ProcessUtils.procName(pid) == state.first) runCatching {
+                if (Process.getThreadPriority(pid) == -12 || Process.getThreadPriority(pid) == -10) {
+                    Process.setThreadPriority(pid, state.second)
+                }
+            }
         }
         for ((iface, kind) in qdiscOriginal) {
             if (kind in setOf("pfifo_fast", "fq", "fq_codel") && File("/sys/class/net/$iface").exists()) {
@@ -175,7 +180,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
     }
 
     private fun isHotspot(iface: File): Boolean =
-        (iface.name.startsWith("ap") || iface.name in setOf("wlan2", "wlan1")) &&
+        (iface.name.startsWith("ap") || iface.name == "wlan2") &&
             (read(File(iface, "operstate")) == "up" || read(File(iface, "carrier")) == "1")
 
     private fun tuneHostapd(): Boolean {
@@ -282,8 +287,12 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
 
     private fun directCommand(vararg args: String): Pair<Boolean, String> = runCatching {
         val process = ProcessBuilder(*args).redirectErrorStream(true).start()
-        val result = process.inputStream.bufferedReader().use { it.readText().take(4096) }
-        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
-        (process.exitValue() == 0) to result
+        if (!process.waitFor(2, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            false to ""
+        } else {
+            val result = process.inputStream.bufferedReader().use { it.readText().take(4096) }
+            (process.exitValue() == 0) to result
+        }
     }.getOrDefault(false to "")
 }

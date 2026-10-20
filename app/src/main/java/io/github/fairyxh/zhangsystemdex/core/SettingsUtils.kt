@@ -55,6 +55,18 @@ object SettingsUtils {
         ShellExecutor.run("settings put system $key $value")
     }
 
+    fun getSystem(key: String): String? {
+        val cr = resolver()
+        if (cr != null) {
+            try {
+                return Settings.System.getString(cr, key)
+            } catch (t: Throwable) {
+                frameworkFailed("ContentResolver system get", t)
+            }
+        }
+        return ShellExecutor.run("settings get system $key")?.trim()?.takeUnless { it == "null" }
+    }
+
     fun putSecure(key: String, value: String) {
         val cr = resolver()
         if (cr != null) {

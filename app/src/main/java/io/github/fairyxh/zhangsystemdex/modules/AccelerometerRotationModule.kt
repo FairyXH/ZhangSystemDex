@@ -3,7 +3,7 @@ package io.github.fairyxh.zhangsystemdex.modules
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
-import android.provider.Settings
+import io.github.fairyxh.zhangsystemdex.core.SettingsUtils
 
 /****
  * Accelerometer rotation disable module.
@@ -16,12 +16,14 @@ import android.provider.Settings
  *
  * Design notes:
  * - Own DaemonLoop so it doesn't interfere with SystemTuningModule cycles.
- * - Uses Settings.System directly, without a polling shell command.
+ * - Checks at most every ten minutes after startup or a switch change.
  * - Simple, focused, and hard to accidentally disable by other logic.
  */
 class AccelerometerRotationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L) {
     private var original: String? = null
     private var changed = false
+    private var lastEnabled: Boolean? = null
+    private var lastAppliedAt = 0L
 
     companion object {
         private const val PREF_KEY = "accelerometer_rotation_enable"
@@ -36,23 +38,29 @@ class AccelerometerRotationModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L) {
     }
 
     override fun tick() {
-        applyRotationSetting(ctx.config.switch(PREF_KEY))
+        val enabled = ctx.config.switch(PREF_KEY)
+        val now = System.currentTimeMillis()
+        if (enabled != lastEnabled || now - lastAppliedAt >= 600_000L) {
+            applyRotationSetting(enabled)
+        }
     }
 
     private fun applyRotationSystem(enabled: Boolean) {
-        val resolver = ctx.androidContext?.contentResolver ?: return
-        val current = Settings.System.getString(resolver, "accelerometer_rotation")
+        val current = SettingsUtils.getSystem("accelerometer_rotation")
         if (enabled) {
-            if (current != "0" && Settings.System.putString(resolver, "accelerometer_rotation", "0")) {
+            if (current != "0") {
+                SettingsUtils.putSystem("accelerometer_rotation", "0")
                 if (!changed) original = current
                 changed = true
                 Logger.i(name, "强制禁用加速计自动旋转")
             }
         } else if (changed) {
-            if (current == "0") Settings.System.putString(resolver, "accelerometer_rotation", original)
+            if (current == "0" && original != null) SettingsUtils.putSystem("accelerometer_rotation", original!!)
             changed = false
             original = null
         }
+        lastEnabled = enabled
+        lastAppliedAt = System.currentTimeMillis()
     }
 
     private fun applyRotationSetting(enabled: Boolean) {

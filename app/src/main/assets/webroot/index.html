@@ -415,6 +415,9 @@
     <div class="section"><div class="stitle">调优循环参数</div>
       <div class="list" id="tuningList"></div>
       <div class="sfoot">留空使用默认值；修改后建议重启 daemon 生效。</div></div>
+    <div class="section"><div class="stitle">网络加速</div>
+      <div class="list" id="netTurboList"></div>
+      <div class="sfoot">Dex 内置网络调优；关闭后停止周期检查并尽力恢复本次修改。</div></div>
     <div class="section"><div class="stitle">Shizuku 守护</div>
       <div class="list">
         <div class="cell"><div class="ic" style="background:#5856d6">💎</div>
@@ -782,7 +785,7 @@ const SPECIAL_DEFAULT_TRUE = [
   "locked_apps_enable","prop_tuning_enable","heavy_task_enable","target_list_enable",
   "disable_apps_enable","service_guard_enable","read_game_list_enable","miui_tuning_enable",
   "module_appops_auth_enable","skip_mount_guard_enable","game_oom_protect_enable",
-  "power_charging_release"
+  "power_charging_release","net_turbo_enable"
 ];
 
 const SWITCH_DESCRIPTIONS = {
@@ -817,6 +820,7 @@ const SWITCH_DESCRIPTIONS = {
   "target_list_enable":"tricky_store/hmspush 目标列表增量更新",
   "dnt_accessibility_enable":"DoNotTryAccessibility 规则 XML 生成",
   "network_ipv6_disable_enable":"禁用 IPv6",
+  "net_turbo_enable":"Net Turbo Pro 网络调优：移动数据、Wi-Fi 与热点的缓冲、队列和中断亲和（默认开启）",
   "only_base_enable":"Doze 白名单使用内置规则（false=读取 doze.conf）",
   "read_game_list_enable":"自动读取 MIUI/欧加游戏列表",
   "skip_mount_guard_enable":"模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",
@@ -852,7 +856,7 @@ const DANGER = new Set([
 /* 功能大类分组（用于“开关”Tab 的分段列表） */
 const GROUPS = [
   {id:"special", title:"特殊默认开启", note:"这些功能默认开启（缺失时按 true 处理）",
-    keys:SPECIAL_DEFAULT_TRUE.filter(k=>k!=="power_charging_release")},
+    keys:SPECIAL_DEFAULT_TRUE.filter(k=>k!=="power_charging_release" && k!=="net_turbo_enable")},
   {id:"core",    title:"核心与系统调优", note:"主调优循环 / 属性 / MIUI / 温控等",
     keys:["system_tuning_enable","prop_tuning_enable","miui_tuning_enable","heavy_task_enable",
           "server_mode_enable","memory_clean_enable","extra_features_enable","service_guard_enable","powersave_enable"]},
@@ -1352,6 +1356,8 @@ function renderPowerTab(){
 function renderSettingsTab(){
   const t = $("#tuningList");
   if (t){ t.innerHTML = ""; ["tuning_interval_seconds","heavy_interval_cycles","heavy_screen_off_only"].forEach(k=> t.appendChild(renderCell(k))); }
+  const n = $("#netTurboList");
+  if (n){ n.innerHTML = ""; n.appendChild(renderCell("net_turbo_enable")); }
   const e = $("#extcmdList");
   if (e){ e.innerHTML = ""; ["frpc_command","automusic_command"].forEach(k=> e.appendChild(renderCell(k))); }
   const d = $("#dangerList");

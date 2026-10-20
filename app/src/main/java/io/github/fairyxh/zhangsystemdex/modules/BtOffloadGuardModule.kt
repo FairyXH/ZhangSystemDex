@@ -3,7 +3,8 @@ package io.github.fairyxh.zhangsystemdex.modules
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
-import io.github.fairyxh.zhangsystemdex.core.PropUtils
+import io.github.fairyxh.zhangsystemdex.core.RootUtils
+import java.util.concurrent.TimeUnit
 
 /**
  * Bluetooth A2DP / LE-Audio hardware offload guard.
@@ -17,13 +18,11 @@ import io.github.fairyxh.zhangsystemdex.core.PropUtils
  * instead of a fixed timeline it re-asserts them on a loop, so any late
  * overwrite by the vendor stack is silently corrected.
  *
- * It intentionally does NOT need to be identical to the shell script; it only
- * reuses the equivalent mechanism. All writes prefer the persistent property
- * space (`resetprop -n` / `persist.*`) exactly like the original script did.
+ * It uses the Android property API first, then invokes resetprop directly
+ * when the platform rejects a read-only property write.
  *
  * This loop is registered as a normal daemon entry, so it is gated by the
- * `bt_offload_guard_enable` switch and also frozen while a monitored game runs
- * (pauseAware = true).
+ * `bt_offload_guard_enable` switch.
  */
 class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = false) {
 
@@ -50,6 +49,7 @@ class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAwa
 
     /** Last observed values, used only to log meaningful changes. */
     private val lastApplied = HashMap<String, String>()
+    private val original = LinkedHashMap<String, String?>()
 
     override fun onStart() {
         Logger.i(name, "蓝牙音频 offload 循环守护已启动（内置 dex 循环，周期 ${intervalMs}ms）")
@@ -58,13 +58,12 @@ class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAwa
     override fun tick() {
         var changed = 0
         for ((prop, value) in desired) {
-            val current = PropUtils.get(prop)
+            val current = readProp(prop)
             if (current == value) continue
-            // persistent = true  -> 走 resetprop -p -n，等价于原脚本的 resetprop 行为
-            PropUtils.set(prop, value, persistent = true)
-            // 读回校验：resetprop 的 ro.* 覆盖可能被内核拒绝，只有真正生效才计数。
-            val after = PropUtils.get(prop)
+            writeProp(prop, value)
+            val after = readProp(prop)
             if (after == value) {
+                original.putIfAbsent(prop, current)
                 changed++
                 if (lastApplied[prop] != value) {
                     Logger.i(name, "已复位 $prop=$value （原值=${current ?: "<空>"}）")
@@ -80,6 +79,36 @@ class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAwa
     }
 
     override fun onStop() {
+        for ((prop, old) in original) {
+            if (readProp(prop) == desired.firstOrNull { it.first == prop }?.second) {
+                if (old.isNullOrEmpty()) directResetprop("-p", "-d", prop)
+                else writeProp(prop, old)
+            }
+        }
+        original.clear()
+        lastApplied.clear()
         Logger.i(name, "蓝牙音频 offload 循环守护已停止")
     }
+
+    private fun readProp(name: String): String? = runCatching {
+        val cls = Class.forName("android.os.SystemProperties")
+        (cls.getMethod("get", String::class.java).invoke(null, name) as String).ifEmpty { null }
+    }.getOrNull()
+
+    private fun writeProp(name: String, value: String) {
+        runCatching {
+            val cls = Class.forName("android.os.SystemProperties")
+            cls.getMethod("set", String::class.java, String::class.java).invoke(null, name, value)
+        }
+        if (readProp(name) != value) directResetprop("-p", "-n", name, value)
+    }
+
+    private fun directResetprop(vararg args: String): Boolean = runCatching {
+        val process = ProcessBuilder(RootUtils.resetpropBinary(), *args)
+            .redirectErrorStream(true).start()
+        if (!process.waitFor(2, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            false
+        } else process.exitValue() == 0
+    }.getOrDefault(false)
 }

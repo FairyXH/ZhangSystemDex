@@ -90,6 +90,8 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
             "/proc/sys/net/core/netdev_budget" to "1200",
             "/proc/sys/net/core/netdev_budget_usecs" to "8000",
             "/proc/sys/net/core/dev_weight" to "64",
+            "/proc/sys/net/core/busy_poll" to "50",
+            "/proc/sys/net/core/busy_read" to "50",
             "/proc/sys/net/core/rmem_max" to "33554432",
             "/proc/sys/net/core/wmem_max" to "33554432",
             "/proc/sys/net/ipv4/tcp_rmem" to "8192 2097152 33554432",
@@ -100,6 +102,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
             "/proc/sys/net/ipv4/tcp_fastopen" to "3",
             "/proc/sys/net/ipv4/tcp_ecn" to "1",
             "/proc/sys/net/ipv4/tcp_syncookies" to "1",
+            "/proc/sys/net/ipv4/tcp_tw_reuse" to "1",
             "/proc/sys/net/ipv4/tcp_max_syn_backlog" to "8192",
             "/proc/sys/net/ipv4/udp_rmem_min" to "262144",
             "/proc/sys/net/ipv4/udp_wmem_min" to "262144",
@@ -241,7 +244,15 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
         val values = mapOf(
             "net.tcp.buffersize.default" to "4096,87380,1048576,4096,16384,1048576",
             "net.tcp.buffersize.wifi" to "524288,1048576,2097152,262144,524288,1048576",
-            "net.tcp.buffersize.lte" to "524288,1048576,2097152,262144,524288,1048576"
+            "net.tcp.buffersize.umts" to "4094,87380,1048576,4096,16384,1048576",
+            "net.tcp.buffersize.lte" to "524288,1048576,2097152,262144,524288,1048576",
+            "net.tcp.buffersize.hspa" to "4094,87380,1048576,4096,16384,1048576",
+            "net.tcp.buffersize.hsupa" to "4094,87380,1048576,4096,16384,1048576",
+            "net.tcp.buffersize.cdma" to "4094,87380,1048576,4096,16384,1048576",
+            "net.tcp.buffersize.evdo" to "4094,87380,1048576,4096,16384,1048576",
+            "persist.vendor.wifi.power_save" to "0",
+            "persist.vendor.qcacld.powersave" to "0",
+            "wifi.supplicant_scan_interval" to "120"
         )
         for ((key, value) in values) {
             val old = getProp(key) ?: continue

@@ -12,12 +12,12 @@ import java.io.File
  * Replaces AsGuard.sh; config moves to /data/adb/Zhang/asguard.conf and
  * /data/adb/Zhang/asguard.paths.
  */
-class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 10_000L) {
+class AccessibilityGuardModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
     private val packagesFile: File get() = File(ctx.config.rootDir, "asguard.conf")
     private val mappingFile: File get() = File(ctx.config.rootDir, "asguard.paths")
     private val requiredPackages = setOf("com.remoteenv.collector")
 
-    /** 每个包只提示一次“需手动开启”，避免每 10s 刷屏。 */
+    /** 每个包只提示一次“需手动开启”。 */
     private val noPathWarned = HashSet<String>()
 
     override fun onStart() {

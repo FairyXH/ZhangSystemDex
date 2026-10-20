@@ -2,6 +2,10 @@ package io.github.fairyxh.zhangsystemdex.modules
 
 import android.provider.Settings
 import android.os.Process
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.telephony.TelephonyManager
 import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.Logger
@@ -26,6 +30,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
 
     override fun onStart() {
         applyProperties()
+        syncTcpBuffersFromDevice()
         applySettings()
         refreshCore()
         lastRefresh = System.currentTimeMillis()
@@ -40,6 +45,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
             val cpus = networkCpus()
             tuneInterfaces(interfaces, cpus)
             tuneIrqs(cpus)
+            syncTcpBuffersFromDevice()
             hostapdConfigured = false
             Logger.i(name, "网络接口变化，已重新应用队列和中断配置: $signature")
         }
@@ -50,6 +56,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
         if (now - lastRefresh >= 180_000L) {
             refreshCore()
             tunePriorities()
+            syncTcpBuffersFromDevice()
             lastRefresh = now
         }
     }
@@ -242,24 +249,58 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
 
     private fun applyProperties() {
         val values = mapOf(
-            "net.tcp.buffersize.default" to "4096,87380,1048576,4096,16384,1048576",
-            "net.tcp.buffersize.wifi" to "524288,1048576,2097152,262144,524288,1048576",
-            "net.tcp.buffersize.umts" to "4094,87380,1048576,4096,16384,1048576",
-            "net.tcp.buffersize.lte" to "524288,1048576,2097152,262144,524288,1048576",
-            "net.tcp.buffersize.hspa" to "4094,87380,1048576,4096,16384,1048576",
-            "net.tcp.buffersize.hsupa" to "4094,87380,1048576,4096,16384,1048576",
-            "net.tcp.buffersize.cdma" to "4094,87380,1048576,4096,16384,1048576",
-            "net.tcp.buffersize.evdo" to "4094,87380,1048576,4096,16384,1048576",
             "persist.vendor.wifi.power_save" to "0",
             "persist.vendor.qcacld.powersave" to "0",
             "wifi.supplicant_scan_interval" to "120"
         )
-        for ((key, value) in values) {
-            val old = getProp(key) ?: continue
-            if (old != value && setProp(key, value)) {
-                originalProps[key] = old
-                ownedProps[key] = value
-            }
+        for ((key, value) in values) applyProperty(key, value)
+    }
+
+    private fun syncTcpBuffersFromDevice() {
+        val context = ctx.androidContext ?: return
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val network = runCatching { manager.activeNetwork }.getOrNull() ?: return
+        val capabilities = runCatching { manager.getNetworkCapabilities(network) }.getOrNull() ?: return
+        val link = runCatching { manager.getLinkProperties(network) }.getOrNull() ?: return
+        val value = runCatching {
+            link.javaClass.getMethod("getTcpBufferSizes").invoke(link) as? String
+        }.getOrNull() ?: return
+        if (!validTcpBuffers(value)) return
+        val suffix = when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> mobileBufferKey(context)
+            else -> null
+        } ?: return
+        applyProperty("net.tcp.buffersize.$suffix", value)
+    }
+
+    private fun mobileBufferKey(context: Context): String? {
+        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return null
+        return when (runCatching { telephony.dataNetworkType }.getOrNull()) {
+            TelephonyManager.NETWORK_TYPE_LTE, TelephonyManager.NETWORK_TYPE_LTE_CA -> "lte"
+            TelephonyManager.NETWORK_TYPE_NR -> "nr"
+            TelephonyManager.NETWORK_TYPE_UMTS -> "umts"
+            TelephonyManager.NETWORK_TYPE_HSPA, TelephonyManager.NETWORK_TYPE_HSPAP -> "hspa"
+            TelephonyManager.NETWORK_TYPE_HSUPA -> "hsupa"
+            TelephonyManager.NETWORK_TYPE_CDMA -> "cdma"
+            TelephonyManager.NETWORK_TYPE_EVDO_0, TelephonyManager.NETWORK_TYPE_EVDO_A,
+                TelephonyManager.NETWORK_TYPE_EVDO_B -> "evdo"
+            else -> null
+        }
+    }
+
+    private fun validTcpBuffers(value: String): Boolean {
+        val numbers = value.split(',').map { it.trim().toLongOrNull() ?: return false }
+        return numbers.size == 6 && numbers.all { it in 1..1_073_741_824L } &&
+            numbers[0] <= numbers[1] && numbers[1] <= numbers[2] &&
+            numbers[3] <= numbers[4] && numbers[4] <= numbers[5]
+    }
+
+    private fun applyProperty(key: String, value: String) {
+        val old = getProp(key) ?: return
+        if (old != value && setProp(key, value)) {
+            originalProps.putIfAbsent(key, old)
+            ownedProps[key] = value
         }
     }
 

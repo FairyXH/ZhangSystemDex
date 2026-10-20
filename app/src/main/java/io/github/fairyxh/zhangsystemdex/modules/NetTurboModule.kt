@@ -101,8 +101,6 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
             "/proc/sys/net/core/busy_read" to "50",
             "/proc/sys/net/core/rmem_max" to "33554432",
             "/proc/sys/net/core/wmem_max" to "33554432",
-            "/proc/sys/net/ipv4/tcp_rmem" to "8192 2097152 33554432",
-            "/proc/sys/net/ipv4/tcp_wmem" to "8192 2097152 33554432",
             "/proc/sys/net/ipv4/tcp_notsent_lowat" to "524288",
             "/proc/sys/net/ipv4/tcp_slow_start_after_idle" to "0",
             "/proc/sys/net/ipv4/tcp_mtu_probing" to "1",

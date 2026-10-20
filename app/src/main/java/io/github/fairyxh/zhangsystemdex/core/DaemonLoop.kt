@@ -29,6 +29,7 @@ abstract class DaemonLoop(
 
     fun stop() {
         running.set(false)
+        thread?.interrupt()
     }
 
     final override fun run() {
@@ -67,14 +68,9 @@ abstract class DaemonLoop(
     }
 
     private fun sleepLoop() {
-        var slept = 0L
-        while (running.get() && slept < intervalMs) {
-            val step = minOf(1000L, intervalMs - slept)
-            try {
-                Thread.sleep(step)
-            } catch (_: InterruptedException) {
-            }
-            slept += step
+        try {
+            Thread.sleep(intervalMs)
+        } catch (_: InterruptedException) {
         }
     }
 

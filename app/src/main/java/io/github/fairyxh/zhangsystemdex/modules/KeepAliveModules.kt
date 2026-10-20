@@ -32,6 +32,8 @@ class NotificationKeepAliveModule(ctx: DexContext) : DaemonLoop(ctx, 15_000L) {
     private val learned = HashMap<String, String>()
     private var pathsLoaded = false
     private var liveProbeWarned = false
+    private var lastLiveProbeAt = 0L
+    private val liveProbeIntervalMs = 180_000L
 
     private fun rootDir() = java.io.File(ctx.config.rootDir)
 
@@ -85,8 +87,12 @@ class NotificationKeepAliveModule(ctx: DexContext) : DaemonLoop(ctx, 15_000L) {
         val enabled = NotificationGrant.listListeners()
         // live 状态：优先解析 dumpsys notification 的 Live 段；
         // 解析不到时（部分 ROM 段名不同）逐个用 AMS ServiceRecord 兜底。
-        val live = NotificationGrant.liveListeners()
-        if (live == null && !liveProbeWarned) {
+        val probeLive = System.currentTimeMillis() - lastLiveProbeAt >= liveProbeIntervalMs
+        val live = if (probeLive) {
+            lastLiveProbeAt = System.currentTimeMillis()
+            NotificationGrant.liveListeners()
+        } else null
+        if (probeLive && live == null && !liveProbeWarned) {
             Logger.w(name, "无法解析 live listener 列表，改用 AMS ServiceRecord 兜底判断")
             liveProbeWarned = true
         }
@@ -127,8 +133,9 @@ class NotificationKeepAliveModule(ctx: DexContext) : DaemonLoop(ctx, 15_000L) {
                 }
 
                 // 已授权但 binder 未连接（僵尸态）→ 强制重绑
-                val isLiveNow = live?.any { it.startsWith("$pkg/") }
-                    ?: isBoundViaAms(pkg, authorized)
+                val isLiveNow = if (probeLive) {
+                    live?.any { it.startsWith("$pkg/") } ?: isBoundViaAms(pkg, authorized)
+                } else null
                 if (isLiveNow == false) {
                     Logger.w(name, "$pkg 已授权但未连接（僵尸态），强制重绑")
                     if (NotificationGrant.forceRebind(authorized)) {

@@ -16,6 +16,7 @@ import java.io.File
  */
 class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = false) {
     private var round = 0
+    private var launchedMusicCommand: String? = null
 
     override fun onStart() {
         if (!ctx.config.switch("server_mode_enable")) {
@@ -48,7 +49,10 @@ class ServerModeModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L, pauseAware = 
             if (ProcessUtils.pidsOf("frpc").isEmpty()) ShellExecutor.runBackground(frpc)
         }
         val music = ctx.config.getString("automusic_command", "").trim()
-        if (music.isNotEmpty()) ShellExecutor.runBackground(music)
+        if (music.isNotEmpty() && music != launchedMusicCommand) {
+            ShellExecutor.runBackground(music)
+            launchedMusicCommand = music
+        }
 
         setAllGovernors("performance")
 

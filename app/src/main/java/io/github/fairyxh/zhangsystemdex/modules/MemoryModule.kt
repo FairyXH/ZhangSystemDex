@@ -51,9 +51,7 @@ class MemoryModule(ctx: DexContext) : DaemonLoop(ctx, 3_000L) {
     private fun dropCaches() {
         Logger.i(name, "正在清理页缓存")
         ShellExecutor.run("sync")
-        for (i in 1..3) {
-            ProcessUtils.writeFile("/proc/sys/vm/drop_caches", "3")
-        }
+        ProcessUtils.writeFile("/proc/sys/vm/drop_caches", "3")
     }
 
     private fun forceStopBackground() {

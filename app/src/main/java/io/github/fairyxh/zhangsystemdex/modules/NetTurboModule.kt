@@ -277,7 +277,7 @@ class NetTurboModule(ctx: DexContext) : DaemonLoop(ctx, 30_000L, pauseAware = fa
     private fun mobileBufferKey(context: Context): String? {
         val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return null
         return when (runCatching { telephony.dataNetworkType }.getOrNull()) {
-            TelephonyManager.NETWORK_TYPE_LTE, TelephonyManager.NETWORK_TYPE_LTE_CA -> "lte"
+            TelephonyManager.NETWORK_TYPE_LTE -> "lte"
             TelephonyManager.NETWORK_TYPE_NR -> "nr"
             TelephonyManager.NETWORK_TYPE_UMTS -> "umts"
             TelephonyManager.NETWORK_TYPE_HSPA, TelephonyManager.NETWORK_TYPE_HSPAP -> "hspa"

@@ -28,6 +28,7 @@ import io.github.fairyxh.zhangsystemdex.modules.IncidentWatchModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.NetworkModule
+import io.github.fairyxh.zhangsystemdex.modules.NetTurboModule
 import io.github.fairyxh.zhangsystemdex.modules.OnlineRuleModule
 import io.github.fairyxh.zhangsystemdex.modules.PerformanceModule
 import io.github.fairyxh.zhangsystemdex.modules.PowerManagerModule
@@ -407,6 +408,9 @@ object Main {
             },
             ModuleEntry("network_ipv6", { enabled("network_ipv6_disable_enable") }, label = "禁用 IPv6", desc = "在所有网络接口关闭 IPv6") {
                 NetworkModule(ctx)
+            },
+            ModuleEntry("net_turbo", { enabled("net_turbo_enable") }, label = "网络加速", desc = "低进程创建的网络栈、队列与热点调优") {
+                NetTurboModule(ctx)
             },
             // 蓝牙音频 offload 循环守护（周期性复位 A2DP/LE 音频硬件 offload 属性）。
             ModuleEntry(

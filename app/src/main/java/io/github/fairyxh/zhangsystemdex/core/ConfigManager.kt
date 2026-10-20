@@ -205,6 +205,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["hma_config_enable"] == null) {
             missing.add("hma_config_enable=true\t# HideMyAppList 模板列表自动写入（含 Xposed 模块扫描）")
         }
+        if (switches["net_turbo_enable"] == null) {
+            missing.add("net_turbo_enable=true\t# Net Turbo Pro 网络调优（Dex 内置，低进程创建模式）")
+        }
         if (switches["skip_mount_guard_enable"] == null) {
             missing.add("skip_mount_guard_enable=true\t# 模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）")
         }
@@ -545,6 +548,7 @@ class ConfigManager(private val modDir: String) {
         val SPECIAL_DEFAULT_TRUE: Set<String> = setOf(
             "doze_enable",
             "hma_config_enable",
+            "net_turbo_enable",
             "game_pause_enable",
             "accessibility_guard_enable",
             "notif_keepalive_enable",
@@ -625,6 +629,7 @@ class ConfigManager(private val modDir: String) {
             "target_list_enable" to "tricky_store/hmspush 目标列表增量更新",
             "dnt_accessibility_enable" to "DoNotTryAccessibility 规则 XML 生成",
             "network_ipv6_disable_enable" to "禁用 IPv6",
+            "net_turbo_enable" to "Net Turbo Pro 网络调优：移动数据/Wi-Fi/热点队列、缓冲与中断亲和（低进程创建模式）",
             "only_base_enable" to "Doze 白名单使用内置规则（false=读取 doze.conf）",
             "read_game_list_enable" to "自动读取 MIUI/欧加游戏列表",
             "skip_mount_guard_enable" to "模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）",

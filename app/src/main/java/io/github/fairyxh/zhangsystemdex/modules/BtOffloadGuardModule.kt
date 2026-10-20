@@ -25,7 +25,7 @@ import io.github.fairyxh.zhangsystemdex.core.PropUtils
  * `bt_offload_guard_enable` switch and also frozen while a monitored game runs
  * (pauseAware = true).
  */
-class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 30000L, pauseAware = true) {
+class BtOffloadGuardModule(ctx: DexContext) : DaemonLoop(ctx, 180_000L, pauseAware = false) {
 
     override val name: String = "BtOffloadGuard"
 

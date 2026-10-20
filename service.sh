@@ -102,4 +102,3 @@ else
 	echo "! ZhangSystemDex failed to start, see ${LOGDIR}/daemon.log"
 fi
 
-[ -x "${MODDIR}/bt_offload_fix.sh" ] && "${MODDIR}/bt_offload_fix.sh" &

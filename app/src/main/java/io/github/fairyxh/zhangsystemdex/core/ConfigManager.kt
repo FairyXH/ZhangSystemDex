@@ -208,6 +208,9 @@ class ConfigManager(private val modDir: String) {
         if (switches["net_turbo_enable"] == null) {
             missing.add("net_turbo_enable=true\t# Net Turbo Pro 网络调优（Dex 内置，低进程创建模式）")
         }
+        if (switches["bt_offload_guard_enable"] == null) {
+            missing.add("bt_offload_guard_enable=true\t# Dex 蓝牙 offload 守护（替代旧 bt_offload_fix.sh）")
+        }
         if (switches["skip_mount_guard_enable"] == null) {
             missing.add("skip_mount_guard_enable=true\t# 模块目录防护：自动删除 skip_mount 等残留文件（防止系统挂载被跳过）")
         }
@@ -549,6 +552,7 @@ class ConfigManager(private val modDir: String) {
             "doze_enable",
             "hma_config_enable",
             "net_turbo_enable",
+            "bt_offload_guard_enable",
             "game_pause_enable",
             "accessibility_guard_enable",
             "notif_keepalive_enable",

@@ -101,7 +101,56 @@ META-INF  system  sqlite_lib  tools  webroot  ZhangSetting  docs
 
 出现 `system_ext/`、`product/`、`data/` 说明母版被 dex 跑过，需按第 3 节清理。
 
-## 七、当前基线
+## 七、pack.sh 已内置清理与校验（v5）
+
+2026-10-22 起，`pack.sh` 会在打包前自动完成两件事，**不再依赖人工检查**：
+
+### 步骤 4/6：资源检查与清理（自动删污染）
+
+| 清理对象 | 说明 |
+|---|---|
+| `system/` 下除 `app/` 以外的子目录 | `copyMount()` 复制产物（product/system_ext/tools/webroot…） |
+| 顶层 `system_ext/`、`product/`、`data/` | dex 运行期自动创建 |
+| `Main.dex.bak*`、`Main.dex.old` | 手工备份残留 |
+| `system/` 下任何 0 字节文件 | 典型污染占位 |
+
+发现即删除，并打印 `[-] 已清理: xxx`。全部干净时输出 `[+] 无需清理，母版已干净`。
+
+> 设 `KEEP_DIRTY=1 sh pack.sh` 可跳过清理、仅做检查（排查用）。
+
+### 步骤 5/6：APK 有效性校验（不合格直接中止）
+
+由 `tools/apkcheck.py` 完成，`system/app` 下**每个包目录**必须满足：
+
+1. 目录内恰好 1 个 `.apk` / `.Apk` 文件
+2. 文件大小 > 0
+3. 能作为 ZIP 打开（PK 魔数 + 中央目录完整）
+4. 含 `AndroidManifest.xml`
+5. 含至少一个 `.dex`
+6. 逐条目 CRC 校验通过（检测截断/损坏）
+
+任一项不合格 → 打印具体原因并 **`exit 1` 拒绝打包**。
+
+### 实测效果
+
+构造污染场景验证（`system/product`、`system/tools`、顶层 `system_ext/`、
+`data/`、`Main.dex.bak`、0 字节 APK 各一份）：
+
+```
+[-] 清理: system/product
+[-] 清理: system/tools
+[-] 清理: system_ext/
+[-] 清理: data/
+[-] 清理: Main.dex.bak
+[+] 共处理 5 项
+  → system/ 只剩 app，合法目录（tools/webroot）完整保留
+
+注入 0 字节 APK 后校验：
+  [!] 以下条目不合格：
+      bad.pkg      文件大小为 0（污染占位）
+```
+
+## 八、当前基线
 
 - `Main.dex` = `1d60160698b02dcfc941d3ce1ced25c6`（2,820,800 字节）
 - `system/app` = 50 个 APK，与已安装模块 100% 一致
@@ -113,12 +162,13 @@ META-INF  system  sqlite_lib  tools  webroot  ZhangSetting  docs
 | 项 | 值 |
 |---|---|
 | 路径 | `/data/media/0/Download/Files/ZhangProtect-Android.zip` |
-| 大小 | 514,858,630 字节（≈491 MB，压缩率 70.6%） |
-| md5 | `dba33c6db6ca30e16fb6955ef853b8a3` |
-| 打包文件数 | 111 个文件 + 61 个目录条目 |
-| `unzip -t` | No errors detected |
-| SHA256 逐文件校验 | 111/111 全部一致 |
+| 大小 | 514,862,432 字节 |
+| md5 | `a741691ebe895f1c3cafa5bffdee25a1` |
+| 打包文件数 | 112 个文件（新增 `tools/apkcheck.py`） |
+| SHA256 逐文件校验 | 112/112 全部一致 |
 | 包内 `Main.dex` | `1d60160698b02dcfc941d3ce1ced25c6` |
+| 包内 `install.sh` `SKIPMOUNT=false` | ✅ |
+| 包内 `system/app` APK | 50 个，全部通过 apkcheck |
 | 包内污染目录 | 0 |
 
 ### 本次打包前的完整检查记录

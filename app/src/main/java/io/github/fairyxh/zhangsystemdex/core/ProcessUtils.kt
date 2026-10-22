@@ -50,6 +50,39 @@ object ProcessUtils {
      * @param maxBytes 上限，避免 cgroup 等无边界文件读爆内存。
      * @return 文件内容；读取失败返回 null。
      */
+    /**
+     * 只读 `/proc/<pid>/cmdline` 的 **arg0**（第一个 NUL 之前的部分）。
+     *
+     * 2026-10-22 性能优化：`pidsOf` / `pidsOfAny` 每次都要遍历整个 /proc
+     * （本机约 970 个进程），而 [readProcText] 每个进程会分配一个
+     * ByteArrayOutputStream + 512 字节缓冲 + 中间 byte[]。全扫一次就有
+     * 近 2000 次小对象分配，是 GamePause/GameOomProtect 两个 5 秒循环
+     * 常驻 CPU 和 GC/JIT 抖动的主要来源。
+     *
+     * 这里用**单个复用缓冲**直接读，读到 NUL 就停，不构造任何中间流对象，
+     * 语义与 `readProcText(f)?.substringBefore('\u0000')` 一致。
+     *
+     * 复用缓冲由调用方传入，遍历循环内线程独占，不跨线程共享。
+     */
+    fun readCmdlineArg0(f: File, buf: ByteArray): String? {
+        return try {
+            FileInputStream(f).use { input ->
+                var total = 0
+                while (total < buf.size) {
+                    val n = input.read(buf, total, buf.size - total)
+                    if (n <= 0) break
+                    total += n
+                }
+                if (total <= 0) return ""
+                var end = 0
+                while (end < total && buf[end] != 0.toByte()) end++
+                String(buf, 0, end, Charsets.UTF_8).trim()
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     fun readProcText(f: File, maxBytes: Int = 8192): String? {
         return try {
             FileInputStream(f).use { input ->
@@ -115,10 +148,12 @@ object ProcessUtils {
         if (names.isEmpty()) return emptyMap()
         val result = names.associateWith { ArrayList<Int>() }
         val dirs = File("/proc").listFiles { f -> f.isDirectory && f.name.all(Char::isDigit) } ?: return result
+        // 复用同一块缓冲，避免每个进程都新分配（见 readCmdlineArg0 注释）。
+        val buf = ByteArray(512)
         for (dir in dirs) {
             val pid = dir.name.toIntOrNull() ?: continue
-            val cmdline = readProcText(File(dir, "cmdline")) ?: continue
-            val arg0 = cmdline.substringBefore('\u0000').trim()
+            val arg0 = readCmdlineArg0(File(dir, "cmdline"), buf) ?: continue
+            if (arg0.isEmpty()) continue
             for (pattern in names) {
                 if (arg0 == pattern || arg0.startsWith("$pattern:") || arg0.endsWith("/$pattern")) {
                     result[pattern]?.add(pid)

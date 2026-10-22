@@ -25,7 +25,10 @@ class GamePauseModule(
 ) {
     private var games: Set<String> = emptySet()
     private var activeGame: String? = null
+    /** 上次加载游戏列表的时间，用于节流 refresh()。 */
+    private var lastRefreshMs: Long = 0L
     override fun onStart() {
+        lastRefreshMs = System.currentTimeMillis()
         games =
             GameListProvider
                 .refresh(
@@ -38,14 +41,27 @@ class GamePauseModule(
         )
     }
     override fun tick() {
-        games =
-            GameListProvider
-                .refresh(
-                    ctx.config.switch("read_game_list_enable")
-                )
-                .toSet()
-        val runningGame =
+        /*
+         * 2026-10-22 性能修复：原实现每 5 秒无条件 refresh 一次游戏列表。
+         * refresh() 会读 game_pause.conf，并在 read_game_list_enable 打开时
+         * 启动 sqlite3 子进程查 OPLUS 游戏库——结果几乎不变，却让本模块
+         * 常驻 ~26% 单核。改为 60 秒节流（与 GameOomProtectModule 同口径），
+         * 代价只是新装游戏最多晚 60 秒识别，不影响任何已有功能。
+         */
+        val now = System.currentTimeMillis()
+        if (games.isEmpty() || now - lastRefreshMs >= GAME_LIST_TTL_MS) {
+            games =
+                GameListProvider
+                    .refresh(
+                        ctx.config.switch("read_game_list_enable")
+                    )
+                    .toSet()
+            lastRefreshMs = now
+        }
+        val running =
             findRunningGame()
+        val runningGame = running?.first
+        val runningPids = running?.second ?: emptyList()
         if (runningGame != null) {
             if (activeGame != runningGame) {
                 Logger.i(
@@ -56,10 +72,10 @@ class GamePauseModule(
             activeGame = runningGame
             ctx.gamePause.setPaused(true)
             if (ctx.config.switch("boost_game_enable")) {
-                boostGame(runningGame)
+                boostGame(runningGame, runningPids)
             }
             if (ctx.config.switch("game_oom_protect_enable")) {
-                GameOomProtect(runningGame)
+                GameOomProtect(runningGame, runningPids)
             }
             // Prevent Shizuku residue while game is running.
             FileUtils.rmQuoted(
@@ -82,10 +98,21 @@ class GamePauseModule(
     /**
      * 查找正在运行的游戏进程
      */
-    private fun findRunningGame(): String? {
+    private fun findRunningGame(): Pair<String, List<Int>>? {
+        /*
+         * 2026-10-22 性能修复：原实现 for 循环逐个调 ProcessUtils.pidsOf()，
+         * 每个都要全扫 /proc（本机约 970 进程），最坏 6 次全扫 / 5 秒。
+         * 改 pidsOfAny() 一次扫完，并顺带把 pids 返回，避免后续
+         * boostGame()/GameOomProtect() 重复再扫。判据与原实现一致。
+         */
+        if (games.isEmpty()) return null
+        // 一次扫 /proc 匹配全部游戏（而不是每个游戏各扫一次），
+        // 再按 games 的顺序挑出第一个在跑的，语义与原实现一致。
+        val pidMap = ProcessUtils.pidsOfAny(games)
         for (game in games) {
-            if (ProcessUtils.pidsOf(game).isNotEmpty()) {
-                return game
+            val pids = pidMap[game]
+            if (!pids.isNullOrEmpty()) {
+                return game to pids
             }
         }
         return null
@@ -93,9 +120,10 @@ class GamePauseModule(
     /**
      * 游戏性能提升
      */
-    private fun boostGame(pkg: String) {
-        val pids =
-            ProcessUtils.pidsOf(pkg)
+    private fun boostGame(
+        pkg: String,
+        pids: List<Int>
+    ) {
         for (pid in pids) {
             ProcessUtils.renice(
                 pid,
@@ -122,10 +150,9 @@ class GamePauseModule(
      * 游戏OOM保护
      */
     private fun GameOomProtect(
-        pkg: String
+        pkg: String,
+        pids: List<Int>
     ) {
-        val pids =
-            ProcessUtils.pidsOf(pkg)
         pids.forEachIndexed { index, pid ->
             /*
              * 主进程保护，子进程降低保护等级。
@@ -161,5 +188,10 @@ class GamePauseModule(
             name,
             "设置 PID=$pid oom_score_adj=$value"
         )
+    }
+
+    companion object {
+        /** 游戏列表缓存时长：60 秒。 */
+        private const val GAME_LIST_TTL_MS = 60_000L
     }
 }

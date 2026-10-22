@@ -34,6 +34,7 @@ class SystemTuningModule(
     ctx,
     configuredIntervalMs(ctx),
 ) {
+
     private var cycle = 0
     private var runOnceDone = false
 
@@ -52,6 +53,13 @@ class SystemTuningModule(
         }
 
     companion object {
+        /** Download 下的基础工作目录（无条件创建，不受任何开关控制）。 */
+        val BASE_DOWNLOAD_DIRS = listOf(
+            "/data/media/0/Download/Files",
+            "/data/media/0/Download/Important",
+            "/data/media/0/Download/Music",
+        )
+
         private fun configuredIntervalMs(ctx: DexContext): Long {
             val sec = ctx.config.getString("tuning_interval_seconds", "").toLongOrNull()
             val base = if (ctx.config.switch("server_mode_enable")) 300L else 600L
@@ -59,7 +67,29 @@ class SystemTuningModule(
         }
     }
 
+    /**
+     * 创建 Download 下的基础工作目录。
+     *
+     * 这些目录是模块的基础设施，不应依赖任何功能开关。
+     * 历史问题：三个 mkdirs 原先写在 regularTick() 里，而 regularTick 仅在
+     * system_tuning_enable=true 时才被调用，用户关掉主调优后目录永远不会创建。
+     * 现改为 onStart() 最开头无条件执行（幂等，已存在时立即返回）。
+     */
+    private fun ensureBaseDirs() {
+        for (d in BASE_DOWNLOAD_DIRS) {
+            try {
+                FileUtils.mkdirs(d)
+                // 目录建在 daemon(uid=0) 身份下，默认 umask 会给 770 root:media_rw，
+                // 文件管理器里会看不到/打不开。这里显式放开到 777，
+                // 与 Download/ZhangSetting 保持一致，用户可正常读写。
+                FileUtils.chmod(d, "777")
+            } catch (t: Throwable) {
+                Logger.w(name, "创建目录失败 $d: ${t.message}")
+            }
+        }
+    }
     override fun onStart() {
+        ensureBaseDirs()
         Logger.i(
             name,
             "模块启动，周期=${intervalMs}ms，常规任务=${ctx.config.switch("system_tuning_enable")}，高占用=${ctx.config.switch("heavy_task_enable")}"
@@ -176,9 +206,6 @@ class SystemTuningModule(
         if (ctx.config.switch("locked_apps_enable")) {
             power.applyLockedApps()
         }
-        FileUtils.mkdirs("/data/media/0/Download/Files")
-        FileUtils.mkdirs("/data/media/0/Download/Important")
-        FileUtils.mkdirs("/data/media/0/Download/Music")
         Logger.i(name, "常规周期任务执行完毕")
     }
 

@@ -78,9 +78,60 @@ md5sum "$M/Main.dex" /data/adb/modules/Zhang/Main.dex
 - 在母版目录内**直接运行 dex 会再次产生污染**。需要测 dex 请用已安装模块目录，
   或运行后按第 4 节清单复查并清理。
 
-## 六、当前基线
+## 六、顶层 `system_ext/`、`product/` 也不该出现在母版
+
+这一点容易混淆，需要单独说明：
+
+- **`system/system_ext/`、`system/product/`** 是 `copyMount()` 复制进 `system/`
+  的运行期产物 → 母版里**不应存在**（已在第 3 节删除）。
+- **顶层的 `system_ext/`、`product/`**（与 `system/` 同级）同样是
+  **dex 运行过程中自动创建的**，属于运行期产物 → 母版里**不应存在**。
+
+> 用户确认（2026-10-22）：`system_ext` 是 dex 运行过程中自动创建的，
+> 不应该默认存在于母版中。
+
+所以"干净母版"的顶层目录白名单是：
+
+```
+META-INF  system  sqlite_lib  tools  webroot  ZhangSetting  docs
+```
+
+外加若干 `.sh` / `.md` / `module.prop` / `config.conf` / `system.prop` /
+`Main.dex` / `aapt` / `shfmt` / `Python.zip` 等文件。
+
+出现 `system_ext/`、`product/`、`data/` 说明母版被 dex 跑过，需按第 3 节清理。
+
+## 七、当前基线
 
 - `Main.dex` = `1d60160698b02dcfc941d3ce1ced25c6`（2,820,800 字节）
 - `system/app` = 50 个 APK，与已安装模块 100% 一致
 - 母版总体积 ≈ 696M（其中 `system/app` 556M）
-- 日期：2026-10-22
+- 发布日期：2026-10-22
+
+### 发布产物
+
+| 项 | 值 |
+|---|---|
+| 路径 | `/data/media/0/Download/Files/ZhangProtect-Android.zip` |
+| 大小 | 514,858,630 字节（≈491 MB，压缩率 70.6%） |
+| md5 | `dba33c6db6ca30e16fb6955ef853b8a3` |
+| 打包文件数 | 111 个文件 + 61 个目录条目 |
+| `unzip -t` | No errors detected |
+| SHA256 逐文件校验 | 111/111 全部一致 |
+| 包内 `Main.dex` | `1d60160698b02dcfc941d3ce1ced25c6` |
+| 包内污染目录 | 0 |
+
+### 本次打包前的完整检查记录
+
+| 检查项 | 结果 |
+|---|---|
+| 母版顶层条目 | 37 |
+| `system/` 子项 | 只有 `app`（1 个） |
+| `system/app` 目录 / 文件 | 50 / 50 |
+| 0 字节文件（全母版） | **0** |
+| `system/app` 逐包异常 | **0** |
+| 母版 vs 已安装 逐包 md5 | **一致 50 / 不一致 0** |
+| `webroot/index.html` | `c796394b...` 与已安装一致 |
+| `webroot/config.json` | `d01d5fc7...` 与已安装一致 |
+| 运行期污染（system_ext/product/data/bak） | 均**不存在** |
+| `Main.dex` 标记 | HttpBackend、ensureBaseDirs、SelfOomGuardModule 齐全 |

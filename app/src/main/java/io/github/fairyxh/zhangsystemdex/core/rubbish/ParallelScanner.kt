@@ -38,6 +38,14 @@ internal class ParallelScanner(
 
         /** 每完成 N 个分片落盘一次已完成分片的聚合（增量、可中断）。 */
         private const val FLUSH_EVERY_SHARDS = 64
+
+        /**
+         * 扫描墙钟超时（毫秒）。
+         *
+         * 正常全量扫描在真机上约 30~90 秒，10 分钟已足够宽松；
+         * 仅用于兜底「分片遍历在 FUSE/裸设备上永久阻塞」这种病态情况。
+         */
+        private const val SCAN_TIMEOUT_MS = 10L * 60L * 1000L
     }
 
     /** 分片遍历回调（同一分片内串行调用，实现方无需加锁）。 */
@@ -158,7 +166,19 @@ internal class ParallelScanner(
             }, "zsd-scan-$t").apply { isDaemon = true }.start()
         }
 
-        latch.await()
+        // 等待全部工作线程结束，**但必须有上限**：
+        // 分片遍历会在 FUSE / 裸设备 / 坏块上无限期阻塞（读目录 syscall 不返回），
+        // 原实现 `latch.await()` 无超时，会让清理任务永久卡死、
+        // RubbishProgress 一直 running，且这些线程长期占用内存。
+        // 超时后不再等待：直接按**已收集到的**结果收尾（工作线程是 daemon，
+        // 不会阻止进程退出；它们完成时仍会各自 countDown，不会泄漏引用）。
+        val waitMs = scanTimeoutMs()
+        if (!latch.await(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            Logger.w(
+                "ParallelScanner",
+                "扫描超时（${'$'}{waitMs / 1000}s）：已完成 ${'$'}{done.get()}/${'$'}total 分片，按部分结果返回"
+            )
+        }
         synchronized(lock) {
             idx.retainShards(aliveShards)
             cache.save(ruleId, idx)
@@ -166,6 +186,8 @@ internal class ParallelScanner(
         val samples = synchronized(samplesBox) { ArrayList(samplesBox).take(maxSamples) }
         return Result(hits.get().toInt(), bytes.get(), samples, reused.get())
     }
+
+    private fun scanTimeoutMs(): Long = SCAN_TIMEOUT_MS
 
     /**
      * 遍历一个分片子树，返回其聚合 [junkFiles, junkBytes]（后序汇总）。

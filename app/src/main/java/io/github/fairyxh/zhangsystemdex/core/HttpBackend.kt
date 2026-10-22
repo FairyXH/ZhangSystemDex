@@ -50,6 +50,11 @@ class HttpBackend(
      *  HTTP (1 request/second). We run our own blocking accept loop so the WebUI
      *  is snappy, and hand each connection to a short-lived worker thread so one
      *  slow request (e.g. a big rubbish scan) never blocks the others. */
+    /** 当前活跃的 HTTP 连接线程数（用于并发上限软限流）。 */
+    private val activeConns = java.util.concurrent.atomic.AtomicInteger(0)
+    /** 因并发超限被拒绝的连接累计数（限频告警用）。 */
+    @Volatile private var connRejects = 0L
+
     @Volatile
     private var acceptThread: Thread? = null
 
@@ -85,6 +90,21 @@ class HttpBackend(
                     break
                 }
                 // One short-lived thread per connection: concurrent + non-blocking.
+                //
+                // ⚠ 必须有并发上限：每连接一线程且 soTimeout=10s，若无上限，
+                //   异常客户端（大量慢连接/重连风暴）会堆积成百上千个线程，
+                //   每个线程至少 1MB 栈，在可用内存常年吃紧的设备上会直接拖垮 daemon。
+                //   这里用「活跃连接计数」做软限流：超额时直接拒绝并关闭连接，
+                //   既不排队（不占内存）、也不阻塞 accept 循环。
+                if (activeConns.get() >= MAX_CONNS) {
+                    connRejects++
+                    if (connRejects % 50 == 1L) {
+                        Logger.w(name, "并发连接已达上限 $MAX_CONNS，拒绝新连接（累计 $connRejects）")
+                    }
+                    try { sock.close() } catch (_: Throwable) {}
+                    continue
+                }
+                activeConns.incrementAndGet()
                 Thread({
                     try {
                         handle(sock)
@@ -92,6 +112,7 @@ class HttpBackend(
                         Logger.w(name, "处理请求失败: ${e.message}")
                     } finally {
                         try { sock.close() } catch (_: Throwable) {}
+                        activeConns.decrementAndGet()
                     }
                 }, "HttpConn").apply { isDaemon = true }.start()
             }
@@ -120,6 +141,22 @@ class HttpBackend(
     // Request handling
     // ------------------------------------------------------------------
 
+    companion object {
+        /** POST 请求体上限（字节）。本服务的写接口只收配置/规则文本，2MB 足够。 */
+        private const val MAX_BODY_BYTES = 2 * 1024 * 1024
+
+        /**
+         * 同时处理的 HTTP 连接数上限。
+         *
+         * WebUI 正常交互只有个位数并发；16 足够覆盖「多个页面同时拉数据」，
+         * 又能把线程堆积牢牢压住（16 线程 × ~1MB 栈 ≈ 16MB，可接受）。
+         */
+        private const val MAX_CONNS = 16
+
+        /** `/api/read` 单文件上限（字节）。读接口只面向配置文件/规则文本。 */
+        private const val MAX_READ_FILE_BYTES = 1L * 1024L * 1024L
+    }
+
     private fun handle(sock: Socket) {
         sock.soTimeout = 10000
         val input: InputStream = BufferedInputStream(sock.getInputStream())
@@ -146,6 +183,13 @@ class HttpBackend(
         }
 
         val body = if (method == "POST" && contentLength > 0) {
+            // 请求体大小上限：防止异常/恶意 Content-Length 直接分配巨量内存。
+            // daemon 堆上限 512MB、设备可用内存常年吃紧，一次超大分配就可能被 LMK 杀掉。
+            if (contentLength > MAX_BODY_BYTES) {
+                Logger.w(name, "请求体过大已拒绝: $contentLength > $MAX_BODY_BYTES")
+                try { respond(out, 413, jsonError("请求体过大")) } catch (_: Throwable) {}
+                return
+            }
             val buf = ByteArray(contentLength)
             var read = 0
             while (read < contentLength) {
@@ -298,6 +342,12 @@ class HttpBackend(
         if (safe != null) return safe
         if (!f.exists() || !f.isFile) {
             return jsonRaw("{\"ok\":false,\"code\":1,\"content\":\"\",\"message\":\"文件不存在\"}")
+        }
+        // 大文件保护：readText + StringBuilder + JSON 转义串会同时驻留约 3 份内存。
+        // daemon 堆上限 512MB、设备可用内存常年吃紧，这里对超大文件直接拒绝，
+        // 避免 WebUI 误点某个大文件就把 daemon 抬到 OOM 边缘。
+        if (f.length() > MAX_READ_FILE_BYTES) {
+            return jsonError("文件过大（${f.length()} 字节 > 上限 ${MAX_READ_FILE_BYTES}），请在终端查看")
         }
         val text = try {
             f.readText(Charsets.UTF_8)

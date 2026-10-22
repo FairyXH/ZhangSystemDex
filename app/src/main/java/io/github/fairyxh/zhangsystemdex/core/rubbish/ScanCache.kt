@@ -25,6 +25,16 @@ import java.io.File
  */
 class ScanCache(private val rootDir: File) {
 
+    companion object {
+        /**
+         * 单规则索引的文件条目上限。
+         *
+         * 20 万条 × 约 100~150 字节（路径 + 对象头）≈ 20~30MB，
+         * 在 512MB 堆里有充足余量，同时足以覆盖绝大多数设备的增量命中需求。
+         */
+        const val MAX_ENTRIES_PER_INDEX = 200_000
+    }
+
     /** 单条文件索引项。 */
     data class Entry(
         val kind: Char,
@@ -46,7 +56,30 @@ class ScanCache(private val rootDir: File) {
         val entries = LinkedHashMap<String, Entry>()
         val shardAggs = HashMap<String, ShardAgg>()
 
-        fun put(e: Entry) { entries[e.path] = e }
+        /**
+         * 写入一条文件索引，并对条目总数做**硬上限**保护。
+         *
+         * `entries` 每条都含完整路径字符串，是全量扫描时最大的常驻内存来源。
+         * 原实现无上限：扫描几十万文件的设备上，单条规则索引就能吃掉数百 MB，
+         * 叠加设备可用内存常年吃紧 → 极易把 daemon 推到 OOM。
+         *
+         * 这里用 [MAX_ENTRIES_PER_INDEX] 限流：`LinkedHashMap` 保持插入序，
+         * 超限时淘汰**最旧**的条目（≈LRU 近似）。被淘汰的仅失去「文件级增量」
+         * 加速，下次仍会重新判定——**不影响正确性**，只是略慢。
+         * 分片级聚合（[shardAggs]）不受影响，主要加速路径仍在。
+         */
+        fun put(e: Entry) {
+            entries[e.path] = e
+            if (entries.size > MAX_ENTRIES_PER_INDEX) {
+                val it = entries.keys.iterator()
+                var drop = entries.size - MAX_ENTRIES_PER_INDEX
+                while (drop > 0 && it.hasNext()) {
+                    it.next()
+                    it.remove()
+                    drop--
+                }
+            }
+        }
         fun get(path: String): Entry? = entries[path]
 
         /** 文件是否与磁盘一致（size+mtime 均未变）。 */

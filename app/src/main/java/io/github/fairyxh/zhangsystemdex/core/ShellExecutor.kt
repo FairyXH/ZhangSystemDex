@@ -47,9 +47,31 @@ object ShellExecutor {
     /** 内存吃紧时的间隔（毫秒）。 */
     private const val BUSY_INTERVAL_MS = 1200L
 
+    /**
+     * 等待并发闸门的最长时间（毫秒）。
+     *
+     * ## 为什么必须有（2026-10-22 WebUI「后端无响应」事故根治）
+     *
+     * 原实现用 `semaphore.acquire()` **无限等待**。只要持锁方因任何原因长期不释放
+     * （实测：`PowerManagerModule` 在 `awakeIdle()` 里连续发起多条
+     * `dumpsys deviceidle` 重命令，叠加 `throttle()` 的 sleep，持锁时间被拉长），
+     * 后续所有调用者就会**永久挂死**：
+     *   - `HttpConn` 线程全卡在 `Semaphore.acquire()` → `/api/overview`、
+     *     `/api/powerstatus` 永远不返回（前端首页初始化即调用，表现为
+     *     **整个 WebUI 卡在加载中**）；
+     *   - `ShizukuModule` 也走同一把闸门 → Shizuku 保活逻辑无法执行。
+     *
+     * 加超时后，即使闸门被长期占用，调用方也会在有限时间内拿到
+     * `-1 to ""`（按"失败"处理），daemon 其余功能继续运转，绝不整体挂死。
+     * 取 20s > [DEFAULT_TIMEOUT_MS]（单条命令上限），保证正常情况下不会误伤。
+     */
+    private const val ACQUIRE_TIMEOUT_MS = 20_000L
+
     private val semaphore = java.util.concurrent.Semaphore(MAX_CONCURRENT)
     private val gateLock = Any()
     @Volatile private var lastLaunchMs = 0L
+    /** 闸门等待超时累计次数（仅用于限频告警，避免刷屏）。 */
+    @Volatile private var gateSkips: Long = 0L
 
     /** 系统是否处于内存吃紧（据此放大节流间隔）。 */
     private fun systemBusy(): Boolean = try {
@@ -61,16 +83,37 @@ object ShellExecutor {
         false
     }
 
-    /** 通过节流门：串行化「启动间隙」，避免突发。 */
+    /**
+     * 通过节流门：串行化「启动间隙」，避免突发。
+     *
+     * ## 2026-10-22 修复：sleep 必须移出同步块
+     *
+     * 原实现在 `synchronized(gateLock)` **内部** `Thread.sleep(300~1200ms)`，
+     * 意味着每次节流都独占 gateLock 整整一个间隔。虽然 gateLock 本身只保护
+     * 时间戳，但这种写法会让持锁时间被 sleep 无谓放大；一旦有线程在此被中断
+     * 或系统卡顿，其它线程只能在锁外干等，进一步拉长整条 shell 流水线的排队时间。
+     *
+     * 现在改为：
+     *   1. 锁内只做「计算应等待多久」+「预留下一个发射时刻」（O(1)，无阻塞）；
+     *   2. 锁外执行 sleep。
+     * 语义与原实现等价（相邻两次发射仍至少间隔 [gap]），但锁持有时间降到微秒级。
+     */
     private fun throttle() {
+        val gap = if (systemBusy()) BUSY_INTERVAL_MS else MIN_INTERVAL_MS
+        val wait: Long
         synchronized(gateLock) {
-            val gap = if (systemBusy()) BUSY_INTERVAL_MS else MIN_INTERVAL_MS
             val now = System.currentTimeMillis()
-            val wait = lastLaunchMs + gap - now
-            if (wait > 0) {
-                try { Thread.sleep(wait) } catch (_: InterruptedException) { }
+            val next = lastLaunchMs + gap
+            wait = next - now
+            // 预留槽位：本次（可能稍后 sleep）占用 next 时刻，后续调用据此排队。
+            lastLaunchMs = if (wait > 0) next else now
+        }
+        if (wait > 0) {
+            try {
+                Thread.sleep(wait)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
-            lastLaunchMs = System.currentTimeMillis()
         }
     }
 
@@ -107,8 +150,21 @@ object ShellExecutor {
             }
         }
         // ① 并发闸门：最多 MAX_CONCURRENT 个 shell 同时运行。
+        //    **必须带超时**：无限等待会让一次异常持锁演变成全局永久挂死
+        //    （2026-10-22 WebUI 后端无响应事故的直接原因，详见 ACQUIRE_TIMEOUT_MS）。
         try {
-            semaphore.acquire()
+            if (!semaphore.tryAcquire(ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                // 闸门长时间被占用：本次按失败返回，但不抛出、不阻塞调用方。
+                gateSkips++
+                if (gateSkips % 20 == 1L) {
+                    Logger.w(
+                        "ShellExecutor",
+                        "并发闸门等待 ${ACQUIRE_TIMEOUT_MS}ms 超时，放弃本次命令" +
+                            "（累计 $gateSkips 条），cmd=${cmd.take(60)}"
+                    )
+                }
+                return -1 to ""
+            }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             return -1 to ""

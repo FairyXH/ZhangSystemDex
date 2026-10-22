@@ -844,7 +844,7 @@ class HttpBackend(
      */
     private fun readBatteryFacts(): BatteryFacts {
         val f = BatteryFacts()
-        val out = ShellExecutor.run("dumpsys battery 2>/dev/null")
+        val out = sysfsBatteryText() ?: ShellExecutor.run("dumpsys battery 2>/dev/null")
         if (out != null) {
             f.level = intField(out, "level", -1)
             f.scale = intField(out, "scale", -1)
@@ -945,9 +945,79 @@ class HttpBackend(
         else -> "空闲（系统默认）"
     }
 
+    private fun sysfsBatteryText(): String? {
+        val b = sysfsBattery() ?: return null
+        val sb = StringBuilder(256)
+        sb.append("Current Battery Service state:\n")
+        sb.append("  AC powered: ").append(b.ac).append('\n')
+        sb.append("  USB powered: ").append(b.usb).append('\n')
+        sb.append("  Wireless powered: ").append(b.wireless).append('\n')
+        sb.append("  status: ").append(b.status).append('\n')
+        sb.append("  health: ").append(b.health).append('\n')
+        sb.append("  present: true\n")
+        sb.append("  level: ").append(b.level).append('\n')
+        sb.append("  scale: 100\n")
+        if (b.voltage > 0) sb.append("  voltage: ").append(b.voltage).append('\n')
+        if (b.temperature != Int.MIN_VALUE) sb.append("  temperature: ").append(b.temperature).append('\n')
+        if (b.current != Int.MIN_VALUE) sb.append("  current now: ").append(b.current).append('\n')
+        return sb.toString()
+    }
+
+    private class SysfsBattery {
+        var level = -1
+        var status = 1
+        var health = 1
+        var voltage = -1
+        var temperature = Int.MIN_VALUE
+        var current = Int.MIN_VALUE
+        var ac = false
+        var usb = false
+        var wireless = false
+    }
+
+    private fun readSysfs(path: String): String? = try {
+        val f = File("/sys/class/power_supply/battery", path)
+        if (f.exists()) f.readText().trim() else null
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun sysfsBattery(): SysfsBattery? {
+        val level = readSysfs("capacity")?.toIntOrNull() ?: return null
+        val b = SysfsBattery()
+        b.level = level
+        val st = readSysfs("status")?.lowercase()
+        b.status = when {
+            st == null -> 1
+            st.startsWith("charging") -> 2
+            st.startsWith("discharging") -> 3
+            st.startsWith("not charging") -> 4
+            st.startsWith("full") -> 5
+            else -> 1
+        }
+        b.health = when (readSysfs("health")?.lowercase()) {
+            "good" -> 2
+            "overheat" -> 3
+            "dead" -> 4
+            "over voltage" -> 5
+            "failure" -> 7
+            "cold" -> 8
+            else -> 1
+        }
+        readSysfs("voltage_now")?.toLongOrNull()?.let { uv ->
+            b.voltage = if (uv > 100000L) (uv / 1000L).toInt() else uv.toInt()
+        }
+        readSysfs("temp")?.toIntOrNull()?.let { b.temperature = it }
+        readSysfs("current_now")?.toLongOrNull()?.let { b.current = it.toInt() }
+        b.ac = readSysfs("AC_online") == "1"
+        b.usb = readSysfs("USB_online") == "1"
+        b.wireless = readSysfs("Wireless_online") == "1"
+        return b
+    }
+
     private fun readBatteryInt(key: String, def: Int): Int {
         // Retained for backwards compatibility with any older caller.
-        val out = ShellExecutor.run("dumpsys battery 2>/dev/null") ?: return def
+        val out = sysfsBatteryText() ?: ShellExecutor.run("dumpsys battery 2>/dev/null") ?: return def
         val map = mapOf(
             "EXTRA_LEVEL" to "level",
             "EXTRA_STATUS" to "status",

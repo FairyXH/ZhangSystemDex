@@ -24,6 +24,8 @@ import java.io.File
 class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
 
     private var awake = false
+    /** 上次尝试应用亮屏 Doze 策略的时间（配合 [AWARE_IDLE_COOLDOWN_MS] 防重放）。 */
+    @Volatile private var lastAwakeIdleMs = 0L
     private val requiredDozePackages = setOf("com.remoteenv.collector","org.localsend.localsend_app")
 
     override fun onStart() {
@@ -58,6 +60,15 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
     companion object {
         /** 开机后延迟多久再执行 Doze/Lock 重操作（毫秒）。 */
         private const val STARTUP_DELAY_MS = 20_000L
+
+        /**
+         * 亮屏 Doze 策略的失败重试冷却窗（毫秒）。
+         *
+         * 若上一轮 `awakeIdle()` 未成功（`awake` 仍为 false），至少要等这么久才允许
+         * 再发起一次整批重命令，避免每 60s 的 tick 反复占住 ShellExecutor 全局闸门
+         * 导致 WebUI 无响应。取值 30min：Doze 策略本身不需要秒级收敛。
+         */
+        private const val AWARE_IDLE_COOLDOWN_MS = 30L * 60L * 1000L
     }
 
     /** 内置应用（system/app/）中**启用内置守护**的部分，来源见 [BuiltinConfig]。 */
@@ -225,17 +236,41 @@ class PowerManagerModule(ctx: DexContext) : DaemonLoop(ctx, 60_000L) {
         awake = true
     }
 
+    /**
+     * 白天（亮屏）Doze 策略应用：解除强制 idle 并放行 light/deep，同时保证三个
+     * 通信类应用在 Doze 白名单内。
+     *
+     * ## 2026-10-22 修复：必须带「冷却窗」，不能靠单个布尔位兜底
+     *
+     * 原实现只有 `if (!awake)` 一层判断，末尾才 `awake = true`。这段逻辑会连续
+     * 发起 7 条**重命令**（5 条 `dumpsys deviceidle` + 3 次白名单写入，其中
+     * `addPowerSaveWhitelist` 在 Binder 失败时会回落成 `dumpsys deviceidle whitelist +`），
+     * 全部要走 [ShellExecutor] 的全局串行闸门。
+     *
+     * 问题在于：只要这套命令没有全部执行完，`awake` 就永远为 false，而 [tick]
+     * 每 60s 就会再调一次 —— 于是每轮都重新排队 7 条重命令，长期占住 shell
+     * 闸门，把 WebUI 的 `/api/overview`（需要 `dumpsys battery`）饿死。
+     * 现场证据：`PowerManagerModule` 线程卡在 `ShellExecutor.throttle()` 持锁，
+     * 9 个 `HttpConn` 线程永久等待信号量。
+     *
+     * 修复：即使本轮失败，也用 [AWARE_IDLE_COOLDOWN_MS] 冷却窗阻止立即重放，
+     * 把「无限重放」降级为「最多每 30 分钟重试一次」。
+     */
     private fun awakeIdle() {
-        if (!awake) {
-            ShellExecutor.run("dumpsys deviceidle disable all")
-            ShellExecutor.run("dumpsys deviceidle enable light")
-            ShellExecutor.run("dumpsys deviceidle enable deep")
-            FrameworkOps.addPowerSaveWhitelist("com.tencent.mobileqq")
-            FrameworkOps.addPowerSaveWhitelist("com.tencent.mm")
-            FrameworkOps.addPowerSaveWhitelist("com.alibaba.android.rimet")
-            ShellExecutor.run("dumpsys deviceidle motion")
-            awake = true
-        }
+        val now = System.currentTimeMillis()
+        if (awake) return
+        if (now - lastAwakeIdleMs < AWARE_IDLE_COOLDOWN_MS) return
+        // 先占位再执行：即使本轮抛异常/被中断，也不会在下一个 tick 立刻重放。
+        lastAwakeIdleMs = now
+        ShellExecutor.run("dumpsys deviceidle disable all")
+        ShellExecutor.run("dumpsys deviceidle enable light")
+        ShellExecutor.run("dumpsys deviceidle enable deep")
+        FrameworkOps.addPowerSaveWhitelist("com.tencent.mobileqq")
+        FrameworkOps.addPowerSaveWhitelist("com.tencent.mm")
+        FrameworkOps.addPowerSaveWhitelist("com.alibaba.android.rimet")
+        ShellExecutor.run("dumpsys deviceidle motion")
+        awake = true
+        Logger.i(name, "亮屏 Doze 策略已应用（解除强制 idle / 放行 light+deep）")
     }
 
     private fun cleanUserWhitelist() {

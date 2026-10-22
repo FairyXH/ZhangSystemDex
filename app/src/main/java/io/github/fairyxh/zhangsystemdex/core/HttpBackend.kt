@@ -982,6 +982,45 @@ class HttpBackend(
         null
     }
 
+    private fun readNode(path: String): String? {
+        return try {
+            val f = File(path)
+            if (f.exists()) f.readText().trim() else null
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    private fun plugState(b: SysfsBattery) {
+        var ac = readSysfs("AC_online") == "1"
+        var usb = readSysfs("USB_online") == "1"
+        var wl = readSysfs("Wireless_online") == "1"
+        if (!ac && !usb && !wl) {
+            val dirs = File("/sys/class/power_supply").listFiles()
+            if (dirs != null) {
+                for (d in dirs) {
+                    val online = readNode(d.path + "/online")
+                    if (online != "1") continue
+                    val ty = readNode(d.path + "/type")
+                    val tl = ty?.lowercase() ?: ""
+                    if (tl == "usb" || tl == "usb_c" || tl == "usb_pd") {
+                        usb = true
+                    } else if (tl == "ac" || tl == "mains") {
+                        ac = true
+                    } else if (tl == "wireless") {
+                        wl = true
+                    } else if (d.name.lowercase().contains("usb")) {
+                        usb = true
+                    }
+                }
+            }
+        }
+        if (!ac && !usb && !wl && b.status == 2) ac = true
+        b.ac = ac
+        b.usb = usb
+        b.wireless = wl
+    }
+
     private fun sysfsBattery(): SysfsBattery? {
         val level = readSysfs("capacity")?.toIntOrNull() ?: return null
         val b = SysfsBattery()
@@ -1009,9 +1048,7 @@ class HttpBackend(
         }
         readSysfs("temp")?.toIntOrNull()?.let { b.temperature = it }
         readSysfs("current_now")?.toLongOrNull()?.let { b.current = it.toInt() }
-        b.ac = readSysfs("AC_online") == "1"
-        b.usb = readSysfs("USB_online") == "1"
-        b.wireless = readSysfs("Wireless_online") == "1"
+        plugState(b)
         return b
     }
 

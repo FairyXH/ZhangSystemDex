@@ -3,6 +3,51 @@
 > 目的：让新接手的 Agent 快速恢复工程状态，无需从头扫描。
 > 维护原则：只保留能帮助继续工作的关键事实；删除无意义探索过程。
 
+## §0 最新事故：WebUI 后端永久挂死（2026-10-22，commit a5d16e4 / b6e19c2）
+### 现象
+WebUI 打开后**一直卡在加载中**。后端进程活着、端口 26437 在监听、CORS 正常，
+但 `/api/overview` 与 `/api/powerstatus` **永久超时**（6s+ 无响应）；
+`/api/paths`、`/api/oom/*`、`/api/switch/list` 却正常。
+→ 前端首页初始化就调 `/api/overview`（index.html:1171），故整个 UI 卡死。
+### 根因（`debuggerd -j` 线程栈闭环）
+`ShellExecutor` 的全局并发闸门 `semaphore.acquire()` **无限等待**：
+```
+PowerManagerModule.tick → nightlyDoze → awakeIdle
+  → FrameworkOps.addPowerSaveWhitelist → ShellExecutor.exec:118
+  → throttle:71（持有锁 <0x14205570>）
+HttpConn ×9 → Semaphore.acquire:111
+  → HttpBackend.readBatteryFacts:847 → apiOverview:483
+```
+`awakeIdle()` 连发 7 条 `dumpsys deviceidle` 重命令，全部要过闸门；
+而 `awake=true` 只在 7 条命令**全部跑完**后才置位，一旦中断就每 60s 重放整批，
+长期占住闸门 → 所有依赖 shell 的功能（含 **Shizuku 保活**）一起瘫痪。
+### 修复（3 + 1）
+1. `ShellExecutor`：`acquire()` → `tryAcquire(20s)`，超时返回 `-1`，绝不永久阻塞
+   （`ACQUIRE_TIMEOUT_MS`）。
+2. `ShellExecutor.throttle`：`Thread.sleep` **移出** `synchronized(gateLock)`，
+   锁内只做时间戳/槽位计算，语义等价、持锁降到微秒级。
+3. `PowerManagerModule.awakeIdle`：加 30 分钟冷却窗（`AWARE_IDLE_COOLDOWN_MS`），
+   先占位再执行，把「无限重放」降级为「最多 30 分钟重试一次」。
+4. `HttpBackend`：新增 `sysfsBatteryText()` 免排队通道，读电池优先直读
+   `/sys/class/power_supply/battery/*`，不经过 shell 闸门；不可用时回落 `dumpsys`。
+### 效果（真机实测）
+| API | 修复前 | 修复后 |
+|---|---|---|
+| /api/overview | **超时 6s+** | **73~136ms** |
+| /api/powerstatus | **超时 7s+** | **8ms** |
+连续 8 次轮询全部 200；Shizuku 被保活模块正常拉起。
+### ⚠️ Kotlin 编译陷阱（本次踩坑，务必牢记）
+在 `HttpBackend.kt` 的类方法内部写**局部函数**（`fun rd(...)` / `fun readSys(...)`），
+或在 `when` 分支里写 `else -> if (...) ...` 这种无大括号嵌套语句，会触发
+K2 编译器的解析异常：**报错点全部漂移到 128/138 行的 `readLine(input)` /
+`parseQuery` 等无关位置，共 121~124 条 “Unresolved reference”**，
+极易误判为文件结构损坏。
+**规避**：一律用类成员函数 + 独立私有数据类，分支用 `if / else if` 链。
+### 日志静默陷阱
+`config.conf` 目前 `log_enabled=false`（`false = fully silent`），
+**故障期间日志完全空白**，只能靠 `debuggerd -j $(pidof zhangsystemdex)` 抓栈定位。
+排障时建议临时置 `true`。
+---
 ## 1. 项目定位
 
 - 包名：`io.github.fairyxh.zhangsystemdex`

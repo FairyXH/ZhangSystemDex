@@ -48,6 +48,18 @@ K2 编译器的解析异常：**报错点全部漂移到 128/138 行的 `readLin
 **故障期间日志完全空白**，只能靠 `debuggerd -j $(pidof zhangsystemdex)` 抓栈定位。
 排障时建议临时置 `true`。
 ---
+### 后续加固（commit b435989，详见 docs/plans/2026-10-22_resource_hardening_audit.md）
+对上同模式做全量审计（80 文件/20908 行），又修 5 处：
+1. `HttpBackend` 请求体上限 2MB（超限 413）
+2. `HttpBackend` `/api/read` 单文件上限 1MB
+3. `HttpBackend` 并发连接上限 16（原每连接一无上限线程）
+4. `ParallelScanner` 扫描超时 10min（原 `latch.await()` 无超时）
+5. `ScanCache` 索引上限 20 万条（≈LRU 淘汰，不失正确性）
+
+设计原则：所有限流都「降级为略慢」，绝不「功能失效」。
+内存硬约束：设备 MemAvailable 仅 ~2.3GB，daemon 堆上限 512MB；
+新增代码禁止无上限分配、禁止无超时等待、禁止锁内 IO/sleep。
+
 ## 1. 项目定位
 
 - 包名：`io.github.fairyxh.zhangsystemdex`

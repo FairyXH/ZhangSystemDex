@@ -60,6 +60,18 @@ K2 编译器的解析异常：**报错点全部漂移到 128/138 行的 `readLin
 内存硬约束：设备 MemAvailable 仅 ~2.3GB，daemon 堆上限 512MB；
 新增代码禁止无上限分配、禁止无超时等待、禁止锁内 IO/sleep。
 
+### 自身 OOM 自保（commit 3ac6566）
+`SelfOomGuardModule`（始终启用，60s 周期，**无开关无配置**）：
+- 固定自身 `oom_score_adj = -1000`，启动即写，周期自愈（实测被改成 0 后 65s 恢复）
+- **内存熔断**：堆 ≥75% 主动 GC；连续 5 周期异常 → 自动降级 `-900`（交还回收权）
+- 优先级：仅本线程 `nice=5`，**不做进程级 renice**（会拖慢 WebUI 的 HttpConn）
+
+⚠ 写 adj 的正确方式：直接写 `/proc/<自己的 pid>/oom_score_adj`。
+**绝不能**用 `ShellExecutor.run("echo > /proc/self/...")`——
+shell 子进程的 `/proc/self` 是子进程自身，改的是 shell 而不是 daemon。
+
+自身开销实测：CPU 30s 内 0 ticks、线程 +1、常驻 <100KB、RSS 无增长趋势。
+
 ## 1. 项目定位
 
 - 包名：`io.github.fairyxh.zhangsystemdex`

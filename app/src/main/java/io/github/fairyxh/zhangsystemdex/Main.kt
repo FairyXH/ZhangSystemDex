@@ -25,6 +25,7 @@ import io.github.fairyxh.zhangsystemdex.modules.GameOomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.OomProtectModule
 import io.github.fairyxh.zhangsystemdex.modules.LSPosedScannerModule
 import io.github.fairyxh.zhangsystemdex.modules.IncidentWatchModule
+import io.github.fairyxh.zhangsystemdex.modules.SelfOomGuardModule
 import io.github.fairyxh.zhangsystemdex.modules.MemoryModule
 import io.github.fairyxh.zhangsystemdex.modules.MiuiTuningModule
 import io.github.fairyxh.zhangsystemdex.modules.NetworkModule
@@ -390,6 +391,14 @@ object Main {
                 label = "事故哨兵", desc = "后台记录 watchdog/崩溃/软重启（零 shell）",
             ) {
                 IncidentWatchModule(ctx)
+            },
+            // 自身 OOM 自保：把 daemon 自己的 oom_score_adj 固定为 -1000，
+            // 无开关、无配置、周期自我修复。带内存熔断（异常时降级到 -900）。
+            ModuleEntry(
+                "self_oom_guard", { true },
+                label = "自身免杀", desc = "固定自身 oom_score_adj=-1000，带内存熔断保护",
+            ) {
+                SelfOomGuardModule(ctx)
             },
             ModuleEntry(
                 "accelerometer_rotation", { enabled("accelerometer_rotation_enable") },

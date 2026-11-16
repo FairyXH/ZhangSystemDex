@@ -29,30 +29,36 @@ object SettingsUtils {
         }
     }
 
-    fun putGlobal(key: String, value: String) {
+    /** 写入并回读校验。任一层失败返回 false；shell 兜底后再校验一次。 */
+    fun putGlobal(key: String, value: String): Boolean {
         val cr = resolver()
         if (cr != null) {
             try {
                 Settings.Global.putString(cr, key, value)
-                return
+                if (Settings.Global.getString(cr, key) == value) return true
+                Logger.w("SettingsUtils", "global put $key 回读不匹配，降级 shell")
             } catch (t: Throwable) {
                 frameworkFailed("ContentResolver global put", t)
             }
         }
         ShellExecutor.run("settings put global $key $value")
+        return getGlobal(key) == value
     }
 
-    fun putSystem(key: String, value: String) {
+    /** 写入并回读校验。任一层失败返回 false；shell 兜底后再校验一次。 */
+    fun putSystem(key: String, value: String): Boolean {
         val cr = resolver()
         if (cr != null) {
             try {
                 Settings.System.putString(cr, key, value)
-                return
+                if (Settings.System.getString(cr, key) == value) return true
+                Logger.w("SettingsUtils", "system put $key 回读不匹配，降级 shell")
             } catch (t: Throwable) {
                 frameworkFailed("ContentResolver system put", t)
             }
         }
         ShellExecutor.run("settings put system $key $value")
+        return getSystem(key) == value
     }
 
     fun getSystem(key: String): String? {

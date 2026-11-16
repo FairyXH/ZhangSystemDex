@@ -107,6 +107,7 @@ object Main {
 
         Logger.i("Main", "========================================")
         Logger.i("Main", "ZhangSystemDex 启动中")
+        Logger.setEnabled(ctx.config.logEnabled)
         Logger.i("Main", "uid=${Process.myUid()} 模块目录=$modDir 配置根=${ctx.config.rootDir} 日志开关=${ctx.config.logEnabled}")
         if (!RootUtils.isRoot()) {
             Logger.e("Main", "非 root 运行，退出", null)
@@ -402,7 +403,7 @@ object Main {
             },
             ModuleEntry(
                 "accelerometer_rotation", { enabled("accelerometer_rotation_enable") },
-                label = "重力感应旋转", desc = "按重力自动旋转屏幕",
+                label = "重力感应旋转", desc = "强制关闭系统自动旋转（accelerometer_rotation=0）",
             ) {
                 AccelerometerRotationModule(ctx)
             },

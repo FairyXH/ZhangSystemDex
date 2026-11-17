@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import zipfile
+from pathlib import Path, PurePosixPath
 
 EXCLUDE_NAMES = {"ZhangProtect-Android.zip"}
 EXCLUDE_DIRS = {"__pycache__"}
@@ -92,10 +93,42 @@ def manifest(root, label="计算 SHA256"):
     return out
 
 
+def _safe_target(dest_root, name):
+    """校验 zip 条目名，返回 dest 内的绝对路径；越界一律拒绝（Zip Slip 防护）。
+
+    * 拒绝绝对路径与含 `..` 的条目名；
+    * 再用 resolve() + is_relative_to() 做一次真实路径归属校验，
+      防止大小写/分隔符差异绕过前一步。
+    """
+    norm = name.replace("\\", "/")
+    rel = PurePosixPath(norm)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError("非法 zip 条目（越界）：%r" % name)
+    target = (dest_root / norm).resolve()
+    if not target.is_relative_to(dest_root):
+        raise ValueError("非法 zip 条目（越界）：%r" % name)
+    return target
+
+
+def _ensure_parent(dest_root, target):
+    """建立 target 的父目录；父目录若经符号链接逃逸 dest 则拒绝。"""
+    parent = target.parent
+    probe = parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    if not probe.resolve().is_relative_to(dest_root):
+        raise ValueError("非法 zip 条目（符号链接逃逸）：%r" % target)
+    parent.mkdir(parents=True, exist_ok=True)
+
+
 def extract(zpath, dest):
-    """解压 zip 到 dest（保留 Unix 权限位）。带进度。"""
-    dest = os.path.abspath(dest)
-    os.makedirs(dest, exist_ok=True)
+    """解压 zip 到 dest（保留 Unix 权限位）。带进度。
+
+    每个条目都先经 _safe_target / _ensure_parent 校验，
+    越界或借符号链接逃逸时抛 ValueError，绝不写盘。
+    """
+    dest_root = Path(dest).resolve()
+    dest_root.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zpath) as z:
         infos = z.infolist()
         n = len(infos)
@@ -103,36 +136,42 @@ def extract(zpath, dest):
         written = 0
         for i, info in enumerate(infos, 1):
             name = info.filename
+            target = _safe_target(dest_root, name)
             if name.endswith("/"):
-                d = os.path.join(dest, name.rstrip("/"))
-                os.makedirs(d, exist_ok=True)
+                _ensure_parent(dest_root, target)
+                target.mkdir(exist_ok=True)
                 mode = (info.external_attr >> 16) & 0o7777
                 if mode:
                     try:
-                        os.chmod(d, mode)
+                        os.chmod(target, mode)
                     except OSError:
                         pass
             else:
-                target = os.path.join(dest, name)
-                os.makedirs(os.path.dirname(target), exist_ok=True)
+                _ensure_parent(dest_root, target)
 
                 mode = (info.external_attr >> 16) & 0o7777
                 is_link = (info.external_attr >> 16) & 0o170000 == 0o120000
                 data = z.read(info)
                 if is_link:
+                    if target.is_symlink() or target.exists():
+                        target.unlink()
                     try:
-                        os.symlink(data.decode(), target)
+                        target.symlink_to(data.decode())
                     except OSError:
                         pass
                 else:
-                    with open(target, "wb") as fh:
-                        fh.write(data)
+                    # 同名链接先移除，避免写入时跟随它落到 dest 之外
+                    if target.is_symlink():
+                        target.unlink()
+                    # 落盘交给 stdlib：ZipFile.extract 内部同样会规范化成员名
+                    # （剥离盘符/前导斜杠/..），与本函数的校验构成双保险。
+                    z.extract(info, path=str(dest_root))
+                    written += info.file_size
                     if mode:
                         try:
                             os.chmod(target, mode)
                         except OSError:
                             pass
-                    written += len(data)
             if i % PROGRESS_EVERY == 0 or i == n:
                 pct = (i * 100.0 / n) if n else 100.0
                 _log("zipcheck:   解压 [%5.1f%%] %d/%d 条目  已写出 %s  (%.0fs)"

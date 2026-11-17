@@ -2314,6 +2314,7 @@ ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
 - 修复：从当前源码构建产物提取 `classes.dex` 覆盖仓库根 `Main.dex`，提交 **`b03d912`**：
   - 构建校验链：`app-release-unsigned.apk`(00:13) → 提取 classes.dex → md5 `3b28c82a76bacf0dc2f04eaba3847157`（2780732 B），与母版逐字节一致。
   - `gradle.properties`（含本机 `android.aapt2FromMavenOverride`）按 BUILD_NOTES 要求**不入库**，提交前 `git checkout` 还原、提交后本地恢复。
+    → **2026-11-17 起该约定作废**：仓库已改为平台感知自动探测，`gradle.properties` 不含任何 aapt2 覆盖；细节见 §61。
 - **教训**：凡改源码并发布 dex，**必须同时更新仓库根 `Main.dex`**，否则 OTA 降级（已在 §57/§58 反复强调，此次仍复发，务必写进发布检查单）。
 
 ### 三、发布
@@ -2373,3 +2374,57 @@ ps -A -o pid,ppid,args | awk '$2==<daemonPid>'  # daemon 正在跑什么
 - 这是「Shizuku is not running」的**第二个**独立根因：§58 是「读不到 cmdline」（procfs st_size=0），
   §60 是「读到了但分类错」（uid 误判）。两者叠加才会长期「看起来健康、实际没服务端」。
 - 验证方法仍：`curl 127.0.0.1:26437/api/shizuku/status` + **kill 闭环**，勿用 shell 遍历 /proc（hidepid）。
+
+## §61. 构建配置去本机化：aapt2 覆盖改为平台感知（2026-11-17）
+
+### 背景
+`aabf67e` 把一个本机专属属性提交进了仓库：`gradle.properties` 末尾出现
+`android.aapt2FromMavenOverride=/opt/aapt2wrap/aapt2`。该路径只在
+aarch64 宿主 + x86_64 proot 环境存在；Windows / macOS 上 AGP 会去打开不存在的
+`/opt/...`，资源编译阶段直接失败。这也违反 BUILD_NOTES「本机配置不入库」的约定。
+
+### 修复
+- `gradle.properties`：删除该行，保留注释说明（禁止再写死）。
+- `build.gradle.kts`：新增平台感知探测，优先级
+  `-Paapt2Override` > 环境变量 `AAPT2_WRAPPER` > Linux 默认 `/opt/aapt2wrap/aapt2`（存在且可执行）。
+  命中后经 `subprojects { extra[...] }` 在 `:app` 配置前下发；指定路径不存在则配置阶段 fail-fast。
+- `docs/BUILD_NOTES.md`：旧流程（手改 gradle.properties）作废，补 Windows 验证记录。
+
+### 实测（Windows + JDK 17 + SDK android-37.1 / build-tools 37.0.0）
+- `gradlew.bat clean :app:assembleRelease --console=plain --no-daemon` → **BUILD SUCCESSFUL**；
+  `:app:processReleaseResources` 正常执行（aapt2 = Maven 版）。
+- 产物 `classes.dex` md5 = `f01cfaea361a13d6dc18352130bdebb9`，与仓库根 `Main.dex` **完全一致**。
+- `:app:properties` 在 Windows 下**不含** `android.aapt2FromMavenOverride`；
+  传 `-Paapt2Override=...` 时该属性出现在 `:app` 上（注入链路有效）。
+- 本机 `local.properties` 的 `sdk.dir` 原指向不存在的 `D:\Users\Administrator\...`，
+  已本地修正为 `D:\Users\Zhang\AppData\Local\Android\Sdk`（gitignore，不入库）。
+
+### 教训
+- "只有某台机器能用"的构建属性一律走脚本探测或 `GRADLE_USER_HOME/gradle.properties`，
+  绝不写进受版本控制的 `gradle.properties`。
+- 构建脚本注释用 ASCII，避免写入编码不一致产生二次编码乱码。
+
+## §62. 安全扫描拦截修复：zipcheck.py 路径穿越（2026-11-17）
+
+### 背景
+提交 `aapt2` 平台感知修复时，Mimosa 提交前钩子拦下 `tools/zipcheck.py:128`（high）：
+`extract()` 直接 `os.path.join(dest, info.filename)` 落盘，存在 Zip Slip；
+先建符号链接、后续条目再写入时还能穿透链接写到解压目录之外。
+
+### 修复（`tools/zipcheck.py`）
+- `_safe_target()`：拒绝绝对路径与含 `..` 的条目名，再用
+  `Path.resolve()` + `is_relative_to()` 校验真实归属。
+- `_ensure_parent()`：建父目录前先校验最深已存在祖先的 realpath 仍在 dest 内，
+  防止顺着越界符号链接在外面建目录。
+- 落盘改由 `ZipFile.extract()` 完成（stdlib 内部同样规范化成员名，双保险）；
+  写入前若同名路径是链接则先 `unlink()`，绝不跟随。
+- 目录条目：校验后 `mkdir` 建自身（回滚了“只建父目录”的回归）。
+
+### 验证
+- `python -m py_compile` 通过（Python 3.13.5，与模块内置运行时同版本）。
+- 自测（`logs/zipcheck_selftest.py`，不入库）：
+  - 正常树（文件 / 嵌套目录 / 空目录）往返 PASS；
+  - `../` 越界、绝对路径条目均被 `ValueError` 拒绝，目标目录外无残留；
+  - `link -> ..` + `link/pwned.txt` 符号链接穿透被拒（`resolve()` 后已越界）。
+- 集成：`zippack.py` 打包临时树 → `zipcheck.py` 校验，退出码 0，
+  `[+] 完整性校验通过: 共 3 个文件, SHA256 全部一致`。

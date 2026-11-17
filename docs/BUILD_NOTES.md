@@ -55,13 +55,24 @@ E
 chmod 755 /opt/aapt2wrap/aapt2
 ```
 
-然后（**不要提交到仓库**，这是本机专属配置）在 `gradle.properties` 末尾加：
+**不需要再手改 `gradle.properties`。** `build.gradle.kts` 已做平台感知探测：
 
-```properties
-android.aapt2FromMavenOverride=/opt/aapt2wrap/aapt2
+- Linux 上 `/opt/aapt2wrap/aapt2` 存在且可执行 → 自动注入 `android.aapt2FromMavenOverride`；
+- Windows / macOS → 不注入任何属性，使用 AGP 自带的 Maven 版 aapt2。
+
+解析优先级：`-Paapt2Override=<path>` > 环境变量 `AAPT2_WRAPPER` > Linux 默认包装脚本。
+
+```sh
+# 手动指定（可选，优先级最高）
+./gradlew :app:assembleRelease -Paapt2Override=/opt/aapt2wrap/aapt2
+AAPT2_WRAPPER=/opt/aapt2wrap/aapt2 ./gradlew :app:assembleRelease
 ```
 
-即可 `./gradlew :app:assembleRelease` 成功。
+指定路径不存在时在配置阶段直接失败并打印该路径，不会静默回落。
+
+⚠️ `android.aapt2FromMavenOverride` **禁止**再写进 `gradle.properties`：
+它随仓库扩散会让 Windows/macOS 构建去找不存在的 `/opt/...` 而失败
+（commit `aabf67e` 曾误提交该行，已由平台感知逻辑取代）。
 
 注意：`/lib64` 符号链接曾在本机被破坏（`/lib64/ld-linux-x86-64.so.2`
 为 x86_64 动态加载器）。已修复为：
@@ -99,12 +110,22 @@ exec qemu-x86_64-static -L /usr/x86_64-linux-gnu /opt/android-sdk/build-tools/36
 ' > /opt/aapt2wrap/aapt2
 chmod 755 /opt/aapt2wrap/aapt2
 ```
-然后 `gradle.properties` **末尾另起一行**加（本机专属，勿提交）：
-```properties
-android.aapt2FromMavenOverride=/opt/aapt2wrap/aapt2
-```
-⚠️ **追加时务必保证前一行有换行符**，否则会粘成
-`kotlin.code.style=officialandroid.aapt2FromMavenOverride=...`，
-导致配置静默失效并报 `AAPT2 Daemon startup failed`（本次踩坑两次）。
+包装脚本就位后**无需任何额外配置**：`build.gradle.kts` 会在 Linux 上自动探测
+`/opt/aapt2wrap/aapt2` 并注入覆盖（逻辑见上一节）。
 构建：`ANDROID_HOME=/opt/android-sdk ./gradlew :app:assembleRelease --no-daemon`
 （首次会下载 Gradle 9.3.1，约 5 分钟；之后约 30 秒。）
+
+## ✅ Windows 侧构建验证（2026-11-17）
+
+去掉 `gradle.properties` 里的硬编码覆盖后，在 Windows + JDK 17 +
+Android SDK（platform `android-37.1`、build-tools `37.0.0`）实测：
+
+```bat
+gradlew.bat clean :app:assembleRelease --console=plain --no-daemon
+```
+
+- `BUILD SUCCESSFUL`，`:app:processReleaseResources` 正常执行（aapt2 = Maven 版）；
+- APK 内 `classes.dex` 与仓库根 `Main.dex` **md5 完全一致**（`f01cfaea…`），
+  说明平台差异只影响资源编译链路，不影响交付产物；
+- `-Paapt2Override=<不存在路径>` 会在配置阶段报
+  `aapt2 override points to a missing file: …` 并中止。

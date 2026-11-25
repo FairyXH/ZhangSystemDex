@@ -286,6 +286,14 @@ class HttpBackend(
             // 事故哨兵：读取后台采集的 watchdog/崩溃/软重启记录（纯文件，零 shell）。
             "/api/guard/alerts" -> apiGuardAlerts(query)
             "/api/shizuku/residue" -> apiShizukuResidue()
+            "/api/hmspush/status" -> apiHmspushStatus()
+            "/api/hmspush/sync" -> apiHmspushSync(method)
+            "/api/hmspush/whitelist/get" -> apiHmspushWhitelistGet()
+            "/api/hmspush/whitelist/set" -> apiHmspushWhitelistSet(method, body)
+            "/api/hmspush/removed/clear" -> apiHmspushRemovedClear(method)
+            "/api/hmspush/removed/restore" -> apiHmspushRemovedRestore(method, body)
+            "/api/tricky/status" -> apiTrickyStatus()
+            "/api/tricky/sync" -> apiTrickySync(method)
             else -> jsonError("未知接口: $path")
         }
     }
@@ -2449,6 +2457,210 @@ class HttpBackend(
             }
         }
         sb.append('"')
+        return sb.toString()
+    }
+
+
+    // ---------------------------------------------------------------
+    // tricky_store / hmspush 目标列表
+    // ---------------------------------------------------------------
+
+    private fun apiHmspushStatus(): String {
+        val dir = File("/data/adb/hmspush")
+        val conf = File(dir, HmspushTargetList.CONF_NAME)
+        val wl = File(dir, HmspushTargetList.WHITELIST_NAME)
+        val removedFile = File(dir, HmspushTargetList.REMOVED_NAME)
+        if (!removedFile.exists()) {
+            runCatching { removedFile.parentFile?.mkdirs(); removedFile.writeText("") }
+        }
+        val targets = HmspushTargetList.readPackages(dir)
+        val whitelist = HmspushTargetList.readWhitelist(dir)
+        val removed = HmspushTargetList.readRemoved(dir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"dir\":").append(q(dir.absolutePath))
+        sb.append(",\"confPath\":").append(q(conf.absolutePath))
+        sb.append(",\"whitelistPath\":").append(q(wl.absolutePath))
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append(",\"whitelistCount\":").append(whitelist.size)
+        sb.append(",\"targets\":").append(qList(targets))
+        sb.append(",\"whitelist\":").append(qList(whitelist.toList().sorted()))
+        sb.append(",\"removed\":").append(qList(removed))
+        sb.append(",\"excluded\":").append(qList(removed))
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiHmspushSync(method: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val dir = File("/data/adb/hmspush")
+        val candidates: List<String>
+        val installed: List<String>
+        try {
+            val all = AppListProvider.allPackages()
+            installed = all
+            candidates = all.filter { !HmspushTargetList.isExcluded(it) }
+        } catch (t: Throwable) {
+            Logger.w(name, "同步失败（应用枚举不可用）: ${t.message}")
+            return jsonError("同步失败（应用枚举不可用）")
+        }
+        val r = HmspushTargetList.sync(candidates, installed)
+        val targets = HmspushTargetList.readPackages(dir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"added\":").append(qList(r.added))
+        sb.append(",\"removedByWhitelist\":").append(qList(r.removedByWhitelist))
+        sb.append(",\"tombstoned\":").append(qList(r.tombstoned))
+        sb.append(",\"dedupedLines\":").append(r.dedupedLines)
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiHmspushWhitelistGet(): String {
+        val dir = File("/data/adb/hmspush")
+        val f = File(dir, HmspushTargetList.WHITELIST_NAME)
+        val set = runCatching { HmspushTargetList.readWhitelist(dir) }.getOrElse {
+            Logger.w(name, "读取白名单失败: ${it.message}")
+            emptySet()
+        }
+        val content = runCatching { if (f.exists()) f.readText() else "" }.getOrDefault("")
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"path\":").append(q(f.absolutePath))
+        sb.append(",\"exists\":").append(f.exists())
+        sb.append(",\"content\":").append(q(content))
+        sb.append(",\"whitelist\":").append(qList(set.toList().sorted()))
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiHmspushWhitelistSet(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val json = runCatching { org.json.JSONObject(body) }.getOrNull()
+            ?: return jsonError("请求体不是 JSON")
+        if (!json.has("content")) return jsonError("缺少 content")
+        val content = json.optString("content", "")
+        val dir = File("/data/adb/hmspush")
+        val packages = IncrementalTargetList.parsePackages(content)
+        if (!HmspushTargetList.writeWhitelist(dir, packages)) {
+            return jsonError("写入白名单失败")
+        }
+        Logger.i(name, "hmspush 白名单已更新 ${packages.size} 项")
+        val targets = HmspushTargetList.readPackages(dir)
+        val wl = packages.toSet()
+        val removedByWhitelist = targets.filter { wl.contains(it) }
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"count\":").append(packages.size)
+        sb.append(",\"packages\":").append(qList(packages))
+        sb.append(",\"removedByWhitelist\":").append(qList(removedByWhitelist))
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiHmspushRemovedClear(method: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val dir = File("/data/adb/hmspush")
+        val before = HmspushTargetList.readRemoved(dir).size
+        val restored = try {
+            HmspushTargetList.clearRemoved(dir)
+        } catch (t: Throwable) {
+            Logger.w(name, "清空墓碑失败: ${t.message}")
+            return jsonError("清空墓碑失败: ${t.message}")
+        }
+        Logger.i(name, "hmspush 墓碑已清空（原有 $before 条，重新纳入 ${restored.size} 个）")
+        val targets = HmspushTargetList.readPackages(dir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"cleared\":").append(before)
+        sb.append(",\"restored\":").append(qList(restored))
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiHmspushRemovedRestore(method: String, body: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val json = runCatching { org.json.JSONObject(body) }.getOrNull()
+            ?: return jsonError("请求体不是 JSON")
+        val arr = json.optJSONArray("packages") ?: return jsonError("缺少 packages")
+        val wanted = ArrayList<String>()
+        for (i in 0 until arr.length()) {
+            val s = arr.optString(i, "").trim()
+            if (s.isNotEmpty()) wanted.add(s)
+        }
+        if (wanted.isEmpty()) return jsonError("packages 为空")
+        val dir = File("/data/adb/hmspush")
+        val restored = try {
+            HmspushTargetList.restoreRemoved(dir, wanted)
+        } catch (t: Throwable) {
+            Logger.w(name, "恢复失败: ${t.message}")
+            return jsonError("恢复失败: ${t.message}")
+        }
+        if (restored.isEmpty()) return jsonError("这些包不在墓碑记录中")
+        Logger.i(name, "hmspush 撤回删除 ${restored.size} 个：${restored.joinToString(",")}")
+        val targets = HmspushTargetList.readPackages(dir)
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"restored\":").append(qList(restored))
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiTrickyStatus(): String {
+        val dir = File("/data/adb/tricky_store")
+        val conf = File(dir, TrickyStoreTargetList.CONF_NAME)
+        val removedFile = File(dir, TrickyStoreTargetList.REMOVED_NAME)
+        if (!removedFile.exists()) {
+            runCatching { removedFile.parentFile?.mkdirs(); removedFile.writeText("") }
+        }
+        val targets = IncrementalTargetList.readPackages(conf)
+        val removed = IncrementalTargetList.readRemovedPackages(TrickyStoreTargetList.specFor(dir))
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"confPath\":").append(q(conf.absolutePath))
+        sb.append(",\"targetCount\":").append(targets.size)
+        sb.append(",\"removed\":").append(qList(removed))
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun apiTrickySync(method: String): String {
+        if (method != "POST") return jsonError("需要 POST")
+        val all = try {
+            AppListProvider.allPackages()
+        } catch (t: Throwable) {
+            Logger.w(name, "应用枚举失败: ${t.message}")
+            return jsonError("应用枚举失败: ${t.message}")
+        }
+        val r = TrickyStoreTargetList.sync(all)
+        Logger.i(
+            name,
+            "tricky_store 手动同步：新增 ${r.added.size}，记录用户删除 ${r.tombstoned.size}，" +
+                "收敛重复行 ${r.dedupedLines}，当前 ${r.total} 个"
+        )
+        val sb = StringBuilder()
+        sb.append("{\"ok\":true,\"code\":0")
+        sb.append(",\"added\":").append(qList(r.added))
+        sb.append(",\"tombstoned\":").append(qList(r.tombstoned))
+        sb.append(",\"dedupedLines\":").append(r.dedupedLines)
+        sb.append(",\"targetCount\":").append(r.total)
+        sb.append('}')
+        return jsonRaw(sb.toString())
+    }
+
+    private fun qList(items: Collection<String>): String {
+        val sb = StringBuilder("[")
+        var first = true
+        for (s in items) {
+            if (!first) sb.append(',')
+            first = false
+            sb.append(q(s))
+        }
+        sb.append(']')
         return sb.toString()
     }
 

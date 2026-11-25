@@ -5,7 +5,9 @@ import io.github.fairyxh.zhangsystemdex.core.DaemonLoop
 import io.github.fairyxh.zhangsystemdex.core.DexContext
 import io.github.fairyxh.zhangsystemdex.core.FileUtils
 import io.github.fairyxh.zhangsystemdex.core.GameListProvider
+import io.github.fairyxh.zhangsystemdex.core.HmspushTargetList
 import io.github.fairyxh.zhangsystemdex.core.Logger
+import io.github.fairyxh.zhangsystemdex.core.TrickyStoreTargetList
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -189,39 +191,31 @@ class ConfigGenModule(
     }
 
     private fun updateTrickyStore() {
-        val target = File("/data/adb/tricky_store/target.txt")
-        val known = File("/data/adb/tricky_store/target.known")
-        if (!target.exists()) target.writeText("com.google.android.gms\n")
-        FileUtils.touch(known.path)
-        val newPackages = AppListProvider.allPackages().toSet() - knownPackages(known)
-        if (newPackages.isNotEmpty()) {
-            target.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            known.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            Logger.i(name, "tricky_store 目标新增 ${newPackages.size} 个包")
+        // 契约：TrickyStore 无白名单，sync 内部把 candidates 同时作为已安装集合
+        val all = AppListProvider.allPackages()
+        val r = TrickyStoreTargetList.sync(all)
+        if (r.changed) {
+            Logger.i(
+                name,
+                "tricky_store 同步：新增 ${r.added.size}，去重 ${r.dedupedLines}，" +
+                    "白名单剔除 ${r.removedByWhitelist.size}，墓碑 ${r.tombstoned.size}，总计 ${r.total}"
+            )
         }
     }
 
     private fun updateHmspush() {
-        val target = File("/data/adb/hmspush/app.conf")
-        val known = File("/data/adb/hmspush/app.known")
-        FileUtils.touch(target.path)
-        FileUtils.touch(known.path)
+        val installed = AppListProvider.allPackages()
         val gamePause = GameListProvider.games().toSet()
-        val exclude = Regex("com\\.tencent\\.mm|youqu\\.android\\.todesk|wallet|oplus|oppo|xiaomi|hyperos")
         val candidates = AppListProvider.thirdPartyPackages()
-            .filter { !exclude.containsMatchIn(it) && it !in gamePause }
-            .toSet()
-        val newPackages = candidates - knownPackages(known)
-        if (newPackages.isNotEmpty()) {
-            target.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            known.appendText(newPackages.sorted().joinToString("\n") + "\n")
-            Logger.i(name, "hmspush 目标新增 ${newPackages.size} 个包")
+            .filter { !HmspushTargetList.isExcluded(it) && it !in gamePause }
+        val r = HmspushTargetList.sync(candidates, installed)
+        if (r.changed) {
+            Logger.i(
+                name,
+                "hmspush 同步：新增 ${r.added.size}，去重 ${r.dedupedLines}，" +
+                    "白名单剔除 ${r.removedByWhitelist.size}，墓碑 ${r.tombstoned.size}，总计 ${r.total}"
+            )
         }
-    }
-
-    private fun knownPackages(known: File): Set<String> {
-        if (!known.exists()) return emptySet()
-        return known.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }
 
     private fun readUserBlacklist(): List<String> {

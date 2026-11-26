@@ -2476,6 +2476,17 @@ class HttpBackend(
         val targets = HmspushTargetList.readPackages(dir)
         val whitelist = HmspushTargetList.readWhitelist(dir)
         val removed = HmspushTargetList.readRemoved(dir)
+        // 母版语义：被 EXCLUDE_PATTERN 命中且已安装的应用，按字典序排序。
+        // smali: apiHmspushStatus$excluded$1 -> HmspushTargetList.isExcluded(String)
+        //       .local "excluded" + CollectionsKt.sorted(Iterable)
+        val excluded = try {
+            AppListProvider.allPackages()
+                .filter { HmspushTargetList.isExcluded(it) }
+                .sorted()
+        } catch (t: Throwable) {
+            Logger.w(name, "枚举被排除应用失败: ${t.message}")
+            emptyList<String>()
+        }
         val sb = StringBuilder()
         sb.append("{\"ok\":true,\"code\":0")
         sb.append(",\"dir\":").append(q(dir.absolutePath))
@@ -2486,7 +2497,7 @@ class HttpBackend(
         sb.append(",\"targets\":").append(qList(targets))
         sb.append(",\"whitelist\":").append(qList(whitelist.toList().sorted()))
         sb.append(",\"removed\":").append(qList(removed))
-        sb.append(",\"excluded\":").append(qList(removed))
+        sb.append(",\"excluded\":").append(qList(excluded))
         sb.append('}')
         return jsonRaw(sb.toString())
     }
